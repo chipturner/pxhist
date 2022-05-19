@@ -1,0 +1,4 @@
+echo $'this "is" \'a\' \\n test\n\nboo'
+fd zsh
+echo �αΥｩ
+
