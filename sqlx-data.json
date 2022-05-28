@@ -1,26 +1,6 @@
 {
   "db": "SQLite",
-  "aa301180bfd143b457cfb91188eae62e95a1c85dcd7a44e61c48041d4bbb71d7": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Right": 3
-      }
-    },
-    "query": "\nUPDATE command_history SET exit_status = ?, end_unix_timestamp = ?\n WHERE exit_status is NULL\n   AND end_unix_timestamp IS NULL\n   AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"
-  },
-  "cfb73d8606006a78c79319c8f221f67c16e1c190e81bc8cdbfbe3135b15af78c": {
-    "describe": {
-      "columns": [],
-      "nullable": [],
-      "parameters": {
-        "Right": 9
-      }
-    },
-    "query": "\nINSERT INTO command_history (\n    session_id,\n    full_command,\n    shellname,\n    hostname,\n    username,\n    working_directory,\n    exit_status,\n    start_unix_timestamp,\n    end_unix_timestamp\n)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
-  },
-  "fb55ddf2bafd05d430204430dabb408266aad13c16ca115b9f14186a5539276c": {
+  "61c4d1aeae7e3554cca42fbb96cb01b5a67092407d499bf7fc22700e8069d14c": {
     "describe": {
       "columns": [
         {
@@ -87,9 +67,29 @@
         null
       ],
       "parameters": {
-        "Right": 1
+        "Right": 2
       }
     },
-    "query": "\nSELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration\n  FROM command_history h\nORDER BY start_unix_timestamp DESC, id DESC\nLIMIT ?"
+    "query": "\nSELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration\n  FROM command_history h\n WHERE INSTR(full_command, ?)\nORDER BY start_unix_timestamp DESC, id DESC\nLIMIT ?"
+  },
+  "aa301180bfd143b457cfb91188eae62e95a1c85dcd7a44e61c48041d4bbb71d7": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Right": 3
+      }
+    },
+    "query": "\nUPDATE command_history SET exit_status = ?, end_unix_timestamp = ?\n WHERE exit_status is NULL\n   AND end_unix_timestamp IS NULL\n   AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"
+  },
+  "cfb73d8606006a78c79319c8f221f67c16e1c190e81bc8cdbfbe3135b15af78c": {
+    "describe": {
+      "columns": [],
+      "nullable": [],
+      "parameters": {
+        "Right": 9
+      }
+    },
+    "query": "\nINSERT INTO command_history (\n    session_id,\n    full_command,\n    shellname,\n    hostname,\n    username,\n    working_directory,\n    exit_status,\n    start_unix_timestamp,\n    end_unix_timestamp\n)\nVALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
   }
 }

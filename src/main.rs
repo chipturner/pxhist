@@ -13,7 +13,6 @@ use std::{
 use chrono::prelude::{Local, TimeZone};
 use clap::{Parser, Subcommand};
 use prettytable::Table;
-use regex::bytes::Regex;
 use sqlx::{
     sqlite::SqliteConnectOptions, ConnectOptions, Connection, SqliteConnection, Transaction,
 };
@@ -143,7 +142,7 @@ async fn insert_subcommand(
         .as_ref()
         .map_or_else(Vec::new, |v| v.to_bytes());
     let working_directory_bytes = invocation
-        .hostname
+        .working_directory
         .as_ref()
         .map_or_else(Vec::new, |v| v.to_bytes());
 
@@ -227,17 +226,13 @@ async fn show_subcommand(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration
   FROM command_history h
+ WHERE INSTR(full_command, ?)
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-        limit
+        substring, limit
     )
     .fetch_all(conn)
 	.await?;
-    let re = Regex::new(substring.as_str())?;
-    rows.retain(|row| {
-        let cmd = pxh::BinaryStringHelper::from(row.full_command.as_slice());
-        re.is_match(&cmd.to_bytes())
-    });
     rows.reverse();
     if output_format == "json" {
         let invocations: Vec<pxh::Invocation> = rows
@@ -245,16 +240,16 @@ LIMIT ?"#,
             .map(|row| pxh::Invocation {
                 command: pxh::BinaryStringHelper::from(row.full_command.as_slice()),
                 shellname: row.shellname.clone(),
-                working_directory: row
-                    .working_directory
-                    .as_ref()
-                    .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
                 hostname: row
                     .hostname
                     .as_ref()
                     .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
                 username: row
                     .username
+                    .as_ref()
+                    .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
+                working_directory: row
+                    .working_directory
                     .as_ref()
                     .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
                 exit_status: row.exit_status,
