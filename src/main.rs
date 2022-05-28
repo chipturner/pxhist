@@ -219,7 +219,7 @@ async fn show_subcommand(
     substring: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let substring = substring.unwrap_or_default();
-    if output_format == "json" {
+    if output_format == "json" || limit <= 0 {
         limit = i32::MAX;
     }
     let mut rows = sqlx::query!(
