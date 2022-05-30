@@ -38,9 +38,11 @@ find useful commands, even from years ago.
 
 ### Usability / UX
 - better command line help
-- special handling of ctrl-z when displaying shell history
+- special handling of ctrl-z when displaying shell
+  history... annoying, need signal number, find a crate?
 - re-evaluate fields from `pxh show`... maybe roll user/host/dir into
   the cwd field cleanly?
+	  - also make field output in "show" fully parameterized by column names
 
 ### Core Features
 - support regular expressions in the show command, not just substrings

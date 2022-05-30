@@ -69,6 +69,8 @@ enum Commands {
         limit: i32,
         #[clap(long, default_value = "human")]
         output_format: String,
+        #[clap(short, long)]
+        verbose: bool,
         substring: Option<String>,
     },
 }
@@ -207,6 +209,7 @@ UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
 
 async fn show_subcommand(
     conn: &mut SqliteConnection,
+    verbose: bool,
     output_format: &str,
     mut limit: i32,
     substring: Option<String>,
@@ -230,8 +233,13 @@ LIMIT ?"#,
     rows.reverse();
     if output_format == "json" {
         pxh::show_subcommand_json_export(&rows)?;
+    } else if verbose {
+        pxh::show_subcommand_human_readable(
+            &["start_time", "duration", "session", "context", "command"],
+            &rows,
+        )?;
     } else {
-        pxh::show_subcommand_human_readable(&rows)?;
+        pxh::show_subcommand_human_readable(&["start_time", "command"], &rows)?;
     }
     Ok(())
 }
@@ -285,9 +293,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             output_format,
             limit,
             substring,
+            verbose,
         } => {
             let mut conn = sqlite_connection(&args.db).await?;
-            show_subcommand(&mut conn, output_format, *limit, substring.clone()).await?;
+            show_subcommand(
+                &mut conn,
+                *verbose,
+                output_format,
+                *limit,
+                substring.clone(),
+            )
+            .await?;
         }
         Commands::Seal {
             session_id,

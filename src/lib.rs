@@ -1,25 +1,26 @@
-use std::io;
-
-use chrono::prelude::{Local, TimeZone};
-
-#[macro_use]
-extern crate prettytable;
-
 use std::{
-    env,
+    collections::HashMap,
     ffi::{OsStr, OsString},
     fs::File,
+    io,
     io::{BufReader, Read},
-    os::unix::{ffi::OsStrExt, fs::MetadataExt},
+    os::unix::{
+        ffi::{OsStrExt, OsStringExt},
+        fs::MetadataExt,
+    },
     path::{Path, PathBuf},
     str,
 };
 
+use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
-use prettytable::Table;
 use serde::{Deserialize, Serialize};
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+fn get_hostname() -> OsString {
+    hostname::get().unwrap_or_else(|_| OsString::new())
+}
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
@@ -40,6 +41,13 @@ impl BinaryStringHelper {
         match self {
             BinaryStringHelper::Encoded(b) => String::from_utf8_lossy(b).to_string(),
             BinaryStringHelper::Readable(s) => s.clone(),
+        }
+    }
+
+    pub fn to_os_str(&self) -> OsString {
+        match self {
+            BinaryStringHelper::Encoded(b) => OsString::from_vec(b.to_vec()),
+            BinaryStringHelper::Readable(s) => OsString::from(s),
         }
     }
 }
@@ -118,9 +126,7 @@ pub fn import_zsh_history(
         .cloned()
         .or_else(users::get_current_username)
         .unwrap_or_else(|| OsString::from("unknown"));
-    let hostname = hostname
-        .cloned()
-        .unwrap_or_else(|| env::var_os("HOST").unwrap_or_default());
+    let hostname = hostname.cloned().unwrap_or_else(get_hostname);
     let buf_iter = buf.split(|&ch| ch == b'\n');
 
     let mut ret = vec![];
@@ -164,9 +170,7 @@ pub fn import_bash_history(
         .cloned()
         .or_else(users::get_current_username)
         .unwrap_or_else(|| OsString::from("unknown"));
-    let hostname = hostname
-        .cloned()
-        .unwrap_or_else(|| env::var_os("HOST").unwrap_or_default());
+    let hostname = hostname.cloned().unwrap_or_else(get_hostname);
     let buf_iter = buf.split(|&ch| ch == b'\n').filter(|l| !l.is_empty());
 
     let mut ret = vec![];
@@ -272,35 +276,127 @@ pub fn show_subcommand_json_export(
     Ok(())
 }
 
+// column list: command, start, host, shell, cwd, end, duratio, session, ...
+
+struct QueryResultColumnDisplayer {
+    header: &'static str,
+    displayer: Box<dyn Fn(&ShowQueryResults) -> String>,
+}
+
+fn time_display_helper(t: Option<i64>) -> String {
+    t.map_or_else(
+        || "n/a".into(),
+        |t| Local.timestamp(t, 0).format(TIME_FORMAT).to_string(),
+    )
+}
+
+fn binary_display_helper(v: &[u8]) -> String {
+    String::from_utf8_lossy(v).to_string()
+}
+
+fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
+    let mut ret = HashMap::new();
+    ret.insert(
+        "command",
+        QueryResultColumnDisplayer {
+            header: "Command",
+            displayer: Box::new(|row| binary_display_helper(&row.full_command)),
+        },
+    );
+    ret.insert(
+        "start_time",
+        QueryResultColumnDisplayer {
+            header: "Start",
+            displayer: Box::new(|row| time_display_helper(row.start_unix_timestamp)),
+        },
+    );
+    ret.insert(
+        "end_time",
+        QueryResultColumnDisplayer {
+            header: "End",
+            displayer: Box::new(|row| time_display_helper(row.end_unix_timestamp)),
+        },
+    );
+    ret.insert(
+        "duration",
+        QueryResultColumnDisplayer {
+            header: "Duration",
+            displayer: Box::new(|row| {
+                row.duration
+                    .map_or_else(|| "n/a".into(), |t| format!("{}s", t))
+            }),
+        },
+    );
+    ret.insert(
+        "status",
+        QueryResultColumnDisplayer {
+            header: "Status",
+            displayer: Box::new(|row| row.duration.map_or_else(|| "n/a".into(), |s| s.to_string())),
+        },
+    );
+    ret.insert(
+        "session",
+        QueryResultColumnDisplayer {
+            header: "Session",
+            displayer: Box::new(|row| format!("{:x}", row.session_id)),
+        },
+    );
+    ret.insert(
+        "context",
+        QueryResultColumnDisplayer {
+            header: "Context",
+            displayer: Box::new(|row| {
+                let current_hostname = get_hostname();
+                println!("f {:?} {:?}", current_hostname, row.hostname);
+                let row_hostname = match &row.hostname {
+                    None => return String::new(),
+                    Some(v) => BinaryStringHelper::from(v.as_slice()),
+                };
+                let mut ret = String::new();
+                if current_hostname != row_hostname.to_os_str() {
+                    ret.push_str(&format!("{}:", row_hostname.to_string_lossy()));
+                }
+                ret.push_str(
+                    &row.working_directory
+                        .as_ref()
+                        .map_or_else(String::new, |v| String::from_utf8_lossy(v).to_string()),
+                );
+
+                ret
+            }),
+        },
+    );
+
+    ret
+}
+
 pub fn show_subcommand_human_readable(
+    fields: &[&str],
     rows: &[ShowQueryResults],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut table = Table::new();
+    let displayers = displayers();
+    let mut table = prettytable::Table::new();
     table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
-    table.set_titles(row![
-        "Time", "Duration", "Session", "Status", "cwd", "command"
-    ]);
+
+    let mut title_row = prettytable::Row::empty();
+    for field in fields {
+        let title = match displayers.get(field) {
+            Some(d) => d.header,
+            None => return Err(Box::from(format!("Invalid 'show' field: {}", field))),
+        };
+
+        title_row.add_cell(prettytable::Cell::new(title));
+    }
+    table.set_titles(title_row);
+
     for row in rows.iter() {
-        let start: Option<i64> = row.start_unix_timestamp;
-        let duration: Option<i64> = row.duration;
-        let start_time_display = start.map_or_else(
-            || "n/a".into(),
-            |t| Local.timestamp(t, 0).format(TIME_FORMAT).to_string(),
-        );
-        let exit_status_display = row
-            .exit_status
-            .map_or_else(|| "n/a".into(), |s| s.to_string());
-        let duration_display = duration.map_or_else(|| "n/a".into(), |t| format!("{}s", t));
-        table.add_row(row![
-            start_time_display,
-            duration_display,
-            format!("{:x}", row.session_id),
-            exit_status_display,
-            row.working_directory
-                .as_ref()
-                .map_or_else(String::new, |v| String::from_utf8_lossy(v).to_string()),
-            String::from_utf8_lossy(&row.full_command)
-        ]);
+        let mut display_row = prettytable::Row::empty();
+        for field in fields {
+            display_row.add_cell(prettytable::Cell::new(
+                (displayers[field].displayer)(row).as_str(),
+            ));
+        }
+        table.add_row(display_row);
     }
     table.printstd();
     Ok(())
