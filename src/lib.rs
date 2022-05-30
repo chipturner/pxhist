@@ -1,3 +1,10 @@
+use std::io;
+
+use chrono::prelude::{Local, TimeZone};
+
+#[macro_use]
+extern crate prettytable;
+
 use std::{
     env,
     ffi::{OsStr, OsString},
@@ -9,7 +16,10 @@ use std::{
 };
 
 use itertools::Itertools;
+use prettytable::Table;
 use serde::{Deserialize, Serialize};
+
+const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 #[serde(untagged)]
@@ -217,6 +227,83 @@ fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
         }
         _ => vec![],
     }
+}
+
+pub struct ShowQueryResults {
+    pub session_id: i64,
+    pub full_command: Vec<u8>,
+    pub shellname: String,
+    pub working_directory: Option<Vec<u8>>,
+    pub hostname: Option<Vec<u8>>,
+    pub username: Option<Vec<u8>>,
+    pub exit_status: Option<i64>,
+    pub start_unix_timestamp: Option<i64>,
+    pub end_unix_timestamp: Option<i64>,
+    pub duration: Option<i64>,
+}
+
+pub fn show_subcommand_json_export(
+    rows: &[ShowQueryResults],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let invocations: Vec<Invocation> = rows
+        .iter()
+        .map(|row| Invocation {
+            command: BinaryStringHelper::from(row.full_command.as_slice()),
+            shellname: row.shellname.clone(),
+            hostname: row
+                .hostname
+                .as_ref()
+                .map(|v| BinaryStringHelper::from(v.as_slice())),
+            username: row
+                .username
+                .as_ref()
+                .map(|v| BinaryStringHelper::from(v.as_slice())),
+            working_directory: row
+                .working_directory
+                .as_ref()
+                .map(|v| BinaryStringHelper::from(v.as_slice())),
+            exit_status: row.exit_status,
+            start_unix_timestamp: row.start_unix_timestamp,
+            end_unix_timestamp: row.end_unix_timestamp,
+            session_id: row.session_id,
+        })
+        .collect();
+    serde_json::to_writer(io::stdout(), &invocations)?;
+    Ok(())
+}
+
+pub fn show_subcommand_human_readable(
+    rows: &[ShowQueryResults],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut table = Table::new();
+    table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
+    table.set_titles(row![
+        "Time", "Duration", "Session", "Status", "cwd", "command"
+    ]);
+    for row in rows.iter() {
+        let start: Option<i64> = row.start_unix_timestamp;
+        let duration: Option<i64> = row.duration;
+        let start_time_display = start.map_or_else(
+            || "n/a".into(),
+            |t| Local.timestamp(t, 0).format(TIME_FORMAT).to_string(),
+        );
+        let exit_status_display = row
+            .exit_status
+            .map_or_else(|| "n/a".into(), |s| s.to_string());
+        let duration_display = duration.map_or_else(|| "n/a".into(), |t| format!("{}s", t));
+        table.add_row(row![
+            start_time_display,
+            duration_display,
+            format!("{:x}", row.session_id),
+            exit_status_display,
+            row.working_directory
+                .as_ref()
+                .map_or_else(String::new, |v| String::from_utf8_lossy(v).to_string()),
+            String::from_utf8_lossy(&row.full_command)
+        ]);
+    }
+    table.printstd();
+    Ok(())
 }
 
 #[cfg(test)]

@@ -1,6 +1,3 @@
-#[macro_use]
-extern crate prettytable;
-
 use std::{
     ffi::OsString,
     io,
@@ -10,14 +7,10 @@ use std::{
     str::FromStr,
 };
 
-use chrono::prelude::{Local, TimeZone};
 use clap::{Parser, Subcommand};
-use prettytable::Table;
 use sqlx::{
     sqlite::SqliteConnectOptions, ConnectOptions, Connection, SqliteConnection, Transaction,
 };
-
-const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -222,7 +215,8 @@ async fn show_subcommand(
     if output_format == "json" || limit <= 0 {
         limit = i32::MAX;
     }
-    let mut rows = sqlx::query!(
+    let mut rows = sqlx::query_as!(
+	pxh::ShowQueryResults,
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration
   FROM command_history h
@@ -235,59 +229,9 @@ LIMIT ?"#,
 	.await?;
     rows.reverse();
     if output_format == "json" {
-        let invocations: Vec<pxh::Invocation> = rows
-            .iter()
-            .map(|row| pxh::Invocation {
-                command: pxh::BinaryStringHelper::from(row.full_command.as_slice()),
-                shellname: row.shellname.clone(),
-                hostname: row
-                    .hostname
-                    .as_ref()
-                    .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
-                username: row
-                    .username
-                    .as_ref()
-                    .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
-                working_directory: row
-                    .working_directory
-                    .as_ref()
-                    .map(|v| pxh::BinaryStringHelper::from(v.as_slice())),
-                exit_status: row.exit_status,
-                start_unix_timestamp: row.start_unix_timestamp,
-                end_unix_timestamp: row.end_unix_timestamp,
-                session_id: row.session_id,
-            })
-            .collect();
-        serde_json::to_writer(io::stdout(), &invocations)?
+        pxh::show_subcommand_json_export(&rows)?;
     } else {
-        let mut table = Table::new();
-        table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
-        table.set_titles(row![
-            "Time", "Duration", "Session", "Status", "cwd", "command"
-        ]);
-        for row in rows {
-            let start: Option<i64> = row.start_unix_timestamp;
-            let duration: Option<i64> = row.duration;
-            let start_time_display = start.map_or_else(
-                || "n/a".into(),
-                |t| Local.timestamp(t, 0).format(TIME_FORMAT).to_string(),
-            );
-            let exit_status_display = row
-                .exit_status
-                .map_or_else(|| "n/a".into(), |s| s.to_string());
-            let duration_display = duration.map_or_else(|| "n/a".into(), |t| format!("{}s", t));
-            table.add_row(row![
-                start_time_display,
-                duration_display,
-                format!("{:x}", row.session_id),
-                exit_status_display,
-                row.working_directory
-                    .as_ref()
-                    .map_or_else(String::new, |v| String::from_utf8_lossy(v).to_string()),
-                String::from_utf8_lossy(&row.full_command)
-            ]);
-        }
-        table.printstd();
+        pxh::show_subcommand_human_readable(&rows)?;
     }
     Ok(())
 }
