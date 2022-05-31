@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    env,
     ffi::{OsStr, OsString},
     fs::File,
     io,
@@ -343,13 +344,15 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
             displayer: Box::new(|row| format!("{:x}", row.session_id)),
         },
     );
+    // Print context specially; the full output is $HOST:$PATH but if
+    // $HOST is the current host, the $HOST: is omitted.  If $PATH is
+    // the current working directory, it is replaced with `.`.
     ret.insert(
         "context",
         QueryResultColumnDisplayer {
             header: "Context",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
-                println!("f {:?} {:?}", current_hostname, row.hostname);
                 let row_hostname = match &row.hostname {
                     None => return String::new(),
                     Some(v) => BinaryStringHelper::from(v.as_slice()),
@@ -358,10 +361,18 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
                 if current_hostname != row_hostname.to_os_str() {
                     ret.push_str(&format!("{}:", row_hostname.to_string_lossy()));
                 }
+                let current_directory = env::current_dir().unwrap_or(PathBuf::new());
                 ret.push_str(
                     &row.working_directory
                         .as_ref()
-                        .map_or_else(String::new, |v| String::from_utf8_lossy(v).to_string()),
+                        .map_or_else(String::new, |v| {
+                            let v = String::from_utf8_lossy(v).to_string();
+                            if v == current_directory.to_string_lossy() {
+                                String::from(".")
+                            } else {
+                                v
+                            }
+                        }),
                 );
 
                 ret

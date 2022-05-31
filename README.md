@@ -42,7 +42,9 @@ find useful commands, even from years ago.
   history... annoying, need signal number, find a crate?
 - re-evaluate fields from `pxh show`... maybe roll user/host/dir into
   the cwd field cleanly?
-	  - also make field output in "show" fully parameterized by column names
+	  - also make field output in "show" fully parameterized by column
+	    names
+- colorize output?
 
 ### Core Features
 - support regular expressions in the show command, not just substrings
