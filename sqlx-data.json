@@ -1,6 +1,6 @@
 {
   "db": "SQLite",
-  "61c4d1aeae7e3554cca42fbb96cb01b5a67092407d499bf7fc22700e8069d14c": {
+  "4fa2e6a6319948d53fddf8cc690e77f85f63a1ff83132a1c4a9268db76916ffe": {
     "describe": {
       "columns": [
         {
@@ -47,11 +47,6 @@
           "name": "end_unix_timestamp",
           "ordinal": 8,
           "type_info": "Int64"
-        },
-        {
-          "name": "duration",
-          "ordinal": 9,
-          "type_info": "Int64"
         }
       ],
       "nullable": [
@@ -63,86 +58,79 @@
         true,
         true,
         true,
-        true,
-        null
-      ],
-      "parameters": {
-        "Right": 2
-      }
-    },
-    "query": "\nSELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration\n  FROM command_history h\n WHERE INSTR(full_command, ?)\nORDER BY start_unix_timestamp DESC, id DESC\nLIMIT ?"
-  },
-  "6ff9a6d279cb9d400a58682c4a5368415f69b6c17380a681b195d79c82878bea": {
-    "describe": {
-      "columns": [
-        {
-          "name": "session_id",
-          "ordinal": 0,
-          "type_info": "Int64"
-        },
-        {
-          "name": "full_command",
-          "ordinal": 1,
-          "type_info": "Blob"
-        },
-        {
-          "name": "shellname",
-          "ordinal": 2,
-          "type_info": "Text"
-        },
-        {
-          "name": "hostname",
-          "ordinal": 3,
-          "type_info": "Blob"
-        },
-        {
-          "name": "username",
-          "ordinal": 4,
-          "type_info": "Blob"
-        },
-        {
-          "name": "working_directory",
-          "ordinal": 5,
-          "type_info": "Blob"
-        },
-        {
-          "name": "exit_status",
-          "ordinal": 6,
-          "type_info": "Int64"
-        },
-        {
-          "name": "start_unix_timestamp",
-          "ordinal": 7,
-          "type_info": "Int64"
-        },
-        {
-          "name": "end_unix_timestamp",
-          "ordinal": 8,
-          "type_info": "Int64"
-        },
-        {
-          "name": "duration",
-          "ordinal": 9,
-          "type_info": "Int64"
-        }
-      ],
-      "nullable": [
-        false,
-        false,
-        false,
-        true,
-        true,
-        true,
-        true,
-        true,
-        true,
-        null
+        true
       ],
       "parameters": {
         "Right": 0
       }
     },
-    "query": "\nSELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration\n  FROM command_history h\nORDER BY id"
+    "query": "\nSELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp\n  FROM command_history h\nORDER BY id"
+  },
+  "6eece994511d4d1029f7b6985fd19c051658ffec19e238230a5a877a18edb2f3": {
+    "describe": {
+      "columns": [
+        {
+          "name": "session_id",
+          "ordinal": 0,
+          "type_info": "Int64"
+        },
+        {
+          "name": "full_command",
+          "ordinal": 1,
+          "type_info": "Blob"
+        },
+        {
+          "name": "shellname",
+          "ordinal": 2,
+          "type_info": "Text"
+        },
+        {
+          "name": "hostname",
+          "ordinal": 3,
+          "type_info": "Blob"
+        },
+        {
+          "name": "username",
+          "ordinal": 4,
+          "type_info": "Blob"
+        },
+        {
+          "name": "working_directory",
+          "ordinal": 5,
+          "type_info": "Blob"
+        },
+        {
+          "name": "exit_status",
+          "ordinal": 6,
+          "type_info": "Int64"
+        },
+        {
+          "name": "start_unix_timestamp",
+          "ordinal": 7,
+          "type_info": "Int64"
+        },
+        {
+          "name": "end_unix_timestamp",
+          "ordinal": 8,
+          "type_info": "Int64"
+        }
+      ],
+      "nullable": [
+        false,
+        false,
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "parameters": {
+        "Right": 2
+      }
+    },
+    "query": "\nSELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp\n  FROM command_history h\n WHERE INSTR(full_command, ?)\nORDER BY start_unix_timestamp DESC, id DESC\nLIMIT ?"
   },
   "aa301180bfd143b457cfb91188eae62e95a1c85dcd7a44e61c48041d4bbb71d7": {
     "describe": {

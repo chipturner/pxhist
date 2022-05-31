@@ -233,7 +233,7 @@ fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
     }
 }
 
-pub struct ShowQueryResults {
+pub struct InvocationExport {
     pub session_id: i64,
     pub full_command: Vec<u8>,
     pub shellname: String,
@@ -243,12 +243,9 @@ pub struct ShowQueryResults {
     pub exit_status: Option<i64>,
     pub start_unix_timestamp: Option<i64>,
     pub end_unix_timestamp: Option<i64>,
-    pub duration: Option<i64>,
 }
 
-pub fn json_export(
-    rows: &[ShowQueryResults],
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::Error>> {
     let invocations: Vec<Invocation> = rows
         .iter()
         .map(|row| Invocation {
@@ -280,7 +277,7 @@ pub fn json_export(
 
 struct QueryResultColumnDisplayer {
     header: &'static str,
-    displayer: Box<dyn Fn(&ShowQueryResults) -> String>,
+    displayer: Box<dyn Fn(&InvocationExport) -> String>,
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
@@ -321,17 +318,22 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "duration",
         QueryResultColumnDisplayer {
             header: "Duration",
-            displayer: Box::new(|row| {
-                row.duration
-                    .map_or_else(|| "n/a".into(), |t| format!("{}s", t))
-            }),
+            displayer: Box::new(
+                |row| match (row.start_unix_timestamp, row.end_unix_timestamp) {
+                    (Some(start), Some(end)) => format!("{}s", end - start),
+                    _ => "n/a".into(),
+                },
+            ),
         },
     );
     ret.insert(
         "status",
         QueryResultColumnDisplayer {
             header: "Status",
-            displayer: Box::new(|row| row.duration.map_or_else(|| "n/a".into(), |s| s.to_string())),
+            displayer: Box::new(|row| {
+                row.exit_status
+                    .map_or_else(|| "n/a".into(), |s| s.to_string())
+            }),
         },
     );
     ret.insert(
@@ -372,7 +374,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
 
 pub fn show_subcommand_human_readable(
     fields: &[&str],
-    rows: &[ShowQueryResults],
+    rows: &[InvocationExport],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let displayers = displayers();
     let mut table = prettytable::Table::new();

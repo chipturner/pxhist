@@ -208,9 +208,9 @@ UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
 
 async fn export_subcommand(conn: &mut SqliteConnection) -> Result<(), Box<dyn std::error::Error>> {
     let rows = sqlx::query_as!(
-	pxh::ShowQueryResults,
+	pxh::InvocationExport,
         r#"
-SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration
+SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
 ORDER BY id"#,
     )
@@ -231,9 +231,9 @@ async fn show_subcommand(
         limit = i32::MAX;
     }
     let mut rows = sqlx::query_as!(
-	pxh::ShowQueryResults,
+	pxh::InvocationExport,
         r#"
-SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration
+SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
  WHERE INSTR(full_command, ?)
 ORDER BY start_unix_timestamp DESC, id DESC
