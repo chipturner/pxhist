@@ -53,6 +53,7 @@ enum Commands {
         #[clap(long)]
         username: Option<OsString>,
     },
+    Export {},
     Seal {
         #[clap(long)]
         session_id: i64,
@@ -67,8 +68,6 @@ enum Commands {
     Show {
         #[clap(long, default_value_t = 50)]
         limit: i32,
-        #[clap(long, default_value = "human")]
-        output_format: String,
         #[clap(short, long)]
         verbose: bool,
         substring: Option<String>,
@@ -207,15 +206,28 @@ UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
     Ok(())
 }
 
+async fn export_subcommand(conn: &mut SqliteConnection) -> Result<(), Box<dyn std::error::Error>> {
+    let rows = sqlx::query_as!(
+	pxh::ShowQueryResults,
+        r#"
+SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, end_unix_timestamp - start_unix_timestamp as duration
+  FROM command_history h
+ORDER BY id"#,
+    )
+    .fetch_all(conn)
+	.await?;
+    pxh::json_export(&rows)?;
+    Ok(())
+}
+
 async fn show_subcommand(
     conn: &mut SqliteConnection,
     verbose: bool,
-    output_format: &str,
     mut limit: i32,
     substring: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let substring = substring.unwrap_or_default();
-    if output_format == "json" || limit <= 0 {
+    if limit <= 0 {
         limit = i32::MAX;
     }
     let mut rows = sqlx::query_as!(
@@ -231,9 +243,7 @@ LIMIT ?"#,
     .fetch_all(conn)
 	.await?;
     rows.reverse();
-    if output_format == "json" {
-        pxh::show_subcommand_json_export(&rows)?;
-    } else if verbose {
+    if verbose {
         pxh::show_subcommand_human_readable(
             &["start_time", "duration", "session", "context", "command"],
             &rows,
@@ -289,21 +299,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conn = sqlite_connection(&args.db).await?;
             insert_invocations(&mut conn, invocations).await?;
         }
+        Commands::Export {} => {
+            let mut conn = sqlite_connection(&args.db).await?;
+            export_subcommand(&mut conn).await?;
+        }
         Commands::Show {
-            output_format,
             limit,
             substring,
             verbose,
         } => {
             let mut conn = sqlite_connection(&args.db).await?;
-            show_subcommand(
-                &mut conn,
-                *verbose,
-                output_format,
-                *limit,
-                substring.clone(),
-            )
-            .await?;
+            show_subcommand(&mut conn, *verbose, *limit, substring.clone()).await?;
         }
         Commands::Seal {
             session_id,

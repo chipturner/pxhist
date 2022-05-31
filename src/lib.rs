@@ -246,7 +246,7 @@ pub struct ShowQueryResults {
     pub duration: Option<i64>,
 }
 
-pub fn show_subcommand_json_export(
+pub fn json_export(
     rows: &[ShowQueryResults],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let invocations: Vec<Invocation> = rows
