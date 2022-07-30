@@ -43,31 +43,34 @@ find useful commands, even from years ago.
   bracketing), like grep -C
 - P2: special handling of ctrl-z when displaying shell
   history... annoying, need signal number, find a crate?
-- P0: re-evaluate fields from `pxh show`... maybe roll user/host/dir into
-  the cwd field cleanly?
-	  - P1: also make field output in "show" fully parameterized by column
-	    names
+- P0: re-evaluate fields from `pxh show`... maybe roll user/host/dir
+  into the cwd field cleanly?
+	  - P1: also make field output in "show" fully parameterized by
+	    column names
 - P3: colorize output?
 
 ### Core Features
 - P0: support regular expressions in the show command, not just
   substrings
 - P3: stats subcommand to show some interesting data
-- P3: create and document workflow for incremental updates, particularly
-  for shells that don't support updating realtime (e.g. backfill from
-  mysql history periodically)
-- P1: teach `show` to display history entries restricted to the current
-  directory, host, user, etc
+- P3: create and document workflow for incremental updates,
+  particularly for shells that don't support updating realtime
+  (e.g. backfill from mysql history periodically)
+- P1: teach `show` to display history entries restricted to the
+  current directory, host, user, etc
 
 ### Extensions
 - P0: support bash like zsh
   - P3: and fish?
-  - P1: and then non-shells like mysql, python, gdb, sqlite_history ...
-- P3: explore using pxh for interactive shell incremental history search
+  - P1: and then non-shells like mysql, python, gdb, sqlite_history
+    ...
+- P3: explore using pxh for interactive shell incremental history
+  search
 
 ### Misc
-- P2: better code documentation, particularly around helper classes and
-  magic for sqlx workflows (prepare etc)
+- P2: better code documentation, particularly around helper classes
+  and magic for sqlx workflows (prepare etc)
 - P3: document architecture and implementation details
-- P3: some way to expunge things like passwords accidentally in history
-  files w/o resorting to sqlite?  also prevent re-importing somehow?
+- P3: some way to expunge things like passwords accidentally in
+  history files w/o resorting to sqlite?  also prevent re-importing
+  somehow?
