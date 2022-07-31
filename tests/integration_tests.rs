@@ -41,7 +41,7 @@ fn test_trivial_invocation() {
         .assert()
         .success();
 
-    pc.call("show --output-format json").assert().success();
+    pc.call("export").assert().success();
 }
 
 // Basic round trip test of inserting/sealing, then verify with json export.
@@ -70,7 +70,7 @@ fn test_insert_seal_roundtrip() {
         commands.len() + 1
     );
 
-    let json_output = pc.call("show --output-format json").output().unwrap();
+    let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     assert_eq!(invocations.len(), commands.len());
@@ -118,7 +118,7 @@ fn test_zsh_import_roundtrip() {
     assert!(output.stdout.len() > 0);
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 4);
 
-    let json_output = pc.call("show --output-format json").output().unwrap();
+    let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
@@ -140,7 +140,7 @@ fn test_bash_import_roundtrip() {
     assert!(output.stdout.len() > 0);
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 4);
 
-    let json_output = pc.call("show --output-format json").output().unwrap();
+    let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
@@ -164,7 +164,7 @@ fn test_timestamped_bash_import_roundtrip() {
     assert!(output.stdout.len() > 0);
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 4);
 
-    let json_output = pc.call("show --output-format json").output().unwrap();
+    let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);

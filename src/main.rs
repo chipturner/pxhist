@@ -65,7 +65,7 @@ enum Commands {
     ShellConfig {
         shellname: String,
     },
-    #[clap(visible_alias="s")]
+    #[clap(visible_alias = "s")]
     Show {
         #[clap(long, default_value_t = 50)]
         limit: i32,
