@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     env,
     ffi::{OsStr, OsString},
+    fmt::Write,
     fs::File,
     io,
     io::{BufReader, Read},
@@ -359,9 +360,9 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
                 };
                 let mut ret = String::new();
                 if current_hostname != row_hostname.to_os_str() {
-                    ret.push_str(&format!("{}:", row_hostname.to_string_lossy()));
+                    write!(ret, "{}:", row_hostname.to_string_lossy()).unwrap_or_default();
                 }
-                let current_directory = env::current_dir().unwrap_or(PathBuf::new());
+                let current_directory = env::current_dir().unwrap_or_default();
                 ret.push_str(
                     &row.working_directory
                         .as_ref()
