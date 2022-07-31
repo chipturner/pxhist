@@ -59,25 +59,26 @@ begin and end.
 ## TODO
 
 ### Usability / UX
-- P3: optional pretty ncurses-style interface?
+- P0: re-evaluate fields from `pxh show`... maybe roll user/host/dir
+  into the cwd field cleanly?
+  - P1: also make field output in "show" fully parameterized bycolumn
+    names
 - P1: better command line help
 - P1: output commands "around" a timestamp (before, after,
   bracketing), like grep -C
 - P2: special handling of ctrl-z when displaying shell
   history... annoying, need signal number, find a crate?
-- P0: re-evaluate fields from `pxh show`... maybe roll user/host/dir
-  into the cwd field cleanly?
-  - P1: also make field output in "show" fully parameterized bycolumn
-    names
-- P3: colorize output?
+- P3: optional pretty ncurses-style interface?
+- P3: colorize output?  parts where regex matches in addition to columns
 
 ### Core Features
-- P3: stats subcommand to show some interesting data
-- P3: create and document workflow for incremental updates,
+- P1: teach `show` to display history entries restricted to the
+  current directory, host, user, etc.  Maybe `--here` to simplify the
+  filter?
+- P2: create and document workflow for incremental updates,
   particularly for shells that don't support updating realtime
   (e.g. backfill from mysql history periodically)
-- P1: teach `show` to display history entries restricted to the
-  current directory, host, user, etc
+- P3: stats subcommand to show some interesting data
 
 ### Extensions
 - P1: more shell support
@@ -89,7 +90,7 @@ begin and end.
 
 ### Misc
 - P2: better code documentation, particularly around helper classes
-- P3: document architecture and implementation details
+- P2: document architecture and implementation details
 - P3: some way to expunge things like passwords accidentally in
   history files w/o resorting to sqlite?  also prevent re-importing
   somehow?
