@@ -4,13 +4,10 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     str,
-    str::FromStr,
 };
 
 use clap::{Parser, Subcommand};
-use sqlx::{
-    sqlite::SqliteConnectOptions, ConnectOptions, Connection, SqliteConnection, Transaction,
-};
+use rusqlite::{params, Connection, Result, Transaction};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -75,34 +72,29 @@ enum Commands {
     },
 }
 
-async fn sqlite_connection(
-    path: &Option<PathBuf>,
-) -> Result<SqliteConnection, Box<dyn std::error::Error>> {
+fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path
         .as_ref()
         .ok_or("Database not defined; use --db or PXH_DB_PATH")?;
-    let database_url = format!("sqlite://{}", path.to_string_lossy());
-    let mut conn = SqliteConnectOptions::from_str(&database_url)?
-        .create_if_missing(true)
-        .pragma("journal_mode", "WAL")
-        .pragma("temp_store", "MEMORY")
-        .pragma("cache_size", "16777216")
-        .connect()
-        .await?;
-    sqlx::migrate!("src/migrations").run(&mut conn).await?;
+    let conn = Connection::open(path)?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    conn.pragma_update(None, "cache_size", "16777216")?;
 
+    let schema = include_str!("base_schema.sql");
+    conn.execute_batch(schema)?;
     Ok(conn)
 }
 
-async fn insert_invocations(
-    conn: &mut SqliteConnection,
+fn insert_invocations(
+    conn: &mut Connection,
     invocations: Vec<pxh::Invocation>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut tx = conn.begin().await?;
+    let tx = conn.transaction()?;
     for invocation in invocations.into_iter() {
-        insert_subcommand(&mut tx, &invocation).await?;
+        insert_subcommand(&tx, &invocation)?;
     }
-    tx.commit().await?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -123,8 +115,8 @@ fn import_subcommand(
     }
 }
 
-async fn insert_subcommand(
-    tx: &mut Transaction<'_, sqlx::Sqlite>,
+fn insert_subcommand(
+    tx: &Transaction,
     invocation: &pxh::Invocation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let command_bytes: Vec<u8> = invocation.command.to_bytes();
@@ -141,7 +133,7 @@ async fn insert_subcommand(
         .as_ref()
         .map_or_else(Vec::new, |v| v.to_bytes());
 
-    let _ = sqlx::query!(
+    let _ = tx.execute(
         r#"
 INSERT INTO command_history (
     session_id,
@@ -155,18 +147,18 @@ INSERT INTO command_history (
     end_unix_timestamp
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        invocation.session_id,
-        command_bytes,
-        invocation.shellname,
-        hostname_bytes,
-        username_bytes,
-        working_directory_bytes,
-        invocation.exit_status,
-        invocation.start_unix_timestamp,
-        invocation.end_unix_timestamp,
-    )
-    .execute(tx)
-    .await?;
+        (
+            invocation.session_id,
+            command_bytes.as_slice(),
+            &invocation.shellname,
+            hostname_bytes,
+            username_bytes,
+            working_directory_bytes,
+            invocation.exit_status,
+            invocation.start_unix_timestamp,
+            invocation.end_unix_timestamp,
+        ),
+    );
 
     Ok(())
 }
@@ -186,43 +178,52 @@ fn shell_config_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
-async fn seal_subcommand(
-    conn: &mut SqliteConnection,
+fn seal_subcommand(
+    conn: &mut Connection,
     session_id: i64,
     exit_status: i32,
     end_unix_timestamp: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let _ = sqlx::query!(
+    let _ = conn.execute(
         r#"
 UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
  WHERE exit_status is NULL
    AND end_unix_timestamp IS NULL
    AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"#,
-        exit_status,
-        end_unix_timestamp,
-        session_id
-    )
-    .execute(conn)
-    .await?;
+        (exit_status, end_unix_timestamp, session_id),
+    )?;
     Ok(())
 }
 
-async fn export_subcommand(conn: &mut SqliteConnection) -> Result<(), Box<dyn std::error::Error>> {
-    let rows = sqlx::query_as!(
-	pxh::InvocationExport,
+fn export_subcommand(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stmt = conn.prepare(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
 ORDER BY id"#,
-    )
-    .fetch_all(conn)
-	.await?;
+    )?;
+    let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
+        .query_map([], |row| {
+            Ok(pxh::InvocationExport {
+                session_id: row.get(0)?,
+                full_command: row.get(1)?,
+                shellname: row.get(2)?,
+                working_directory: row.get(3)?,
+                hostname: row.get(4)?,
+                username: row.get(5)?,
+                exit_status: row.get(6)?,
+                start_unix_timestamp: row.get(7)?,
+                end_unix_timestamp: row.get(8)?,
+            })
+        })?
+        .collect();
+    let rows = rows?;
     pxh::json_export(&rows)?;
     Ok(())
 }
 
-async fn show_subcommand(
-    conn: &mut SqliteConnection,
+fn show_subcommand(
+    conn: &mut Connection,
     verbose: bool,
     mut limit: i32,
     substring: Option<String>,
@@ -231,18 +232,31 @@ async fn show_subcommand(
     if limit <= 0 {
         limit = i32::MAX;
     }
-    let mut rows = sqlx::query_as!(
-	pxh::InvocationExport,
+    let mut stmt = conn.prepare(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
  WHERE INSTR(full_command, ?)
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-        substring, limit
-    )
-    .fetch_all(conn)
-	.await?;
+    )?;
+
+    let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
+        .query_map(params![substring, limit], |row| {
+            Ok(pxh::InvocationExport {
+                session_id: row.get(0)?,
+                full_command: row.get(1)?,
+                shellname: row.get(2)?,
+                working_directory: row.get(3)?,
+                hostname: row.get(4)?,
+                username: row.get(5)?,
+                exit_status: row.get(6)?,
+                start_unix_timestamp: row.get(7)?,
+                end_unix_timestamp: row.get(8)?,
+            })
+        })?
+        .collect();
+    let mut rows = rows?;
     rows.reverse();
     if verbose {
         pxh::show_subcommand_human_readable(
@@ -255,8 +269,7 @@ LIMIT ?"#,
     Ok(())
 }
 
-#[async_std::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = PxhArgs::parse();
 
@@ -272,8 +285,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             end_unix_timestamp,
             session_id,
         } => {
-            let mut conn = sqlite_connection(&args.db).await?;
-            let mut tx = conn.begin().await?;
+            let mut conn = sqlite_connection(&args.db)?;
+            let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
                 command: pxh::BinaryStringHelper::from(pxh::command_as_bytes(command).as_slice()),
                 shellname: shellname.into(),
@@ -287,8 +300,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 end_unix_timestamp: *end_unix_timestamp,
                 session_id: *session_id,
             };
-            insert_subcommand(&mut tx, &invocation).await?;
-            tx.commit().await?;
+            insert_subcommand(&tx, &invocation)?;
+            tx.commit()?;
         }
         Commands::Import {
             histfile,
@@ -297,28 +310,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             username,
         } => {
             let invocations = import_subcommand(histfile, shellname, hostname, username)?;
-            let mut conn = sqlite_connection(&args.db).await?;
-            insert_invocations(&mut conn, invocations).await?;
+            let mut conn = sqlite_connection(&args.db)?;
+            insert_invocations(&mut conn, invocations)?;
         }
         Commands::Export {} => {
-            let mut conn = sqlite_connection(&args.db).await?;
-            export_subcommand(&mut conn).await?;
+            let mut conn = sqlite_connection(&args.db)?;
+            export_subcommand(&mut conn)?;
         }
         Commands::Show {
             limit,
             substring,
             verbose,
         } => {
-            let mut conn = sqlite_connection(&args.db).await?;
-            show_subcommand(&mut conn, *verbose, *limit, substring.clone()).await?;
+            let mut conn = sqlite_connection(&args.db)?;
+            show_subcommand(&mut conn, *verbose, *limit, substring.clone())?;
         }
         Commands::Seal {
             session_id,
             exit_status,
             end_unix_timestamp,
         } => {
-            let mut conn = sqlite_connection(&args.db).await?;
-            seal_subcommand(&mut conn, *session_id, *exit_status, *end_unix_timestamp).await?;
+            let mut conn = sqlite_connection(&args.db)?;
+            seal_subcommand(&mut conn, *session_id, *exit_status, *end_unix_timestamp)?;
         }
         Commands::ShellConfig { shellname } => {
             shell_config_subcommand(shellname)?;

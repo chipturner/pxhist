@@ -32,8 +32,6 @@ find useful commands, even from years ago.
 
 ## Hacking on pxhist
 
-- `cargo sqlx prepare -- --bin pxh`
-
 ## TODO
 
 ### Usability / UX
@@ -69,7 +67,6 @@ find useful commands, even from years ago.
 
 ### Misc
 - P2: better code documentation, particularly around helper classes
-  and magic for sqlx workflows (prepare etc)
 - P3: document architecture and implementation details
 - P3: some way to expunge things like passwords accidentally in
   history files w/o resorting to sqlite?  also prevent re-importing
