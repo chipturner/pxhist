@@ -70,6 +70,13 @@ fn test_insert_seal_roundtrip() {
         commands.len() + 1
     );
 
+    // Trivial regexp
+    let output = pc.call("show u....Z?e").output().unwrap();
+    assert_eq!(
+        output.stdout.iter().filter(|&ch| *ch == b'\n').count(),
+        2 // command and header!
+    );
+
     let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();

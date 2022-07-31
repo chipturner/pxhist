@@ -48,8 +48,6 @@ find useful commands, even from years ago.
 - P3: colorize output?
 
 ### Core Features
-- P0: support regular expressions in the show command, not just
-  substrings
 - P3: stats subcommand to show some interesting data
 - P3: create and document workflow for incremental updates,
   particularly for shells that don't support updating realtime

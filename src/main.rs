@@ -4,10 +4,13 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     str,
+    sync::Arc,
 };
 
 use clap::{Parser, Subcommand};
-use rusqlite::{params, Connection, Result, Transaction};
+use regex::bytes::Regex;
+use rusqlite::{functions::FunctionFlags, params, Connection, Error, Result, Transaction};
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -83,6 +86,31 @@ fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::
 
     let schema = include_str!("base_schema.sql");
     conn.execute_batch(schema)?;
+
+    // From rusqlite::functions example but adapted for non-utf8
+    // regexps.
+    conn.create_scalar_function(
+        "regexp",
+        2,
+        FunctionFlags::SQLITE_DETERMINISTIC,
+        move |ctx| {
+            assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
+            let regexp: Arc<Regex> = ctx.get_or_create_aux(0, |vr| -> Result<_, BoxError> {
+                Ok(Regex::new(vr.as_str()?)?)
+            })?;
+            let is_match = {
+                let text = ctx
+                    .get_raw(1)
+                    .as_bytes()
+                    .map_err(|e| Error::UserFunctionError(e.into()))?;
+
+                regexp.is_match(text)
+            };
+
+            Ok(is_match)
+        },
+    )?;
+
     Ok(conn)
 }
 
@@ -236,7 +264,7 @@ fn show_subcommand(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
- WHERE INSTR(full_command, ?)
+ WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
     )?;
