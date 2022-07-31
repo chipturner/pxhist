@@ -22,11 +22,35 @@ find useful commands, even from years ago.
   - fun trick, from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
 - shell helpers
   - zsh: `source <(pxh shell-config zsh)`
+  - zsh: `source <(pxh shell-config bash)`
   - everyting else tbd
 - incremental sync
 - export/import: `pxh show --output-format json` and `pxh import --shellname json --histfile $JSON_PATH`
 
 ## Inspiration and Similar Tools
+
+This tool was originally inspired by
+[bash-history-sqlite](https://github.com/thenewwazoo/bash-history-sqlite)
+and [zsh-histdb](https://github.com/larkery/zsh-histdb).  These tools,
+and similar ones, are excellent, but I found myself wanting to extend
+the concepts further:
+
+- It seems redundant to build a tool per shell; pxh is meant to be a
+  solution for all shells (as well as shell-like REPL environments
+  that track history like `mysql`, `python`, etc).
+- Those tools rely on shell invocation of the sqlite CLI.  This
+  works... until it doesn't.  It requires precision in quoting and,
+  unfortunately, is somewhat prone to race conditions when shells
+  start in close proximity.
+- I wanted highly efficient tooling that was easy to extend.  By going
+  with a native language like Rust, the per-command invocation
+  overhead is very small, and it is easier to build portable complex
+  tooling such as TUIs, complex search, analytics, etc.
+
+This tool embeds the very useful
+[Bash-Preexec](https://github.com/rcaloras/bash-preexec) utility which
+provides very zsh-like extensions for Bash to track when commands
+begin and end.
 
 ## Architecture / How it Works
 
@@ -56,10 +80,10 @@ find useful commands, even from years ago.
   current directory, host, user, etc
 
 ### Extensions
-- P0: support bash like zsh
-  - P3: and fish?
+- P1: more shell support
   - P1: and then non-shells like mysql, python, gdb, sqlite_history
     ...
+  - P3: fish?
 - P3: explore using pxh for interactive shell incremental history
   search
 

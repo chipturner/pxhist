@@ -194,7 +194,13 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
 fn shell_config_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Todo: bash and other shell formats
     let contents = match shellname {
-        "zsh" => include_str!("shell_configs/pxh.zsh"),
+        "zsh" => String::from(include_str!("shell_configs/pxh.zsh")),
+        "bash" => {
+            let mut contents = String::new();
+            contents.push_str(include_str!("shell_configs/bash-preexec/bash-preexec.sh"));
+            contents.push_str(include_str!("shell_configs/pxh.bash"));
+            contents
+        }
         _ => {
             return Err(Box::from(format!(
                 "Unsupported shell: {} (PRs welcome!)",
