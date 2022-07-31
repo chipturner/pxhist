@@ -268,7 +268,7 @@ fn show_subcommand(
     }
     let mut stmt = conn.prepare(
         r#"
-SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+SELECT session_id, full_command, shellname, working_directory, hostname, username, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
