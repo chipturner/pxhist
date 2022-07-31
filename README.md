@@ -67,8 +67,8 @@ begin and end.
   history... annoying, need signal number, find a crate?
 - P0: re-evaluate fields from `pxh show`... maybe roll user/host/dir
   into the cwd field cleanly?
-	  - P1: also make field output in "show" fully parameterized by
-	    column names
+  - P1: also make field output in "show" fully parameterized bycolumn
+    names
 - P3: colorize output?
 
 ### Core Features
