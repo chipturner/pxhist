@@ -59,10 +59,8 @@ begin and end.
 ## TODO
 
 ### Usability / UX
-- P0: re-evaluate fields from `pxh show`... maybe roll user/host/dir
-  into the cwd field cleanly?
-  - P1: also make field output in "show" fully parameterized bycolumn
-    names
+- P1: expose column names as a `show` option to control output fields
+  and order
 - P1: better command line help
 - P1: output commands "around" a timestamp (before, after,
   bracketing), like grep -C
