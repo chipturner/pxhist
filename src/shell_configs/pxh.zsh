@@ -6,7 +6,7 @@ _pxh_addhistory() {
 	--db $PXH_DB_PATH \
 	insert \
 	--working-directory "$PWD" \
-	--hostname "$HOST" \
+	--hostname "$PXH_HOSTNAME" \
 	--shellname zsh \
 	--username "$USER" \
 	--session-id $PXH_SESSION_ID \
@@ -32,7 +32,8 @@ _pxh_random() {
 
 _pxh_init() {
     PXH_SESSION_ID=$(_pxh_random)
-    export PXH_DB_PATH=${PXH_DB_PATH:-$HOME/.pxh/$HOST.db}
+    PXH_HOSTNAME=$(hostname -s)
+    export PXH_DB_PATH=${PXH_DB_PATH:-$HOME/.pxh/pxh.db}
 
     [ ! -d $(dirname $PXH_DB_PATH) ] && mkdir -p -m 0700 $(dirname $PXH_DB_PATH)
 
