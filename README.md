@@ -59,6 +59,8 @@ begin and end.
 ## TODO
 
 ### Usability / UX
+- P0: fix hostname issue when hostnames change (one-time decided
+  hostname?  rename db?)
 - P1: expose column names as a `show` option to control output fields
   and order
 - P1: better command line help
