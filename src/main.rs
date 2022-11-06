@@ -15,7 +15,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct PxhArgs {
-    #[clap(long, parse(from_os_str), env = "PXH_DB_PATH")]
+    #[clap(long, env = "PXH_DB_PATH")]
     db: Option<PathBuf>,
 
     #[clap(subcommand)]
