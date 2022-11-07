@@ -16,14 +16,11 @@ find useful commands, even from years ago.
 
 ## Getting Started
 
-- import
+- install the pxhist helper: `pxh install YOUR_SHELL_NAME`
+- import your history
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
   - fun trick, from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
-- shell helpers
-  - zsh: `source <(pxh shell-config zsh)`
-  - zsh: `source <(pxh shell-config bash)`
-  - everyting else tbd
 - incremental sync
 - export/import: `pxh show --output-format json` and `pxh import --shellname json --histfile $JSON_PATH`
 

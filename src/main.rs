@@ -1,7 +1,8 @@
 use std::{
     ffi::OsString,
+    fs::{File, OpenOptions},
     io,
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     str,
     sync::Arc,
@@ -63,6 +64,9 @@ enum Commands {
         end_unix_timestamp: i64,
     },
     ShellConfig {
+        shellname: String,
+    },
+    Install {
         shellname: String,
     },
     #[clap(visible_alias = "s")]
@@ -209,6 +213,46 @@ fn shell_config_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Er
         }
     };
     io::stdout().write_all(contents.as_bytes())?;
+    io::stdout().flush()?;
+    Ok(())
+}
+
+fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let rc_file = match shellname {
+        "zsh" => ".zshrc",
+        "bash" => ".bashrc",
+        _ => {
+            return Err(Box::from(format!(
+                "Unsupported shell: {} (PRs welcome!)",
+                shellname
+            )))
+        }
+    };
+
+    let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
+    pb.push(rc_file);
+
+    let file = File::open(&pb)?;
+    let reader = BufReader::new(&file);
+    for line in reader.lines() {
+        let line = line.unwrap();
+        if line.contains("pxh shell-config") {
+            return Ok(());
+        }
+    }
+
+    let mut file = OpenOptions::new().append(true).open(pb)?;
+
+    // Todo: check if the helper is already there (maybe search for "pxh shell-config")?
+    write!(file, "\n# Install the PXH shell helpers")?;
+    writeln!(
+        file,
+        r#"
+if command -v pxh &> /dev/null; then
+    source <(pxh shell-config {})
+fi"#,
+        shellname
+    )?;
     Ok(())
 }
 
@@ -369,6 +413,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::ShellConfig { shellname } => {
             shell_config_subcommand(shellname)?;
+        }
+        Commands::Install { shellname } => {
+            install_subcommand(shellname)?;
         }
     }
     Ok(())
