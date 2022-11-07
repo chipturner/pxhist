@@ -59,13 +59,12 @@ begin and end.
 ## TODO
 
 ### Usability / UX
-- P0: fix hostname issue when hostnames change (one-time decided
-  hostname?  rename db?)
+- P0: output commands "around" a timestamp (before, after,
+  bracketing), like grep -C; bracket by time and number of commands,
+  but be session aware
 - P1: expose column names as a `show` option to control output fields
   and order
 - P1: better command line help
-- P1: output commands "around" a timestamp (before, after,
-  bracketing), like grep -C
 - P2: special handling of ctrl-z when displaying shell
   history... annoying, need signal number, find a crate?
 - P3: optional pretty ncurses-style interface?
@@ -82,9 +81,9 @@ begin and end.
 
 ### Extensions
 - P1: more shell support
-  - P1: and then non-shells like mysql, python, gdb, sqlite_history
+  - P1: fish?
+  - P2: and then non-shells like mysql, python, gdb, sqlite_history
     ...
-  - P3: fish?
 - P3: explore using pxh for interactive shell incremental history
   search
 
