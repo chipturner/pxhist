@@ -109,7 +109,7 @@ impl Invocation {
 // Try to generate a "stable" session id based on the file imported.
 // If that fails, just create a random one.
 fn generate_import_session_id(histfile: &Path) -> i64 {
-    if let Ok(st) = std::fs::metadata(&histfile) {
+    if let Ok(st) = std::fs::metadata(histfile) {
         (st.ino() << 16 | st.dev()) as i64
     } else {
         (rand::random::<u64>() >> 1) as i64
