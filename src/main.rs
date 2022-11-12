@@ -283,15 +283,15 @@ ORDER BY id"#,
     let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
         .query_map([], |row| {
             Ok(pxh::InvocationExport {
-                session_id: row.get(0)?,
-                full_command: row.get(1)?,
-                shellname: row.get(2)?,
-                hostname: row.get(3)?,
-                username: row.get(4)?,
-                working_directory: row.get(5)?,
-                exit_status: row.get(6)?,
-                start_unix_timestamp: row.get(7)?,
-                end_unix_timestamp: row.get(8)?,
+                session_id: row.get("session_id")?,
+                full_command: row.get("full_command")?,
+                shellname: row.get("shellname")?,
+                hostname: row.get("hostname")?,
+                username: row.get("username")?,
+                working_directory: row.get("working_directory")?,
+                exit_status: row.get("exit_status")?,
+                start_unix_timestamp: row.get("start_unix_timestamp")?,
+                end_unix_timestamp: row.get("end_unix_timestamp")?,
             })
         })?
         .collect();
@@ -322,15 +322,15 @@ LIMIT ?"#,
     let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
         .query_map(params![substring, limit], |row| {
             Ok(pxh::InvocationExport {
-                session_id: row.get(0)?,
-                full_command: row.get(1)?,
-                shellname: row.get(2)?,
-                working_directory: row.get(3)?,
-                hostname: row.get(4)?,
-                username: row.get(5)?,
-                exit_status: row.get(6)?,
-                start_unix_timestamp: row.get(7)?,
-                end_unix_timestamp: row.get(8)?,
+                session_id: row.get("session_id")?,
+                full_command: row.get("full_command")?,
+                shellname: row.get("shellname")?,
+                working_directory: row.get("working_directory")?,
+                hostname: row.get("hostname")?,
+                username: row.get("username")?,
+                exit_status: row.get("exit_status")?,
+                start_unix_timestamp: row.get("start_unix_timestamp")?,
+                end_unix_timestamp: row.get("end_unix_timestamp")?,
             })
         })?
         .collect();
