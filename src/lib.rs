@@ -283,10 +283,12 @@ struct QueryResultColumnDisplayer {
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
-    t.map_or_else(
-        || "n/a".into(),
-        |t| Local.timestamp(t, 0).format(TIME_FORMAT).to_string(),
-    )
+    // Chained if-let may make this unpacking of
+    // Option/Result/LocalResult cleaner.  Alternative is a closer
+    // using `?` chains but that's slightly uglier.
+    t.and_then(|t| Local.timestamp_opt(t, 0).single())
+        .map(|t| t.format(TIME_FORMAT).to_string())
+        .unwrap_or_else(|| "n/a".to_string())
 }
 
 fn binary_display_helper(v: &[u8]) -> String {
