@@ -26,6 +26,29 @@ struct PxhArgs {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    #[clap(visible_alias = "s")]
+    Show {
+        #[clap(long, default_value_t = 50)]
+        limit: i32,
+        #[clap(short, long)]
+        verbose: bool,
+        #[clap(long)]
+        here: bool,
+        #[clap(long)]
+        working_directory: Option<PathBuf>,
+        substring: Option<String>,
+    },
+    Import {
+        #[clap(long)]
+        histfile: PathBuf,
+        #[clap(long)]
+        shellname: String,
+        #[clap(long)]
+        hostname: Option<OsString>,
+        #[clap(long)]
+        username: Option<OsString>,
+    },
+    Export {},
     Insert {
         #[clap(long)]
         shellname: String,
@@ -45,17 +68,6 @@ enum Commands {
         end_unix_timestamp: Option<i64>,
         command: Vec<OsString>,
     },
-    Import {
-        #[clap(long)]
-        histfile: PathBuf,
-        #[clap(long)]
-        shellname: String,
-        #[clap(long)]
-        hostname: Option<OsString>,
-        #[clap(long)]
-        username: Option<OsString>,
-    },
-    Export {},
     Seal {
         #[clap(long)]
         session_id: i64,
@@ -69,18 +81,6 @@ enum Commands {
     },
     Install {
         shellname: String,
-    },
-    #[clap(visible_alias = "s")]
-    Show {
-        #[clap(long, default_value_t = 50)]
-        limit: i32,
-        #[clap(short, long)]
-        verbose: bool,
-        #[clap(long)]
-        here: bool,
-        #[clap(long)]
-        working_directory: Option<PathBuf>,
-        substring: Option<String>,
     },
 }
 
