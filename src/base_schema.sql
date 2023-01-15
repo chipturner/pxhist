@@ -15,3 +15,11 @@ CREATE TABLE IF NOT EXISTS command_history  (
 CREATE INDEX IF NOT EXISTS history_session_id ON command_history(session_id);
 CREATE INDEX IF NOT EXISTS history_start_time ON command_history(start_unix_timestamp);
 
+ATTACH DATABASE ':memory:' AS memdb;
+CREATE TABLE memdb.show_results (
+       ch_rowid INTEGER NOT NULL,
+       ch_start_unix_timestamp INTEGER,
+       ch_id INTEGER NOT NULL
+);
+
+CREATE INDEX memdb.result_timestamp ON show_results(ch_start_unix_timestamp, ch_id);

@@ -10,7 +10,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use regex::bytes::Regex;
-use rusqlite::{functions::FunctionFlags, params, Connection, Error, Result, Transaction};
+use rusqlite::{functions::FunctionFlags, Connection, Error, Result, Transaction};
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Parser, Debug)]
@@ -300,6 +300,14 @@ ORDER BY id"#,
     Ok(())
 }
 
+// Show history in two steps:
+//   1. Populate memdb.show_results with the relevant rows to show
+//   2. Invoke present_results to actually show them.
+//
+// This two step dance is preparatory work for `--here` and `--around`
+// queries where we need some arbitrary subset of selected entries.
+// Rather than round-trip the rowid's and create a complex query, we
+// just use a temp memory table.
 fn show_subcommand(
     conn: &mut Connection,
     verbose: bool,
@@ -310,17 +318,33 @@ fn show_subcommand(
     if limit <= 0 {
         limit = i32::MAX;
     }
-    let mut stmt = conn.prepare(
+    conn.execute("DELETE FROM memdb.show_results", ())?;
+    conn.execute(
         r#"
-SELECT session_id, full_command, shellname, working_directory, hostname, username, exit_status, start_unix_timestamp, end_unix_timestamp
+INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
+SELECT rowid, start_unix_timestamp, id
   FROM command_history h
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
+        (substring, limit),
     )?;
 
+    present_results(conn, verbose)
+}
+
+fn present_results(conn: &mut Connection, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Now that we have the relevant rows, just present the output
+    let mut stmt = conn.prepare(
+	r#"
+SELECT session_id, full_command, shellname, working_directory, hostname, username, exit_status, start_unix_timestamp, end_unix_timestamp
+  FROM memdb.show_results sr, command_history h
+ WHERE sr.ch_rowid = h.rowid
+ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
+"#)?;
+
     let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
-        .query_map(params![substring, limit], |row| {
+        .query_map((), |row| {
             Ok(pxh::InvocationExport {
                 session_id: row.get("session_id")?,
                 full_command: row.get("full_command")?,
