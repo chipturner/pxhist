@@ -1,4 +1,5 @@
 use std::{
+    env,
     ffi::OsString,
     fs::{File, OpenOptions},
     io,
@@ -75,6 +76,10 @@ enum Commands {
         limit: i32,
         #[clap(short, long)]
         verbose: bool,
+        #[clap(long)]
+        here: bool,
+        #[clap(long)]
+        working_directory: Option<PathBuf>,
         substring: Option<String>,
     },
 }
@@ -311,6 +316,8 @@ ORDER BY id"#,
 fn show_subcommand(
     conn: &mut Connection,
     verbose: bool,
+    here: bool,
+    working_directory: Option<PathBuf>,
     mut limit: i32,
     substring: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -319,16 +326,33 @@ fn show_subcommand(
         limit = i32::MAX;
     }
     conn.execute("DELETE FROM memdb.show_results", ())?;
-    conn.execute(
-        r#"
+
+    let working_directory =
+        working_directory.unwrap_or_else(|| env::current_dir().unwrap_or_default());
+    if here {
+        conn.execute(
+            r#"
+INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
+SELECT rowid, start_unix_timestamp, id
+  FROM command_history h
+ WHERE working_directory = CAST(? as blob)
+   AND full_command REGEXP ?
+ORDER BY start_unix_timestamp DESC, id DESC
+LIMIT ?"#,
+            (working_directory.to_string_lossy(), substring, limit),
+        )?;
+    } else {
+        conn.execute(
+            r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-        (substring, limit),
-    )?;
+            (substring, limit),
+        )?;
+    }
 
     present_results(conn, verbose)
 }
@@ -361,12 +385,12 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
     let mut rows = rows?;
     rows.reverse();
     if verbose {
-        pxh::show_subcommand_human_readable(
+        pxh::present_results_human_readable(
             &["start_time", "duration", "session", "context", "command"],
             &rows,
         )?;
     } else {
-        pxh::show_subcommand_human_readable(&["start_time", "command"], &rows)?;
+        pxh::present_results_human_readable(&["start_time", "command"], &rows)?;
     }
     Ok(())
 }
@@ -423,9 +447,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             limit,
             substring,
             verbose,
+            here,
+            working_directory,
         } => {
             let mut conn = sqlite_connection(&args.db)?;
-            show_subcommand(&mut conn, *verbose, *limit, substring.clone())?;
+            show_subcommand(
+                &mut conn,
+                *verbose,
+                *here,
+                working_directory.clone(),
+                *limit,
+                substring.clone(),
+            )?;
         }
         Commands::Seal {
             session_id,

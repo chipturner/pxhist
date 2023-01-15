@@ -386,7 +386,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
     ret
 }
 
-pub fn show_subcommand_human_readable(
+pub fn present_results_human_readable(
     fields: &[&str],
     rows: &[InvocationExport],
 ) -> Result<(), Box<dyn std::error::Error>> {

@@ -1,3 +1,4 @@
+use std::env;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
@@ -42,6 +43,43 @@ fn test_trivial_invocation() {
         .success();
 
     pc.call("export").assert().success();
+}
+
+#[test]
+fn test_show_with_here() {
+    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    show_cmd
+        .env_clear()
+        .env("PXH_DB_PATH", ":memory:")
+        .arg("show")
+        .assert()
+        .success();
+
+    // Prepare some test data: four commands, three from /dirN and one
+    // from wherever the test runs.
+    let mut pc = PxhCaller::new();
+    for i in 1..3 {
+        let cmd = format!("insert --shellname s --hostname h --username u --session-id 1 --working-directory /dir{} test_command_{}", i, i);
+        pc.call(cmd).assert().success();
+    }
+    let cmd = format!("insert --shellname s --hostname h --username u --session-id 1 --working-directory {} test_command_cwd", env::current_dir().unwrap_or_default().to_string_lossy());
+    pc.call(cmd).assert().success();
+
+    // Now make sure we only see the relevant results when --here is
+    // provided, both with and without --working-directory
+    let output = pc.call("show --here").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+
+    for i in 1..3 {
+        let cmd = format!(
+            "show --here --working-directory /dir{} test_command_{}",
+            i, i
+        );
+        let output = pc.call(cmd).output().unwrap();
+        assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+    }
 }
 
 // Basic round trip test of inserting/sealing, then verify with json export.
