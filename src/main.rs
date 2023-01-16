@@ -259,19 +259,27 @@ fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>>
     let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
     pb.push(rc_file);
 
+    // Skip installationif "pxh shell-config" is present in the
+    // current RC file.
     let file = File::open(&pb)?;
     let reader = BufReader::new(&file);
     for line in reader.lines() {
         let line = line.unwrap();
         if line.contains("pxh shell-config") {
+            println!(
+                "Shell config already present in {}; taking no action.",
+                pb.display()
+            );
             return Ok(());
         }
     }
 
-    let mut file = OpenOptions::new().append(true).open(pb)?;
+    let mut file = OpenOptions::new().append(true).open(&pb)?;
 
-    // Todo: check if the helper is already there (maybe search for "pxh shell-config")?
-    write!(file, "\n# Install the PXH shell helpers")?;
+    write!(
+        file,
+        "\n# Install the pxh shell helpers to add interactive history realtime."
+    )?;
     writeln!(
         file,
         r#"
@@ -280,6 +288,7 @@ if command -v pxh &> /dev/null; then
 fi"#,
         shellname
     )?;
+    println!("Shell config successfully added to {}.", pb.display());
     Ok(())
 }
 
