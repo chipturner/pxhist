@@ -1,28 +1,34 @@
 # pxhist
-Portable, eXtensible History database for command line tools.
+Portable, eXtensible History database for command line tools (pxh for
+short).
 
-pxhist's job is to unobtrusively and obsessively become the
-persistence engine for tracking one of the most valuable knowledge
-vaults you have -- your shell histories.  It does this by creating a
-database of every command along with available context such as
-timestamps, command duration, etc.
+pxh's job is to unobtrusively and obsessively become the persistence
+engine for tracking one of the most valuable knowledge vaults you have
+-- your shell histories.  It uses this storage (backed by SQLite) to
+make your history easily searchable you can quickly find useful
+commands, even from years ago.  pxh can import your existing history
+files to give you a head start.
 
-pxhist tags history commands with the sourec host and user, meaning
-you can store **all** of your history, not just your primary computer
-or laptop's.
+pxh tags history commands with the sourec host and user, meaning you
+can store **all** of your history, not just your primary computer or
+laptop's.
 
-pxhist makes your history easily searchable as well so you can quickly
-find useful commands, even from years ago.
+pxh works by using a database of every command along with available
+context such as timestamps, command duration, etc.  The database is
+updated in realtime and remains consistent across multiple concurrent
+shells.
+
+Currently pxh supports bash and zsh.
 
 ## Getting Started
 
-- install the pxhist helper: `pxh install YOUR_SHELL_NAME`
+- install the pxh helper: `pxh install YOUR_SHELL_NAME`
 - import your history
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
-  - fun trick, from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
+  - Pull from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
 - incremental sync
-- export/import: `pxh show --output-format json` and `pxh import --shellname json --histfile $JSON_PATH`
+- export/import: `pxh export > $JSON_PATH` and `pxh import --shellname json --histfile $JSON_PATH`
 
 ## Inspiration and Similar Tools
 
@@ -51,7 +57,7 @@ begin and end.
 
 ## Architecture / How it Works
 
-## Hacking on pxhist
+## Hacking on pxh
 
 ## TODO
 
@@ -61,19 +67,14 @@ begin and end.
   but be session aware
 - P1: expose column names as a `show` option to control output fields
   and order
-- P1: better command line help
-- P2: special handling of ctrl-z when displaying shell
+- P2: colorize output?  parts where regex matches in addition to columns
+- P3: special handling of ctrl-z when displaying shell
   history... annoying, need signal number, find a crate?
 - P3: optional pretty ncurses-style interface?
-- P3: colorize output?  parts where regex matches in addition to columns
 
 ### Core Features
-- P1: teach `show` to display history entries restricted to the
-  current directory, host, user, etc.  Maybe `--here` to simplify the
-  filter?
-- P2: create and document workflow for incremental updates,
-  particularly for shells that don't support updating realtime
-  (e.g. backfill from mysql history periodically)
+- P1: Add more complex filtering to `show` to select history entries
+  restricted to the host, user, etc.
 - P3: stats subcommand to show some interesting data
 
 ### Extensions
@@ -83,6 +84,9 @@ begin and end.
     ...
 - P3: explore using pxh for interactive shell incremental history
   search
+- P3: create and document workflow for incremental updates,
+  particularly for shells that don't support updating realtime
+  (e.g. backfill from mysql history periodically)
 
 ### Misc
 - P2: better code documentation, particularly around helper classes
