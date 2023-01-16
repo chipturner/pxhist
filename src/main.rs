@@ -65,10 +65,7 @@ enum Commands {
             help = "hostname to tag imported entries with (defaults to current hostname)"
         )]
         hostname: Option<OsString>,
-        #[clap(
-            long,
-            help = "username to tag importen entries with (defaults to current user)"
-        )]
+        #[clap(long, help = "username to tag importen entries with (defaults to current user)")]
         username: Option<OsString>,
     },
     #[clap(about = "export full history as JSON")]
@@ -107,9 +104,7 @@ enum Commands {
 }
 
 fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
-    let path = path
-        .as_ref()
-        .ok_or("Database not defined; use --db or PXH_DB_PATH")?;
+    let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     let conn = Connection::open(path)?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
@@ -120,27 +115,18 @@ fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::
 
     // From rusqlite::functions example but adapted for non-utf8
     // regexps.
-    conn.create_scalar_function(
-        "regexp",
-        2,
-        FunctionFlags::SQLITE_DETERMINISTIC,
-        move |ctx| {
-            assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
-            let regexp: Arc<Regex> = ctx.get_or_create_aux(0, |vr| -> Result<_, BoxError> {
-                Ok(Regex::new(vr.as_str()?)?)
-            })?;
-            let is_match = {
-                let text = ctx
-                    .get_raw(1)
-                    .as_bytes()
-                    .map_err(|e| Error::UserFunctionError(e.into()))?;
+    conn.create_scalar_function("regexp", 2, FunctionFlags::SQLITE_DETERMINISTIC, move |ctx| {
+        assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
+        let regexp: Arc<Regex> = ctx
+            .get_or_create_aux(0, |vr| -> Result<_, BoxError> { Ok(Regex::new(vr.as_str()?)?) })?;
+        let is_match = {
+            let text = ctx.get_raw(1).as_bytes().map_err(|e| Error::UserFunctionError(e.into()))?;
 
-                regexp.is_match(text)
-            };
+            regexp.is_match(text)
+        };
 
-            Ok(is_match)
-        },
-    )?;
+        Ok(is_match)
+    })?;
 
     Ok(conn)
 }
@@ -167,10 +153,7 @@ fn import_subcommand(
         "zsh" => pxh::import_zsh_history(histfile, hostname.as_ref(), username.as_ref()),
         "bash" => pxh::import_bash_history(histfile, hostname.as_ref(), username.as_ref()),
         "json" => pxh::import_json_history(histfile),
-        _ => Err(Box::from(format!(
-            "Unsupported shell: {} (PRs welcome!)",
-            shellname
-        ))),
+        _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
     }
 }
 
@@ -179,18 +162,10 @@ fn insert_subcommand(
     invocation: &pxh::Invocation,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let command_bytes: Vec<u8> = invocation.command.to_bytes();
-    let username_bytes = invocation
-        .username
-        .as_ref()
-        .map_or_else(Vec::new, |v| v.to_bytes());
-    let hostname_bytes = invocation
-        .hostname
-        .as_ref()
-        .map_or_else(Vec::new, |v| v.to_bytes());
-    let working_directory_bytes = invocation
-        .working_directory
-        .as_ref()
-        .map_or_else(Vec::new, |v| v.to_bytes());
+    let username_bytes = invocation.username.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
+    let hostname_bytes = invocation.hostname.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
+    let working_directory_bytes =
+        invocation.working_directory.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
 
     let _ = tx.execute(
         r#"
@@ -232,12 +207,7 @@ fn shell_config_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Er
             contents.push_str(include_str!("shell_configs/pxh.bash"));
             contents
         }
-        _ => {
-            return Err(Box::from(format!(
-                "Unsupported shell: {} (PRs welcome!)",
-                shellname
-            )))
-        }
+        _ => return Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
     };
     io::stdout().write_all(contents.as_bytes())?;
     io::stdout().flush()?;
@@ -248,12 +218,7 @@ fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>>
     let rc_file = match shellname {
         "zsh" => ".zshrc",
         "bash" => ".bashrc",
-        _ => {
-            return Err(Box::from(format!(
-                "Unsupported shell: {} (PRs welcome!)",
-                shellname
-            )))
-        }
+        _ => return Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
     };
 
     let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
@@ -266,20 +231,14 @@ fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>>
     for line in reader.lines() {
         let line = line.unwrap();
         if line.contains("pxh shell-config") {
-            println!(
-                "Shell config already present in {}; taking no action.",
-                pb.display()
-            );
+            println!("Shell config already present in {}; taking no action.", pb.display());
             return Ok(());
         }
     }
 
     let mut file = OpenOptions::new().append(true).open(&pb)?;
 
-    write!(
-        file,
-        "\n# Install the pxh shell helpers to add interactive history realtime."
-    )?;
+    write!(file, "\n# Install the pxh shell helpers to add interactive history realtime.")?;
     writeln!(
         file,
         r#"
@@ -447,9 +406,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let invocation = pxh::Invocation {
                 command: pxh::BinaryStringHelper::from(pxh::command_as_bytes(command).as_slice()),
                 shellname: shellname.into(),
-                working_directory: working_directory
-                    .as_ref()
-                    .map(pxh::BinaryStringHelper::from),
+                working_directory: working_directory.as_ref().map(pxh::BinaryStringHelper::from),
                 hostname: Some(pxh::BinaryStringHelper::from(hostname)),
                 username: Some(pxh::BinaryStringHelper::from(username)),
                 exit_status: *exit_status,
@@ -460,12 +417,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             insert_subcommand(&tx, &invocation)?;
             tx.commit()?;
         }
-        Commands::Import {
-            histfile,
-            shellname,
-            hostname,
-            username,
-        } => {
+        Commands::Import { histfile, shellname, hostname, username } => {
             let invocations = import_subcommand(histfile, shellname, hostname, username)?;
             let mut conn = sqlite_connection(&args.db)?;
             insert_invocations(&mut conn, invocations)?;
@@ -474,13 +426,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conn = sqlite_connection(&args.db)?;
             export_subcommand(&mut conn)?;
         }
-        Commands::Show {
-            limit,
-            substring,
-            verbose,
-            here,
-            working_directory,
-        } => {
+        Commands::Show { limit, substring, verbose, here, working_directory } => {
             let mut conn = sqlite_connection(&args.db)?;
             show_subcommand(
                 &mut conn,
@@ -491,11 +437,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 substring.clone(),
             )?;
         }
-        Commands::Seal {
-            session_id,
-            exit_status,
-            end_unix_timestamp,
-        } => {
+        Commands::Seal { session_id, exit_status, end_unix_timestamp } => {
             let mut conn = sqlite_connection(&args.db)?;
             seal_subcommand(&mut conn, *session_id, *exit_status, *end_unix_timestamp)?;
         }

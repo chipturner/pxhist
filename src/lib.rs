@@ -253,14 +253,8 @@ pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::
         .map(|row| Invocation {
             command: BinaryStringHelper::from(row.full_command.as_slice()),
             shellname: row.shellname.clone(),
-            hostname: row
-                .hostname
-                .as_ref()
-                .map(|v| BinaryStringHelper::from(v.as_slice())),
-            username: row
-                .username
-                .as_ref()
-                .map(|v| BinaryStringHelper::from(v.as_slice())),
+            hostname: row.hostname.as_ref().map(|v| BinaryStringHelper::from(v.as_slice())),
+            username: row.username.as_ref().map(|v| BinaryStringHelper::from(v.as_slice())),
             working_directory: row
                 .working_directory
                 .as_ref()
@@ -322,12 +316,10 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "duration",
         QueryResultColumnDisplayer {
             header: "Duration",
-            displayer: Box::new(
-                |row| match (row.start_unix_timestamp, row.end_unix_timestamp) {
-                    (Some(start), Some(end)) => format!("{}s", end - start),
-                    _ => "n/a".into(),
-                },
-            ),
+            displayer: Box::new(|row| match (row.start_unix_timestamp, row.end_unix_timestamp) {
+                (Some(start), Some(end)) => format!("{}s", end - start),
+                _ => "n/a".into(),
+            }),
         },
     );
     ret.insert(
@@ -335,8 +327,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         QueryResultColumnDisplayer {
             header: "Status",
             displayer: Box::new(|row| {
-                row.exit_status
-                    .map_or_else(|| "n/a".into(), |s| s.to_string())
+                row.exit_status.map_or_else(|| "n/a".into(), |s| s.to_string())
             }),
         },
     );
@@ -365,18 +356,14 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
                     write!(ret, "{}:", row_hostname.to_string_lossy()).unwrap_or_default();
                 }
                 let current_directory = env::current_dir().unwrap_or_default();
-                ret.push_str(
-                    &row.working_directory
-                        .as_ref()
-                        .map_or_else(String::new, |v| {
-                            let v = String::from_utf8_lossy(v).to_string();
-                            if v == current_directory.to_string_lossy() {
-                                String::from(".")
-                            } else {
-                                v
-                            }
-                        }),
-                );
+                ret.push_str(&row.working_directory.as_ref().map_or_else(String::new, |v| {
+                    let v = String::from_utf8_lossy(v).to_string();
+                    if v == current_directory.to_string_lossy() {
+                        String::from(".")
+                    } else {
+                        v
+                    }
+                }));
 
                 ret
             }),
@@ -408,9 +395,8 @@ pub fn present_results_human_readable(
     for row in rows.iter() {
         let mut display_row = prettytable::Row::empty();
         for field in fields {
-            display_row.add_cell(prettytable::Cell::new(
-                (displayers[field].displayer)(row).as_str(),
-            ));
+            display_row
+                .add_cell(prettytable::Cell::new((displayers[field].displayer)(row).as_str()));
         }
         table.add_row(display_row);
     }
@@ -425,9 +411,6 @@ mod tests {
     #[test]
     fn test_command_as_bytes() {
         assert_eq!(command_as_bytes(&[OsString::from("xyz")]), b"xyz");
-        assert_eq!(
-            command_as_bytes(&[OsString::from("xyz"), OsString::from("pqr")]),
-            b"xyz pqr"
-        );
+        assert_eq!(command_as_bytes(&[OsString::from("xyz"), OsString::from("pqr")]), b"xyz pqr");
     }
 }

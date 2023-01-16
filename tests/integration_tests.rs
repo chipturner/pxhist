@@ -10,15 +10,12 @@ struct PxhCaller {
 
 impl PxhCaller {
     fn new() -> Self {
-        PxhCaller {
-            tmpdir: TempDir::new().unwrap(),
-        }
+        PxhCaller { tmpdir: TempDir::new().unwrap() }
     }
 
     fn call<S: AsRef<str>>(&mut self, args: S) -> Command {
         let mut ret = Command::cargo_bin("pxh").unwrap();
-        ret.env_clear()
-            .env("PXH_DB_PATH", &self.tmpdir.path().join("test"));
+        ret.env_clear().env("PXH_DB_PATH", &self.tmpdir.path().join("test"));
         ret.args(args.as_ref().split(' '));
         ret
     }
@@ -29,12 +26,7 @@ fn test_trivial_invocation() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
-    show_cmd
-        .env_clear()
-        .env("PXH_DB_PATH", ":memory:")
-        .arg("show")
-        .assert()
-        .success();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     let mut pc = PxhCaller::new();
     pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command")
@@ -49,12 +41,7 @@ fn test_show_with_here() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
-    show_cmd
-        .env_clear()
-        .env("PXH_DB_PATH", ":memory:")
-        .arg("show")
-        .assert()
-        .success();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: four commands, three from /dirN and one
     // from wherever the test runs.
@@ -72,10 +59,7 @@ fn test_show_with_here() {
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
 
     for i in 1..3 {
-        let cmd = format!(
-            "show --here --working-directory /dir{} test_command_{}",
-            i, i
-        );
+        let cmd = format!("show --here --working-directory /dir{} test_command_{}", i, i);
         let output = pc.call(cmd).output().unwrap();
         assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
     }
@@ -102,10 +86,7 @@ fn test_insert_seal_roundtrip() {
     let output = pc.call("show").output().unwrap();
 
     assert!(output.stdout.len() > 0);
-    assert_eq!(
-        output.stdout.iter().filter(|&ch| *ch == b'\n').count(),
-        commands.len() + 1
-    );
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), commands.len() + 1);
 
     // Trivial regexp
     let output = pc.call("show u....Z?e").output().unwrap();
@@ -130,10 +111,7 @@ fn matches_expected_history(invocations: &[pxh::Invocation]) {
         pxh::BinaryStringHelper::Readable(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
         pxh::BinaryStringHelper::Readable("fd zsh".to_string()),
         pxh::BinaryStringHelper::Encoded(
-            [
-                101, 99, 104, 111, 32, 0xf0, 0xce, 0xb1, 0xce, 0xa5, 0xef, 0xbd, 0xa9,
-            ]
-            .to_vec(),
+            [101, 99, 104, 111, 32, 0xf0, 0xce, 0xb1, 0xce, 0xa5, 0xef, 0xbd, 0xa9].to_vec(),
         ),
     ];
 
@@ -196,9 +174,7 @@ fn test_timestamped_bash_import_roundtrip() {
     let mut pc = PxhCaller::new();
     pc.call(format!(
         "import --shellname bash --histfile {}",
-        resources
-            .join("timestamped_bash_histfile")
-            .to_string_lossy()
+        resources.join("timestamped_bash_histfile").to_string_lossy()
     ))
     .assert()
     .success();
