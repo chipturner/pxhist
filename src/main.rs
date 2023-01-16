@@ -26,29 +26,54 @@ struct PxhArgs {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    #[clap(visible_alias = "s")]
+    #[clap(visible_alias = "s", about = "search for and display history entries")]
     Show {
-        #[clap(long, default_value_t = 50)]
+        #[clap(
+            long,
+            default_value_t = 50,
+            help = "display at most this many entries; 0 for unlimited"
+        )]
         limit: i32,
-        #[clap(short, long)]
+        #[clap(short, long, help = "display extra fields in the output")]
         verbose: bool,
-        #[clap(long)]
+        #[clap(
+            long,
+            help = "show entries that were populated while in the current working directory"
+        )]
         here: bool,
-        #[clap(long)]
+        #[clap(
+            long,
+            help = "alters --here; instead of the current working directory, use the specified directory"
+        )]
         working_directory: Option<PathBuf>,
+        #[clap(help = "regular expression to search through history entries")]
         substring: Option<String>,
     },
-    Import {
-        #[clap(long)]
-        histfile: PathBuf,
-        #[clap(long)]
+    #[clap(about = "install pxhist helpers by modifying your shell rc file")]
+    Install {
+        #[clap(help = "shell to install helpers into")]
         shellname: String,
-        #[clap(long)]
+    },
+    #[clap(about = "import history entries from your existing shell history or from an export")]
+    Import {
+        #[clap(long, help = "path to history file to import")]
+        histfile: PathBuf,
+        #[clap(long, help = "type of shell history specified by --histfile")]
+        shellname: String,
+        #[clap(
+            long,
+            help = "hostname to tag imported entries with (defaults to current hostname)"
+        )]
         hostname: Option<OsString>,
-        #[clap(long)]
+        #[clap(
+            long,
+            help = "username to tag importen entries with (defaults to current user)"
+        )]
         username: Option<OsString>,
     },
+    #[clap(about = "export full history as JSON")]
     Export {},
+    #[clap(about = "(internal) invoked by the shell to insert a history entry")]
     Insert {
         #[clap(long)]
         shellname: String,
@@ -68,6 +93,7 @@ enum Commands {
         end_unix_timestamp: Option<i64>,
         command: Vec<OsString>,
     },
+    #[clap(about = "(internal) seal the previous inserted command to mark status, timing, etc")]
     Seal {
         #[clap(long)]
         session_id: i64,
@@ -76,12 +102,8 @@ enum Commands {
         #[clap(long)]
         end_unix_timestamp: i64,
     },
-    ShellConfig {
-        shellname: String,
-    },
-    Install {
-        shellname: String,
-    },
+    #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
+    ShellConfig { shellname: String },
 }
 
 fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
