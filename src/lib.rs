@@ -376,21 +376,24 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
 pub fn present_results_human_readable(
     fields: &[&str],
     rows: &[InvocationExport],
+    suppress_headers: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let displayers = displayers();
     let mut table = prettytable::Table::new();
     table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
 
-    let mut title_row = prettytable::Row::empty();
-    for field in fields {
-        let title = match displayers.get(field) {
-            Some(d) => d.header,
-            None => return Err(Box::from(format!("Invalid 'show' field: {}", field))),
-        };
+    if !suppress_headers {
+        let mut title_row = prettytable::Row::empty();
+        for field in fields {
+            let title = match displayers.get(field) {
+                Some(d) => d.header,
+                None => return Err(Box::from(format!("Invalid 'show' field: {}", field))),
+            };
 
-        title_row.add_cell(prettytable::Cell::new(title));
+            title_row.add_cell(prettytable::Cell::new(title));
+        }
+        table.set_titles(title_row);
     }
-    table.set_titles(title_row);
 
     for row in rows.iter() {
         let mut display_row = prettytable::Row::empty();

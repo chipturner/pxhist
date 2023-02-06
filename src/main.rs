@@ -36,6 +36,8 @@ enum Commands {
         limit: i32,
         #[clap(short, long, help = "display extra fields in the output")]
         verbose: bool,
+        #[clap(long, help = "suppress headers")]
+        suppress_headers: bool,
         #[clap(
             long,
             help = "show entries that were populated while in the current working directory"
@@ -306,6 +308,7 @@ ORDER BY id"#,
 fn show_subcommand(
     conn: &mut Connection,
     verbose: bool,
+    suppress_headers: bool,
     here: bool,
     working_directory: Option<PathBuf>,
     mut limit: i32,
@@ -344,10 +347,14 @@ LIMIT ?"#,
         )?;
     }
 
-    present_results(conn, verbose)
+    present_results(conn, verbose, suppress_headers)
 }
 
-fn present_results(conn: &mut Connection, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn present_results(
+    conn: &mut Connection,
+    verbose: bool,
+    suppress_headers: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     // Now that we have the relevant rows, just present the output
     let mut stmt = conn.prepare(
 	r#"
@@ -378,9 +385,10 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
         pxh::present_results_human_readable(
             &["start_time", "duration", "session", "context", "command"],
             &rows,
+            suppress_headers,
         )?;
     } else {
-        pxh::present_results_human_readable(&["start_time", "command"], &rows)?;
+        pxh::present_results_human_readable(&["start_time", "command"], &rows, suppress_headers)?;
     }
     Ok(())
 }
@@ -426,11 +434,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conn = sqlite_connection(&args.db)?;
             export_subcommand(&mut conn)?;
         }
-        Commands::Show { limit, substring, verbose, here, working_directory } => {
+        Commands::Show { limit, substring, verbose, suppress_headers, here, working_directory } => {
             let mut conn = sqlite_connection(&args.db)?;
             show_subcommand(
                 &mut conn,
                 *verbose,
+                *suppress_headers,
                 *here,
                 working_directory.clone(),
                 *limit,
