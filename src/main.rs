@@ -48,6 +48,11 @@ enum Commands {
             help = "alters --here; instead of the current working directory, use the specified directory"
         )]
         working_directory: Option<PathBuf>,
+        #[clap(
+            long,
+            help = "display only commands from the specified session (use $PXH_SESSION_ID for this session)"
+        )]
+        session: Option<String>,
         #[clap(help = "regular expression to search through history entries")]
         substring: Option<String>,
     },
@@ -310,6 +315,7 @@ fn show_subcommand(
     verbose: bool,
     suppress_headers: bool,
     here: bool,
+    session_id: Option<i64>,
     working_directory: Option<PathBuf>,
     mut limit: i32,
     substring: Option<String>,
@@ -322,7 +328,18 @@ fn show_subcommand(
 
     let working_directory =
         working_directory.unwrap_or_else(|| env::current_dir().unwrap_or_default());
-    if here {
+    if let Some(session_id) = session_id {
+        conn.execute(
+            r#"
+INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
+SELECT rowid, start_unix_timestamp, id
+  FROM command_history h
+ WHERE full_command REGEXP ? AND session_id = ?
+ORDER BY start_unix_timestamp DESC, id DESC
+LIMIT ?"#,
+            (substring, session_id, limit),
+        )?;
+    } else if here {
         conn.execute(
             r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
@@ -434,13 +451,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conn = sqlite_connection(&args.db)?;
             export_subcommand(&mut conn)?;
         }
-        Commands::Show { limit, substring, verbose, suppress_headers, here, working_directory } => {
+        Commands::Show {
+            limit,
+            substring,
+            verbose,
+            suppress_headers,
+            here,
+            working_directory,
+            session,
+        } => {
             let mut conn = sqlite_connection(&args.db)?;
+            let session = if let Some(maybe_session_hex) = session {
+                Some(i64::from_str_radix(maybe_session_hex, 16)?)
+            } else {
+                None
+            };
             show_subcommand(
                 &mut conn,
                 *verbose,
                 *suppress_headers,
                 *here,
+                session,
                 working_directory.clone(),
                 *limit,
                 substring.clone(),

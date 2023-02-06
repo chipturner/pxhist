@@ -80,6 +80,40 @@ fn test_show_with_here() {
     }
 }
 
+#[test]
+fn test_show_with_session_id() {
+    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
+
+    // Prepare some test data: four commands spread across three sessions.
+    let mut pc = PxhCaller::new();
+    for i in 1..3 {
+        let cmd = format!(
+            "insert --shellname s --hostname h --username u --session-id {} test_command_{}",
+            i, i
+        );
+        pc.call(cmd).assert().success();
+    }
+    let cmd = format!(
+        "insert --shellname s --hostname h --username u --session-id {} test_command_{}",
+        1, 4
+    );
+    pc.call(cmd).assert().success();
+
+    // Now make sure we only see the relevant results when we specify
+    // sessions to `show`.
+    let output = pc.call("show --suppress-headers --session 1").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+
+    for i in 2..3 {
+        let cmd = format!("show --suppress-headers --session {}", i);
+        let output = pc.call(cmd).output().unwrap();
+        assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1);
+    }
+}
+
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn test_insert_seal_roundtrip() {
