@@ -20,7 +20,7 @@ license = "MIT"
 path = "src/lib.rs"
 
 [dependencies]
-clap = { version = "4.1.1", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4.1.4", features = ["derive", "env", "wrap_help"] }
 log = "0.4.17"
 env_logger = "0.10.0"
 home = "0.5.4"
@@ -30,7 +30,7 @@ rand = "0.8.5"
 chrono = "0.4.23"
 users = "0.11.0"
 serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.91"
+serde_json = "1.0.92"
 regex = "1.7.1"
 hostname = "0.3.1"
 rusqlite = { version = "0.28.0", features = ["bundled", "functions"] }
