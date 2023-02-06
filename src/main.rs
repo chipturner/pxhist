@@ -53,8 +53,10 @@ enum Commands {
             help = "display only commands from the specified session (use $PXH_SESSION_ID for this session)"
         )]
         session: Option<String>,
-        #[clap(help = "regular expression to search through history entries")]
-        substring: Option<String>,
+        #[clap(
+            help = "one or more regular expressions to search through history entries; multiple values joined by `.*`"
+        )]
+        substrings: Vec<String>,
     },
     #[clap(about = "install pxhist helpers by modifying your shell rc file")]
     Install {
@@ -318,9 +320,9 @@ fn show_subcommand(
     session_id: Option<i64>,
     working_directory: Option<PathBuf>,
     mut limit: i32,
-    substring: Option<String>,
+    substrings: &Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let substring = substring.unwrap_or_default();
+    let substring = substrings.join(".*");
     if limit <= 0 {
         limit = i32::MAX;
     }
@@ -453,7 +455,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Show {
             limit,
-            substring,
+            substrings,
             verbose,
             suppress_headers,
             here,
@@ -474,7 +476,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 session,
                 working_directory.clone(),
                 *limit,
-                substring.clone(),
+                substrings,
             )?;
         }
         Commands::Seal { session_id, exit_status, end_unix_timestamp } => {

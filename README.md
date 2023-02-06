@@ -73,8 +73,6 @@ begin and end.
 - P3: optional pretty ncurses-style interface?
 
 ### Core Features
-- P0: output commands for a specific session (with `--this` as an
-  alias)
 - P0: some kind of directory-based workflow to import/export in as a
   rendezvous to easily sync across devices (e.g. a Dropbox folder)
 - P1: Add more complex filtering to `show` to select history entries

@@ -35,11 +35,30 @@ fn test_trivial_invocation() {
         .success();
 
     let mut pc = PxhCaller::new();
-    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command")
+    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
+        .assert()
+        .success();
+
+    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_2")
         .assert()
         .success();
 
     pc.call("export").assert().success();
+
+    // Ensure we see our history with show w/o a regex, don't see it
+    // with a valid one, and see it with multiple joined regexes
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+
+    let output = pc.call("show --suppress-headers non-matching-regex").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+
+    let output = pc.call("show --suppress-headers test").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+
+    // Make sure we properly filter by joining regexes (which would then not match)
+    let output = pc.call("show --suppress-headers command_1 command_2").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
 }
 
 #[test]
