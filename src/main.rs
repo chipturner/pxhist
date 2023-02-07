@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     str,
     sync::Arc,
+    time::Duration,
 };
 
 use clap::{Parser, Subcommand};
@@ -115,6 +116,7 @@ enum Commands {
 fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_millis(100))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "cache_size", "16777216")?;
