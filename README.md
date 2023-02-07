@@ -1,6 +1,5 @@
 # pxhist
-Portable, eXtensible History database for command line tools (pxh for
-short).
+Portable, extensible history manager for shells and other REPL tools (pxh for short).
 
 pxh's job is to unobtrusively and obsessively become the persistence
 engine for tracking one of the most valuable knowledge vaults you have
@@ -9,26 +8,24 @@ make your history easily searchable you can quickly find useful
 commands, even from years ago.  pxh can import your existing history
 files to give you a head start.
 
-pxh tags history commands with the sourec host and user, meaning you
+pxh tags history commands with the source host and user, meaning you
 can store **all** of your history, not just your primary computer or
 laptop's.
 
 pxh works by using a database of every command along with available
 context such as timestamps, command duration, etc.  The database is
-updated in realtime and remains consistent across multiple concurrent
+updated in real-time and remains consistent across multiple concurrent
 shells.
 
 Currently pxh supports bash and zsh.
 
 ## Getting Started
 
-- install the pxh helper: `pxh install YOUR_SHELL_NAME`
-- import your history
+- Install the pxh helper: `pxh install YOUR_SHELL_NAME`
+- Import your history
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
-  - Pull from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
-- incremental sync
-- export/import: `pxh export > $JSON_PATH` and `pxh import --shellname json --histfile $JSON_PATH`
+  - Optional: pull from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
 
 ## Inspiration and Similar Tools
 
@@ -47,8 +44,9 @@ the concepts further:
   start in close proximity.
 - I wanted highly efficient tooling that was easy to extend.  By going
   with a native language like Rust, the per-command invocation
-  overhead is very small, and it is easier to build portable complex
-  tooling such as TUIs, complex search, analytics, etc.
+  overhead is very small, and it is easier to build portable,
+  performant complex tooling such as TUIs, complex search, analytics,
+  etc.
 
 This tool embeds the very useful
 [Bash-Preexec](https://github.com/rcaloras/bash-preexec) utility which
@@ -87,7 +85,7 @@ begin and end.
 - P3: explore using pxh for interactive shell incremental history
   search
 - P3: create and document workflow for incremental updates,
-  particularly for shells that don't support updating realtime
+  particularly for shells that don't support updating real-time
   (e.g. backfill from mysql history periodically)
 
 ### Misc
