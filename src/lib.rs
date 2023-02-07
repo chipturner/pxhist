@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
-fn get_hostname() -> OsString {
+pub fn get_hostname() -> OsString {
     hostname::get().unwrap_or_else(|_| OsString::new())
 }
 

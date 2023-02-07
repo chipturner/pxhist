@@ -1,6 +1,7 @@
 use std::{
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
+    fs,
     fs::{File, OpenOptions},
     io,
     io::{BufRead, BufReader, Write},
@@ -80,6 +81,8 @@ enum Commands {
     },
     #[clap(about = "export full history as JSON")]
     Export {},
+    #[clap(about = "synchronize to and from a directory of other pxh history databases")]
+    Sync { dirname: PathBuf },
     #[clap(about = "(internal) invoked by the shell to insert a history entry")]
     Insert {
         #[clap(long)]
@@ -306,6 +309,87 @@ ORDER BY id"#,
     Ok(())
 }
 
+// Merge history from the file specified in `path` into the current
+// history database.
+fn merge_into(
+    conn: &mut Connection,
+    path: PathBuf,
+) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    let tx = conn.transaction()?;
+    let before_count: u64 =
+        tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
+    tx.execute("ATTACH DATABASE ? AS other", (pxh::BinaryStringHelper::from(&path).to_bytes(),))?;
+    let other_count: u64 =
+        tx.prepare("SELECT COUNT(*) FROM other.command_history")?.query_row((), |r| r.get(0))?;
+    tx.execute(
+        r#"
+INSERT INTO main.command_history (
+    session_id,
+    full_command,
+    shellname,
+    hostname,
+    username,
+    working_directory,
+    exit_status,
+    start_unix_timestamp,
+    end_unix_timestamp
+)
+SELECT session_id,
+    full_command,
+    shellname,
+    hostname,
+    username,
+    working_directory,
+    exit_status,
+    start_unix_timestamp,
+    end_unix_timestamp
+FROM other.command_history
+"#,
+        (),
+    )?;
+    let after_count: u64 =
+        tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
+    tx.commit()?;
+    conn.execute("DETACH DATABASE other", ())?;
+    Ok((other_count, after_count - before_count))
+}
+
+// Merge all (hopefully) pxhist files ending in .db in the specified
+// path into the current database, then write an output with our
+// hostname.
+fn synchronize(conn: &mut Connection, dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    if !dir.exists() {
+        fs::create_dir(dir)?;
+    }
+    let mut output_path = dir.clone();
+    output_path.push(pxh::get_hostname());
+    output_path.set_extension("db");
+    // TODO: vacuum seems to want a plain text path, unlike ATTACH
+    // above, so we can't use BinaryStringHelper to get a vec<u8>.
+    // Look into why this is and if there is a workaround.
+    let output_path_str =
+        output_path.to_str().ok_or("Unable to represent output filename as a string")?;
+
+    let entries = fs::read_dir(dir)?;
+    let db_extension = OsStr::new("db");
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension() == Some(db_extension) && output_path != path {
+            print!("Syncing from {}...", path.to_string_lossy());
+            let (other_count, after_count) = merge_into(conn, path)?;
+            println!("done, considered {} rows and added {}", other_count, after_count);
+        }
+    }
+
+    // VACUUM wants the output to not exist, so delete it if it does.
+    // TODO: save to temp filename, rename over after vacuum succeeds.
+    let _unused = fs::remove_file(&output_path);
+    conn.execute("VACUUM INTO ?", (output_path_str,))?;
+    println!("Saved merged database to {}", output_path_str);
+
+    Ok(())
+}
+
 // Show history in two steps:
 //   1. Populate memdb.show_results with the relevant rows to show
 //   2. Invoke present_results to actually show them.
@@ -490,6 +574,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Install { shellname } => {
             install_subcommand(shellname)?;
+        }
+        Commands::Sync { dirname } => {
+            let mut conn = sqlite_connection(&args.db)?;
+            synchronize(&mut conn, dirname)?;
         }
     }
     Ok(())
