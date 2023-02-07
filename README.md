@@ -4,21 +4,21 @@ REPL tools (pxh for short).
 
 pxh's job is to be a reliable and unobtrusive the persistence and
 search engine for tracking one of the most valuable knowledge vaults
-you have -- your shell histories.  pxh can import your existing
+you have -- your shell histories.  _pxh_ can import your existing
 history files to give you a head start and provides consistent,
 on-demand synchronizing across computers.
 
 Key features:
-- pxh is _fast and ubobtrusive_; once installed, you should never notice
+- _pxh_ is _fast and unobtrusive_; once installed, you should never notice
   it except when you want to conduct a search.
-- pxh tags history commands with _additional context_ such as the
+- _pxh_ tags history commands with _additional context_ such as the
 directory, host, and user which lets you store **all** of your
 history, not just your primary computer's.  It also tracks exit codes
 and durations.
-- pxh _supports flexible_ searching to quickly surface relevant and
+- _pxh_ _supports flexible_ searching to quickly surface relevant and
 useful entries such as all commands run in a specific directory or
 commands issued in a given shell session.
-- pxh provides _easy, on-demand synchronization_ across computers to
+- _pxh_ provides _easy, on-demand synchronization_ across computers to
 allow for an "eventually consistent" global view of your interactive
 shell history.
 
@@ -27,11 +27,11 @@ Quick links:
 * [Getting started](#getting-started)
 * [How it works](#how-it-works)
 
-Currently pxh supports bash and zsh.
+Currently _pxh_ supports bash and zsh.
 
 ## Basic Usage
 
-The `pxh` workflow involves searching history.  `pxh` aims to provide
+The _pxh_ workflow involves searching history.  _pxh_ aims to provide
 better performance and ergonomics than `history | grep SOME_COMMAND`
 in addition to ensuring it never misses a history entry.  To search
 history, use `pxh show REGEX` or `pxh s REGEX`.
@@ -52,11 +52,11 @@ $ pxh s ffmpeg
 
 ### Use case: exploring project-relative history commands
 
-Since `pxh` tracks the directory you issue a command in, and since
+Since _pxh_ tracks the directory you issue a command in, and since
 directories often are a bit of localized context (i.e. when you are
 working on an open source project), filtering by directory can
 sometimes be useful.  For instance, commands run while hacking on
-`pxh`:
+_pxh_:
 
 ``` bash
 $ pxh s --here
@@ -89,7 +89,7 @@ pxh s -v cargo build
  
 ### Use case: ergonomic, intuitive search
 
-`pxh` does the intuitive thing when given multiple search filters: it
+_pxh_ does the intuitive thing when given multiple search filters: it
 finds results that match each filter in consecutive order as separate
 words (basically creating a regex by joining the supplied patterns
 with `.*\s.*`, which is a bit unwieldy to type):
@@ -111,19 +111,19 @@ shared storage system like Dropbox or CIFS is easiest, but a directory
 you `rsync` around can work as well.  On each computer, just run `pxh
 sync $DIR`:
 
-First computer (`nomad`):
+First computer (`homebase`):
 ``` bash
 $ pxh sync ~/Dropbox/pxh/
-Syncing from /home/chip/Dropbox/pxh/nomad.db...done, considered 314181 rows and added 5
-Saved merged database to /home/chip/Dropbox/pxh/homebase.db
+Syncing from /home/chip/Dropbox/pxh/homebase.db...done, considered 314181 rows and added 5
+Saved merged database to /home/chip/Dropbox/pxh/nomad.db
 ```
 
-Second computer (`homebase`):
+Second computer (`nomad`):
 
 ``` bash
 $ pxh sync ~/Dropbox/pxh/
-Syncing from /Users/chip/Dropbox/pxh/homebase.db...done, considered 314236 rows and added 55
-Saved merged database to /Users/chip/Dropbox/pxh/nomad.db
+Syncing from /Users/chip/Dropbox/pxh/nomad.db...done, considered 314236 rows and added 55
+Saved merged database to /Users/chip/Dropbox/pxh/homebase.db
 ```
 
 Note this can also act as a backup method (as can `cp` on the `pxh`
@@ -134,9 +134,9 @@ More advanced usage and flags can be explored via `pxh help`.
 ## Getting Started
 
 - Install the bxh binary
-- Install the pxh shell helper: `pxh install YOUR_SHELL_NAME`
+- Install the _pxh_ shell helper: `pxh install YOUR_SHELL_NAME`
   (e.g. `zsh`).
-  - pxh will be active on future shells.  To activate for this an
+  - _pxh_ will be active on future shells.  To activate for this an
     existing session, run `source <(pxh shell-config YOUR_SHELLNAME)`
 - Import your history:
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
@@ -150,10 +150,10 @@ More advanced usage and flags can be explored via `pxh help`.
 
 ## How it Works
 
-`pxh` uses SQLite to make your history easily searchable you can
+_pxh_ uses SQLite to make your history easily searchable you can
 quickly find useful commands, even from years ago.  SQLite is fast,
-and `pxh` attempts to use it as efficiently as possible.  It is
-unacceptable if `pxh` adds noticeable latency to interactive shells
+and _pxh_ attempts to use it as efficiently as possible.  It is
+unacceptable if _pxh_ adds noticeable latency to interactive shells
 and searching for simple cases should be instantaneous.
 
 pxh works using shell helpers to call it before and after every
@@ -172,7 +172,7 @@ and [zsh-histdb](https://github.com/larkery/zsh-histdb).  These tools,
 and similar ones, are excellent, but I found myself wanting to extend
 the concepts further:
 
-- It seems redundant to build a tool per shell; pxh is meant to be a
+- It seems redundant to build a tool per shell; _pxh_ is meant to be a
   solution for all shells (as well as shell-like REPL environments
   that track history like `mysql`, `python`, etc).
 - Those tools rely on shell invocation of the sqlite CLI.  This
@@ -213,7 +213,7 @@ begin and end.
   - P1: fish?
   - P2: and then non-shells like mysql, python, gdb, sqlite_history
     ...
-- P3: explore using pxh for interactive shell incremental history
+- P3: explore using _pxh_ for interactive shell incremental history
   search
 - P3: create and document workflow for incremental updates,
   particularly for shells that don't support updating real-time
