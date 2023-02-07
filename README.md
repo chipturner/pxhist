@@ -1,39 +1,170 @@
 # pxhist
-Portable, extensible history manager for shells and other REPL tools (pxh for short).
+Portable, extensible history manager for interactive shells and other
+REPL tools (pxh for short).
 
-pxh's job is to unobtrusively and obsessively become the persistence
-engine for tracking one of the most valuable knowledge vaults you have
--- your shell histories.  It uses this storage (backed by SQLite) to
-make your history easily searchable you can quickly find useful
-commands, even from years ago.  pxh can import your existing history
-files to give you a head start.
+pxh's job is to be a reliable and unobtrusive the persistence and
+search engine for tracking one of the most valuable knowledge vaults
+you have -- your shell histories.  pxh can import your existing
+history files to give you a head start and provides consistent,
+on-demand synchronizing across computers.
 
-pxh tags history commands with the source host and user, meaning you
-can store **all** of your history, not just your primary computer or
-laptop's.
+Key features:
+- pxh is _fast and ubobtrusive_; once installed, you should never notice
+  it except when you want to conduct a search.
+- pxh tags history commands with _additional context_ such as the
+directory, host, and user which lets you store **all** of your
+history, not just your primary computer's.  It also tracks exit codes
+and durations.
+- pxh _supports flexible_ searching to quickly surface relevant and
+useful entries such as all commands run in a specific directory or
+commands issued in a given shell session.
+- pxh provides _easy, on-demand synchronization_ across computers to
+allow for an "eventually consistent" global view of your interactive
+shell history.
 
-pxh works by using a database of every command along with available
-context such as timestamps, command duration, etc.  The database is
-updated in real-time and remains consistent across multiple concurrent
-shells.
+Quick links:
+* [Basic Usage](#basic-usage)
+* [Getting started](#getting-started)
+* [How it works](#how-it-works)
 
 Currently pxh supports bash and zsh.
 
+## Basic Usage
+
+The `pxh` workflow involves searching history.  `pxh` aims to provide
+better performance and ergonomics than `history | grep SOME_COMMAND`
+in addition to ensuring it never misses a history entry.  To search
+history, use `pxh show REGEX` or `pxh s REGEX`.
+
+### Use case: remembering complex commands
+
+`ffmpeg` is a great tool but I never quite remember how to use it.
+Fortunately my shell history does:
+
+``` bash
+$ pxh s ffmpeg
+...
+ 2022-06-04 07:54:04  ffmpeg -encoders | grep '^ V'
+ 2022-06-07 23:17:33  ffmpeg -y -r 30 -f concat -safe 0 -i <(sed 's/^/file /' /tmp/files) -c:v libx264rgb -preset veryslow -crf 21 -vf fps=30 /tmp/combined.mp4
+ 2022-08-03 10:39:11  ffmpeg -i cropped.mp4 -vf "pad=width=430:height=430:x=215:y=0:color=black" cropped.gif
+...
+```
+
+### Use case: exploring project-relative history commands
+
+Since `pxh` tracks the directory you issue a command in, and since
+directories often are a bit of localized context (i.e. when you are
+working on an open source project), filtering by directory can
+sometimes be useful.  For instance, commands run while hacking on
+`pxh`:
+
+``` bash
+$ pxh s --here
+ Start                Command
+ 2023-02-06 22:43:16  cargo test
+ 2023-02-06 22:43:21  cargo build --release
+ 2023-02-06 22:43:25  pxh sync ~/Dropbox/pxh/
+ 2023-02-06 22:44:28  git diff
+ 2023-02-06 22:44:36  cargo clippy
+ 2023-02-06 22:44:42  git commit -a -m 'clippy fixes'
+ 2023-02-06 22:44:44  git push
+ ...
+```
+
+### Use case: seeing more details such as execution time
+
+You can view additional details such as the host, directory, duration,
+and exit code with the `-v` flag
+
+``` bash
+pxh s -v cargo build
+ Start                Duration  Session       Context                                           Command
+...
+ 2023-02-06 22:10:20  1s        116ef63fc226  .                                                 cargo build --release
+ 2023-02-06 22:28:00  2s        116ef63fc226  .                                                 cargo build --release
+ 2023-02-07 05:50:02  0s        ee6e1989f3da  /home/chip                                        cargo build --release
+ 2023-02-07 06:32:04  37s       ee6e1989f3da  .                                                 cargo build --release
+...
+ ```
+ 
+### Use case: ergonomic, intuitive search
+
+`pxh` does the intuitive thing when given multiple search filters: it
+finds results that match each filter in consecutive order as separate
+words (basically creating a regex by joining the supplied patterns
+with `.*\s.*`, which is a bit unwieldy to type):
+
+``` bash
+$ pxh s git pull
+ Start                Command
+...
+ 2023-01-31 11:11:36  git pull --rebase
+ 2023-02-03 08:18:34  fd -t d -d 1 -x git -C {} pull --rebase
+ 2023-02-03 10:44:02  git pull --rebase
+ ...
+```
+
+### Use case: synchronizing across computers
+
+Finally, sharing history across time and space is easy.  Using a
+shared storage system like Dropbox or CIFS is easiest, but a directory
+you `rsync` around can work as well.  On each computer, just run `pxh
+sync $DIR`:
+
+First computer (`nomad`):
+``` bash
+$ pxh sync ~/Dropbox/pxh/
+Syncing from /home/chip/Dropbox/pxh/nomad.db...done, considered 314181 rows and added 5
+Saved merged database to /home/chip/Dropbox/pxh/homebase.db
+```
+
+Second computer (`homebase`):
+
+``` bash
+$ pxh sync ~/Dropbox/pxh/
+Syncing from /Users/chip/Dropbox/pxh/homebase.db...done, considered 314236 rows and added 55
+Saved merged database to /Users/chip/Dropbox/pxh/nomad.db
+```
+
+Note this can also act as a backup method (as can `cp` on the `pxh`
+database file).
+
+More advanced usage and flags can be explored via `pxh help`.
+
 ## Getting Started
 
-- Install the pxh helper: `pxh install YOUR_SHELL_NAME`
-- Log out and back in to activate pxh; or, run this in an existing
-  shell to activate: `source <(pxh shell-config YOUR_SHELLNAME)`
-- Import your history
+- Install the bxh binary
+- Install the pxh shell helper: `pxh install YOUR_SHELL_NAME`
+  (e.g. `zsh`).
+  - pxh will be active on future shells.  To activate for this an
+    existing session, run `source <(pxh shell-config YOUR_SHELLNAME)`
+- Import your history:
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
   - Optional: pull from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
 - Periodically synchronize with databases from other systems with a
-  simple workflow via shared storage such as Dropbox:
+  simple workflow via shared storage such as NextCloud, Dropbox, CIFS,
+  etc:
   - `pxh sync ~/Dropbox/pxh/` which merges from all db files in that
     directory and writes a new file with the merged output
 
-## Inspiration and Similar Tools
+## How it Works
+
+`pxh` uses SQLite to make your history easily searchable you can
+quickly find useful commands, even from years ago.  SQLite is fast,
+and `pxh` attempts to use it as efficiently as possible.  It is
+unacceptable if `pxh` adds noticeable latency to interactive shells
+and searching for simple cases should be instantaneous.
+
+pxh works using shell helpers to call it before and after every
+command to log the command, time, exit status, and other useful
+context.  The database is updated in real-time and remains consistent
+across multiple concurrent shells thanks to SQLite.
+
+The database file is stored, by default, in `~/.pxh/pxh.db`.  You can
+`cp` this file and examine it with the `sqlite3` command line tool.
+
+### Credits, Inspiration, and Similar Tools
 
 This tool was originally inspired by
 [bash-history-sqlite](https://github.com/thenewwazoo/bash-history-sqlite)
@@ -58,10 +189,6 @@ This tool embeds the very useful
 [Bash-Preexec](https://github.com/rcaloras/bash-preexec) utility which
 provides very zsh-like extensions for Bash to track when commands
 begin and end.
-
-## Architecture / How it Works
-
-## Hacking on pxh
 
 ## TODO
 
