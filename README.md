@@ -22,6 +22,8 @@ Currently pxh supports bash and zsh.
 ## Getting Started
 
 - Install the pxh helper: `pxh install YOUR_SHELL_NAME`
+- Log out and back in to activate pxh; or, run this in an existing
+  shell to activate: `source <(pxh shell-config YOUR_SHELLNAME)`
 - Import your history
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
