@@ -111,14 +111,14 @@ shared storage system like Dropbox or CIFS is easiest, but a directory
 you `rsync` around can work as well.  On each computer, just run `pxh
 sync $DIR`:
 
-First computer (`homebase`):
+First computer (`nomad`):
 ``` bash
 $ pxh sync ~/Dropbox/pxh/
 Syncing from /home/chip/Dropbox/pxh/homebase.db...done, considered 314181 rows and added 5
 Saved merged database to /home/chip/Dropbox/pxh/nomad.db
 ```
 
-Second computer (`nomad`):
+Second computer (`homebase`):
 
 ``` bash
 $ pxh sync ~/Dropbox/pxh/
