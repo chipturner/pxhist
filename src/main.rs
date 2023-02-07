@@ -31,6 +31,7 @@ enum Commands {
     #[clap(visible_alias = "s", about = "search for and display history entries")]
     Show {
         #[clap(
+            short,
             long,
             default_value_t = 50,
             help = "display at most this many entries; 0 for unlimited"
@@ -56,7 +57,7 @@ enum Commands {
         )]
         session: Option<String>,
         #[clap(
-            help = "one or more regular expressions to search through history entries; multiple values joined by `.*`"
+            help = "one or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
         )]
         substrings: Vec<String>,
     },
@@ -261,6 +262,8 @@ if command -v pxh &> /dev/null; then
 fi"#
     )?;
     println!("Shell config successfully added to {}.", pb.display());
+    println!("pxh will be active for all new shell sessions.  To activate for this session, run:");
+    println!("  source <(pxh shell-config {shellname})");
     Ok(())
 }
 
@@ -407,7 +410,7 @@ fn show_subcommand(
     mut limit: i32,
     substrings: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let substring = substrings.join(".*");
+    let substring = substrings.join(".*\\s.*");
     if limit <= 0 {
         limit = i32::MAX;
     }
