@@ -28,6 +28,10 @@ Currently pxh supports bash and zsh.
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
   - Optional: pull from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
+- Periodically synchronize with databases from other systems with a
+  simple workflow via shared storage such as Dropbox:
+  - `pxh sync ~/Dropbox/pxh/` which merges from all db files in that
+    directory and writes a new file with the merged output
 
 ## Inspiration and Similar Tools
 
