@@ -193,6 +193,8 @@ begin and end.
 ## TODO
 
 ### Usability / UX
+- P0: Create github action release automation
+- P0: Publish periodic releases to crates.io
 - P0: output commands "around" a timestamp (before, after,
   bracketing), like grep -C; bracket by time and number of commands,
   but be session aware
