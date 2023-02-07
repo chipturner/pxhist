@@ -182,7 +182,7 @@ fn insert_subcommand(
     let working_directory_bytes =
         invocation.working_directory.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
 
-    let _ = tx.execute(
+    tx.execute(
         r#"
 INSERT INTO command_history (
     session_id,
@@ -207,7 +207,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             invocation.start_unix_timestamp,
             invocation.end_unix_timestamp,
         ),
-    );
+    )?;
 
     Ok(())
 }
@@ -273,7 +273,7 @@ fn seal_subcommand(
     exit_status: i32,
     end_unix_timestamp: i64,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let _ = conn.execute(
+    conn.execute(
         r#"
 UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
  WHERE exit_status is NULL
