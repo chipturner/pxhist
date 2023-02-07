@@ -387,7 +387,7 @@ pub fn present_results_human_readable(
         for field in fields {
             let title = match displayers.get(field) {
                 Some(d) => d.header,
-                None => return Err(Box::from(format!("Invalid 'show' field: {}", field))),
+                None => return Err(Box::from(format!("Invalid 'show' field: {field}"))),
             };
 
             title_row.add_cell(prettytable::Cell::new(title));

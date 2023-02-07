@@ -167,7 +167,7 @@ fn import_subcommand(
         "zsh" => pxh::import_zsh_history(histfile, hostname.as_ref(), username.as_ref()),
         "bash" => pxh::import_bash_history(histfile, hostname.as_ref(), username.as_ref()),
         "json" => pxh::import_json_history(histfile),
-        _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
+        _ => Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
     }
 }
 
@@ -221,7 +221,7 @@ fn shell_config_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Er
             contents.push_str(include_str!("shell_configs/pxh.bash"));
             contents
         }
-        _ => return Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
+        _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
     };
     io::stdout().write_all(contents.as_bytes())?;
     io::stdout().flush()?;
@@ -232,7 +232,7 @@ fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>>
     let rc_file = match shellname {
         "zsh" => ".zshrc",
         "bash" => ".bashrc",
-        _ => return Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
+        _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
     };
 
     let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
@@ -257,9 +257,8 @@ fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>>
         file,
         r#"
 if command -v pxh &> /dev/null; then
-    source <(pxh shell-config {})
-fi"#,
-        shellname
+    source <(pxh shell-config {shellname})
+fi"#
     )?;
     println!("Shell config successfully added to {}.", pb.display());
     Ok(())
@@ -377,7 +376,7 @@ fn synchronize(conn: &mut Connection, dir: &PathBuf) -> Result<(), Box<dyn std::
         if path.extension() == Some(db_extension) && output_path != path {
             print!("Syncing from {}...", path.to_string_lossy());
             let (other_count, after_count) = merge_into(conn, path)?;
-            println!("done, considered {} rows and added {}", other_count, after_count);
+            println!("done, considered {other_count} rows and added {after_count}");
         }
     }
 
@@ -385,7 +384,7 @@ fn synchronize(conn: &mut Connection, dir: &PathBuf) -> Result<(), Box<dyn std::
     // TODO: save to temp filename, rename over after vacuum succeeds.
     let _unused = fs::remove_file(&output_path);
     conn.execute("VACUUM INTO ?", (output_path_str,))?;
-    println!("Saved merged database to {}", output_path_str);
+    println!("Saved merged database to {output_path_str}");
 
     Ok(())
 }
@@ -406,7 +405,7 @@ fn show_subcommand(
     session_id: Option<i64>,
     working_directory: Option<PathBuf>,
     mut limit: i32,
-    substrings: &Vec<String>,
+    substrings: &[String],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let substring = substrings.join(".*");
     if limit <= 0 {
