@@ -281,16 +281,6 @@ pub fn import_json_history(histfile: &Path) -> Result<Vec<Invocation>, Box<dyn s
     Ok(serde_json::from_reader(reader)?)
 }
 
-pub fn command_as_bytes(v: &[OsString]) -> Vec<u8> {
-    let mut ret = Vec::with_capacity(v.len() * v.iter().map(|elem| elem.len()).sum::<usize>() + 1);
-    v.iter().for_each(|elem| {
-        ret.extend(elem.as_bytes());
-        ret.push(b' ');
-    });
-    ret.remove(ret.len() - 1); // trim trailing space added in last iteration
-    ret
-}
-
 fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
     let mut it = invocations.into_iter();
     match it.next() {
@@ -477,15 +467,4 @@ pub fn present_results_human_readable(
     }
     table.printstd();
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_command_as_bytes() {
-        assert_eq!(command_as_bytes(&[OsString::from("xyz")]), b"xyz");
-        assert_eq!(command_as_bytes(&[OsString::from("xyz"), OsString::from("pqr")]), b"xyz pqr");
-    }
 }

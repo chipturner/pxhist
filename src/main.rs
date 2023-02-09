@@ -470,9 +470,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Insert(cmd) => {
             let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
-                command: pxh::BinaryStringHelper::from(
-                    pxh::command_as_bytes(&cmd.command).as_slice(),
-                ),
+                command: pxh::BinaryStringHelper::from(&cmd.command.join(OsStr::new(" "))),
                 shellname: cmd.shellname.clone(),
                 working_directory: cmd
                     .working_directory
