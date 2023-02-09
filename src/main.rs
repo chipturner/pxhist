@@ -5,16 +5,12 @@ use std::{
     fs::{File, OpenOptions},
     io,
     io::{BufRead, BufReader, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str,
-    sync::Arc,
-    time::Duration,
 };
 
 use clap::{Parser, Subcommand};
-use regex::bytes::Regex;
-use rusqlite::{functions::FunctionFlags, Connection, Error, Result, Transaction};
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+use rusqlite::{Connection, Result};
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -29,302 +25,306 @@ struct PxhArgs {
 #[derive(Subcommand, Debug)]
 enum Commands {
     #[clap(visible_alias = "s", about = "search for and display history entries")]
-    Show {
-        #[clap(
-            short,
-            long,
-            default_value_t = 50,
-            help = "display at most this many entries; 0 for unlimited"
-        )]
-        limit: i32,
-        #[clap(short, long, help = "display extra fields in the output")]
-        verbose: bool,
-        #[clap(long, help = "suppress headers")]
-        suppress_headers: bool,
-        #[clap(
-            long,
-            help = "show entries that were populated while in the current working directory"
-        )]
-        here: bool,
-        #[clap(
-            long,
-            help = "alters --here; instead of the current working directory, use the specified directory"
-        )]
-        working_directory: Option<PathBuf>,
-        #[clap(
-            long,
-            help = "display only commands from the specified session (use $PXH_SESSION_ID for this session)"
-        )]
-        session: Option<String>,
-        #[clap(
-            help = "one or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
-        )]
-        substrings: Vec<String>,
-    },
+    Show(ShowCommand),
     #[clap(about = "install pxhist helpers by modifying your shell rc file")]
-    Install {
-        #[clap(help = "shell to install helpers into")]
-        shellname: String,
-    },
+    Install(InstallCommand),
     #[clap(about = "import history entries from your existing shell history or from an export")]
-    Import {
-        #[clap(long, help = "path to history file to import")]
-        histfile: PathBuf,
-        #[clap(long, help = "type of shell history specified by --histfile")]
-        shellname: String,
-        #[clap(
-            long,
-            help = "hostname to tag imported entries with (defaults to current hostname)"
-        )]
-        hostname: Option<OsString>,
-        #[clap(long, help = "username to tag importen entries with (defaults to current user)")]
-        username: Option<OsString>,
-    },
+    Import(ImportCommand),
     #[clap(about = "export full history as JSON")]
-    Export {},
+    Export(ExportCommand),
     #[clap(about = "synchronize to and from a directory of other pxh history databases")]
-    Sync { dirname: PathBuf },
+    Sync(SyncCommand),
     #[clap(about = "(internal) invoked by the shell to insert a history entry")]
-    Insert {
-        #[clap(long)]
-        shellname: String,
-        #[clap(long)]
-        hostname: OsString,
-        #[clap(long)]
-        username: OsString,
-        #[clap(long)]
-        working_directory: Option<PathBuf>,
-        #[clap(long)]
-        exit_status: Option<i64>,
-        #[clap(long)]
-        session_id: i64,
-        #[clap(long)]
-        start_unix_timestamp: Option<i64>,
-        #[clap(long)]
-        end_unix_timestamp: Option<i64>,
-        command: Vec<OsString>,
-    },
+    Insert(InsertCommand),
     #[clap(about = "(internal) seal the previous inserted command to mark status, timing, etc")]
-    Seal {
-        #[clap(long)]
-        session_id: i64,
-        #[clap(long)]
-        exit_status: i32,
-        #[clap(long)]
-        end_unix_timestamp: i64,
-    },
+    Seal(SealCommand),
     #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
-    ShellConfig { shellname: String },
+    ShellConfig(ShellConfigCommand),
 }
 
-fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
-    let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
-    let conn = Connection::open(path)?;
-    conn.busy_timeout(Duration::from_millis(100))?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "temp_store", "MEMORY")?;
-    conn.pragma_update(None, "cache_size", "16777216")?;
+#[derive(Parser, Debug)]
+struct InstallCommand {
+    #[clap(help = "shell to install helpers into")]
+    shellname: String,
+}
 
-    let schema = include_str!("base_schema.sql");
-    conn.execute_batch(schema)?;
+#[derive(Parser, Debug)]
+struct ShowCommand {
+    #[clap(
+        short,
+        long,
+        default_value_t = 50,
+        help = "display at most this many entries; 0 for unlimited"
+    )]
+    limit: i32,
+    #[clap(short, long, help = "display extra fields in the output")]
+    verbose: bool,
+    #[clap(long, help = "suppress headers")]
+    suppress_headers: bool,
+    #[clap(long, help = "show entries that were populated while in the current working directory")]
+    here: bool,
+    #[clap(
+        long,
+        help = "alters --here; instead of the current working directory, use the specified directory"
+    )]
+    working_directory: Option<PathBuf>,
+    #[clap(
+        long,
+        help = "display only commands from the specified session (use $PXH_SESSION_ID for this session)"
+    )]
+    session: Option<String>,
+    #[clap(
+        help = "one or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
+    )]
+    substrings: Vec<String>,
+}
 
-    // From rusqlite::functions example but adapted for non-utf8
-    // regexps.
-    conn.create_scalar_function("regexp", 2, FunctionFlags::SQLITE_DETERMINISTIC, move |ctx| {
-        assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
-        let regexp: Arc<Regex> = ctx
-            .get_or_create_aux(0, |vr| -> Result<_, BoxError> { Ok(Regex::new(vr.as_str()?)?) })?;
-        let is_match = {
-            let text = ctx.get_raw(1).as_bytes().map_err(|e| Error::UserFunctionError(e.into()))?;
+#[derive(Parser, Debug)]
+struct ImportCommand {
+    #[clap(long, help = "path to history file to import")]
+    histfile: PathBuf,
+    #[clap(long, help = "type of shell history specified by --histfile")]
+    shellname: String,
+    #[clap(long, help = "hostname to tag imported entries with (defaults to current hostname)")]
+    hostname: Option<OsString>,
+    #[clap(long, help = "username to tag importen entries with (defaults to current user)")]
+    username: Option<OsString>,
+}
 
-            regexp.is_match(text)
+#[derive(Parser, Debug)]
+struct SyncCommand {
+    dirname: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct InsertCommand {
+    #[clap(long)]
+    shellname: String,
+    #[clap(long)]
+    hostname: OsString,
+    #[clap(long)]
+    username: OsString,
+    #[clap(long)]
+    working_directory: Option<PathBuf>,
+    #[clap(long)]
+    exit_status: Option<i64>,
+    #[clap(long)]
+    session_id: i64,
+    #[clap(long)]
+    start_unix_timestamp: Option<i64>,
+    #[clap(long)]
+    end_unix_timestamp: Option<i64>,
+    command: Vec<OsString>,
+}
+
+#[derive(Parser, Debug)]
+struct SealCommand {
+    #[clap(long)]
+    session_id: i64,
+    #[clap(long)]
+    exit_status: i32,
+    #[clap(long)]
+    end_unix_timestamp: i64,
+}
+
+#[derive(Parser, Debug)]
+struct ShellConfigCommand {
+    shellname: String,
+}
+
+#[derive(Parser, Debug)]
+struct ExportCommand {}
+
+impl ImportCommand {
+    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let invocations = match self.shellname.as_ref() {
+            "zsh" => pxh::import_zsh_history(
+                &self.histfile,
+                self.hostname.as_ref(),
+                self.username.as_ref(),
+            ),
+            "bash" => pxh::import_bash_history(
+                &self.histfile,
+                self.hostname.as_ref(),
+                self.username.as_ref(),
+            ),
+            "json" => pxh::import_json_history(&self.histfile),
+            _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", self.shellname))),
+        }?;
+        let tx = conn.transaction()?;
+        for invocation in invocations {
+            invocation.insert(&tx)?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+}
+
+impl ShellConfigCommand {
+    fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
+        // Todo: bash and other shell formats
+        let contents = match self.shellname.as_str() {
+            "zsh" => String::from(include_str!("shell_configs/pxh.zsh")),
+            "bash" => {
+                let mut contents = String::new();
+                contents.push_str(include_str!("shell_configs/bash-preexec/bash-preexec.sh"));
+                contents.push_str(include_str!("shell_configs/pxh.bash"));
+                contents
+            }
+            _ => {
+                return Err(Box::from(format!(
+                    "Unsupported shell: {} (PRs welcome!)",
+                    self.shellname
+                )))
+            }
+        };
+        io::stdout().write_all(contents.as_bytes())?;
+        io::stdout().flush()?;
+        Ok(())
+    }
+}
+
+impl InstallCommand {
+    fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let shellname = self.shellname.as_ref();
+        let rc_file = match shellname {
+            "zsh" => ".zshrc",
+            "bash" => ".bashrc",
+            _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
         };
 
-        Ok(is_match)
-    })?;
+        let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
+        pb.push(rc_file);
 
-    Ok(conn)
-}
-
-fn insert_invocations(
-    conn: &mut Connection,
-    invocations: Vec<pxh::Invocation>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let tx = conn.transaction()?;
-    for invocation in invocations.into_iter() {
-        insert_subcommand(&tx, &invocation)?;
-    }
-    tx.commit()?;
-    Ok(())
-}
-
-fn import_subcommand(
-    histfile: &Path,
-    shellname: &str,
-    hostname: &Option<OsString>,
-    username: &Option<OsString>,
-) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
-    match shellname {
-        "zsh" => pxh::import_zsh_history(histfile, hostname.as_ref(), username.as_ref()),
-        "bash" => pxh::import_bash_history(histfile, hostname.as_ref(), username.as_ref()),
-        "json" => pxh::import_json_history(histfile),
-        _ => Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
-    }
-}
-
-fn insert_subcommand(
-    tx: &Transaction,
-    invocation: &pxh::Invocation,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let command_bytes: Vec<u8> = invocation.command.to_bytes();
-    let username_bytes = invocation.username.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
-    let hostname_bytes = invocation.hostname.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
-    let working_directory_bytes =
-        invocation.working_directory.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
-
-    tx.execute(
-        r#"
-INSERT INTO command_history (
-    session_id,
-    full_command,
-    shellname,
-    hostname,
-    username,
-    working_directory,
-    exit_status,
-    start_unix_timestamp,
-    end_unix_timestamp
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
-        (
-            invocation.session_id,
-            command_bytes.as_slice(),
-            &invocation.shellname,
-            hostname_bytes,
-            username_bytes,
-            working_directory_bytes,
-            invocation.exit_status,
-            invocation.start_unix_timestamp,
-            invocation.end_unix_timestamp,
-        ),
-    )?;
-
-    Ok(())
-}
-
-fn shell_config_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>> {
-    // Todo: bash and other shell formats
-    let contents = match shellname {
-        "zsh" => String::from(include_str!("shell_configs/pxh.zsh")),
-        "bash" => {
-            let mut contents = String::new();
-            contents.push_str(include_str!("shell_configs/bash-preexec/bash-preexec.sh"));
-            contents.push_str(include_str!("shell_configs/pxh.bash"));
-            contents
+        // Skip installationif "pxh shell-config" is present in the
+        // current RC file.
+        let file = File::open(&pb)?;
+        let reader = BufReader::new(&file);
+        for line in reader.lines() {
+            let line = line.unwrap();
+            if line.contains("pxh shell-config") {
+                println!("Shell config already present in {}; taking no action.", pb.display());
+                return Ok(());
+            }
         }
-        _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
-    };
-    io::stdout().write_all(contents.as_bytes())?;
-    io::stdout().flush()?;
-    Ok(())
-}
 
-fn install_subcommand(shellname: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let rc_file = match shellname {
-        "zsh" => ".zshrc",
-        "bash" => ".bashrc",
-        _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
-    };
+        let mut file = OpenOptions::new().append(true).open(&pb)?;
 
-    let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
-    pb.push(rc_file);
-
-    // Skip installationif "pxh shell-config" is present in the
-    // current RC file.
-    let file = File::open(&pb)?;
-    let reader = BufReader::new(&file);
-    for line in reader.lines() {
-        let line = line.unwrap();
-        if line.contains("pxh shell-config") {
-            println!("Shell config already present in {}; taking no action.", pb.display());
-            return Ok(());
-        }
-    }
-
-    let mut file = OpenOptions::new().append(true).open(&pb)?;
-
-    write!(file, "\n# Install the pxh shell helpers to add interactive history realtime.")?;
-    writeln!(
-        file,
-        r#"
+        write!(file, "\n# Install the pxh shell helpers to add interactive history realtime.")?;
+        writeln!(
+            file,
+            r#"
 if command -v pxh &> /dev/null; then
     source <(pxh shell-config {shellname})
 fi"#
-    )?;
-    println!("Shell config successfully added to {}.", pb.display());
-    println!("pxh will be active for all new shell sessions.  To activate for this session, run:");
-    println!("  source <(pxh shell-config {shellname})");
-    Ok(())
+        )?;
+        println!("Shell config successfully added to {}.", pb.display());
+        println!(
+            "pxh will be active for all new shell sessions.  To activate for this session, run:"
+        );
+        println!("  source <(pxh shell-config {shellname})");
+        Ok(())
+    }
 }
 
-fn seal_subcommand(
-    conn: &mut Connection,
-    session_id: i64,
-    exit_status: i32,
-    end_unix_timestamp: i64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    conn.execute(
-        r#"
+impl SealCommand {
+    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        conn.execute(
+            r#"
 UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
  WHERE exit_status is NULL
    AND end_unix_timestamp IS NULL
    AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"#,
-        (exit_status, end_unix_timestamp, session_id),
-    )?;
-    Ok(())
+            (self.exit_status, self.end_unix_timestamp, self.session_id),
+        )?;
+        Ok(())
+    }
 }
 
-fn export_subcommand(conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
-    let mut stmt = conn.prepare(
+impl ExportCommand {
+    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let mut stmt = conn.prepare(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM command_history h
 ORDER BY id"#,
     )?;
-    let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
-        .query_map([], |row| {
-            Ok(pxh::InvocationExport {
-                session_id: row.get("session_id")?,
-                full_command: row.get("full_command")?,
-                shellname: row.get("shellname")?,
-                hostname: row.get("hostname")?,
-                username: row.get("username")?,
-                working_directory: row.get("working_directory")?,
-                exit_status: row.get("exit_status")?,
-                start_unix_timestamp: row.get("start_unix_timestamp")?,
-                end_unix_timestamp: row.get("end_unix_timestamp")?,
-            })
-        })?
-        .collect();
-    let rows = rows?;
-    pxh::json_export(&rows)?;
-    Ok(())
+        let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
+            .query_map([], |row| {
+                Ok(pxh::InvocationExport {
+                    session_id: row.get("session_id")?,
+                    full_command: row.get("full_command")?,
+                    shellname: row.get("shellname")?,
+                    hostname: row.get("hostname")?,
+                    username: row.get("username")?,
+                    working_directory: row.get("working_directory")?,
+                    exit_status: row.get("exit_status")?,
+                    start_unix_timestamp: row.get("start_unix_timestamp")?,
+                    end_unix_timestamp: row.get("end_unix_timestamp")?,
+                })
+            })?
+            .collect();
+        let rows = rows?;
+        pxh::json_export(&rows)?;
+        Ok(())
+    }
 }
 
-// Merge history from the file specified in `path` into the current
-// history database.
-fn merge_into(
-    conn: &mut Connection,
-    path: PathBuf,
-) -> Result<(u64, u64), Box<dyn std::error::Error>> {
-    let tx = conn.transaction()?;
-    let before_count: u64 =
-        tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
-    tx.execute("ATTACH DATABASE ? AS other", (pxh::BinaryStringHelper::from(&path).to_bytes(),))?;
-    let other_count: u64 =
-        tx.prepare("SELECT COUNT(*) FROM other.command_history")?.query_row((), |r| r.get(0))?;
-    tx.execute(
-        r#"
+// Merge all (hopefully) pxhist files ending in .db in the specified
+// path into the current database, then write an output with our
+// hostname.
+
+impl SyncCommand {
+    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.dirname.exists() {
+            fs::create_dir(&self.dirname)?;
+        }
+        let mut output_path = self.dirname.clone();
+        output_path.push(pxh::get_hostname());
+        output_path.set_extension("db");
+        // TODO: vacuum seems to want a plain text path, unlike ATTACH
+        // above, so we can't use BinaryStringHelper to get a vec<u8>.
+        // Look into why this is and if there is a workaround.
+        let output_path_str =
+            output_path.to_str().ok_or("Unable to represent output filename as a string")?;
+
+        let entries = fs::read_dir(&self.dirname)?;
+        let db_extension = OsStr::new("db");
+        for entry in entries {
+            let path = entry?.path();
+            if path.extension() == Some(db_extension) && output_path != path {
+                print!("Syncing from {}...", path.to_string_lossy());
+                let (other_count, after_count) = Self::merge_into(conn, path)?;
+                println!("done, considered {other_count} rows and added {after_count}");
+            }
+        }
+
+        // VACUUM wants the output to not exist, so delete it if it does.
+        // TODO: save to temp filename, rename over after vacuum succeeds.
+        let _unused = fs::remove_file(&output_path);
+        conn.execute("VACUUM INTO ?", (output_path_str,))?;
+        println!("Saved merged database to {output_path_str}");
+
+        Ok(())
+    }
+    // Merge history from the file specified in `path` into the current
+    // history database.
+    fn merge_into(
+        conn: &mut Connection,
+        path: PathBuf,
+    ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+        let tx = conn.transaction()?;
+        let before_count: u64 =
+            tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
+        tx.execute(
+            "ATTACH DATABASE ? AS other",
+            (pxh::BinaryStringHelper::from(&path).to_bytes(),),
+        )?;
+        let other_count: u64 = tx
+            .prepare("SELECT COUNT(*) FROM other.command_history")?
+            .query_row((), |r| r.get(0))?;
+        tx.execute(
+            r#"
 INSERT INTO main.command_history (
     session_id,
     full_command,
@@ -347,49 +347,14 @@ SELECT session_id,
     end_unix_timestamp
 FROM other.command_history
 "#,
-        (),
-    )?;
-    let after_count: u64 =
-        tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
-    tx.commit()?;
-    conn.execute("DETACH DATABASE other", ())?;
-    Ok((other_count, after_count - before_count))
-}
-
-// Merge all (hopefully) pxhist files ending in .db in the specified
-// path into the current database, then write an output with our
-// hostname.
-fn synchronize(conn: &mut Connection, dir: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    if !dir.exists() {
-        fs::create_dir(dir)?;
+            (),
+        )?;
+        let after_count: u64 =
+            tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
+        tx.commit()?;
+        conn.execute("DETACH DATABASE other", ())?;
+        Ok((other_count, after_count - before_count))
     }
-    let mut output_path = dir.clone();
-    output_path.push(pxh::get_hostname());
-    output_path.set_extension("db");
-    // TODO: vacuum seems to want a plain text path, unlike ATTACH
-    // above, so we can't use BinaryStringHelper to get a vec<u8>.
-    // Look into why this is and if there is a workaround.
-    let output_path_str =
-        output_path.to_str().ok_or("Unable to represent output filename as a string")?;
-
-    let entries = fs::read_dir(dir)?;
-    let db_extension = OsStr::new("db");
-    for entry in entries {
-        let path = entry?.path();
-        if path.extension() == Some(db_extension) && output_path != path {
-            print!("Syncing from {}...", path.to_string_lossy());
-            let (other_count, after_count) = merge_into(conn, path)?;
-            println!("done, considered {other_count} rows and added {after_count}");
-        }
-    }
-
-    // VACUUM wants the output to not exist, so delete it if it does.
-    // TODO: save to temp filename, rename over after vacuum succeeds.
-    let _unused = fs::remove_file(&output_path);
-    conn.execute("VACUUM INTO ?", (output_path_str,))?;
-    println!("Saved merged database to {output_path_str}");
-
-    Ok(())
 }
 
 // Show history in two steps:
@@ -400,38 +365,34 @@ fn synchronize(conn: &mut Connection, dir: &PathBuf) -> Result<(), Box<dyn std::
 // queries where we need some arbitrary subset of selected entries.
 // Rather than round-trip the rowid's and create a complex query, we
 // just use a temp memory table.
-fn show_subcommand(
-    conn: &mut Connection,
-    verbose: bool,
-    suppress_headers: bool,
-    here: bool,
-    session_id: Option<i64>,
-    working_directory: Option<PathBuf>,
-    mut limit: i32,
-    substrings: &[String],
-) -> Result<(), Box<dyn std::error::Error>> {
-    let substring = substrings.join(".*\\s.*");
-    if limit <= 0 {
-        limit = i32::MAX;
-    }
-    conn.execute("DELETE FROM memdb.show_results", ())?;
+impl ShowCommand {
+    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let substring = self.substrings.join(".*\\s.*");
+        let limit = if self.limit <= 0 { i32::MAX } else { self.limit };
 
-    let working_directory =
-        working_directory.unwrap_or_else(|| env::current_dir().unwrap_or_default());
-    if let Some(session_id) = session_id {
-        conn.execute(
-            r#"
+        conn.execute("DELETE FROM memdb.show_results", ())?;
+
+        let working_directory = match &self.working_directory {
+            Some(v) => v.clone(),
+            _ => env::current_dir().unwrap_or_default(),
+        };
+
+        if let Some(ref maybe_session_hex) = self.session {
+            let session_id = i64::from_str_radix(maybe_session_hex, 16)?;
+
+            conn.execute(
+                r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
  WHERE full_command REGEXP ? AND session_id = ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-            (substring, session_id, limit),
-        )?;
-    } else if here {
-        conn.execute(
-            r#"
+                (substring, session_id, limit),
+            )?;
+        } else if self.here {
+            conn.execute(
+                r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
@@ -439,31 +400,26 @@ SELECT rowid, start_unix_timestamp, id
    AND full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-            (working_directory.to_string_lossy(), substring, limit),
-        )?;
-    } else {
-        conn.execute(
-            r#"
+                (working_directory.to_string_lossy(), substring, limit),
+            )?;
+        } else {
+            conn.execute(
+                r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-            (substring, limit),
-        )?;
+                (substring, limit),
+            )?;
+        }
+
+        self.present_results(conn)
     }
-
-    present_results(conn, verbose, suppress_headers)
-}
-
-fn present_results(
-    conn: &mut Connection,
-    verbose: bool,
-    suppress_headers: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Now that we have the relevant rows, just present the output
-    let mut stmt = conn.prepare(
+    fn present_results(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Now that we have the relevant rows, just present the output
+        let mut stmt = conn.prepare(
 	r#"
 SELECT session_id, full_command, shellname, working_directory, hostname, username, exit_status, start_unix_timestamp, end_unix_timestamp
   FROM memdb.show_results sr, command_history h
@@ -471,115 +427,87 @@ SELECT session_id, full_command, shellname, working_directory, hostname, usernam
 ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
 "#)?;
 
-    let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
-        .query_map((), |row| {
-            Ok(pxh::InvocationExport {
-                session_id: row.get("session_id")?,
-                full_command: row.get("full_command")?,
-                shellname: row.get("shellname")?,
-                working_directory: row.get("working_directory")?,
-                hostname: row.get("hostname")?,
-                username: row.get("username")?,
-                exit_status: row.get("exit_status")?,
-                start_unix_timestamp: row.get("start_unix_timestamp")?,
-                end_unix_timestamp: row.get("end_unix_timestamp")?,
-            })
-        })?
-        .collect();
-    let mut rows = rows?;
-    rows.reverse();
-    if verbose {
-        pxh::present_results_human_readable(
-            &["start_time", "duration", "session", "context", "command"],
-            &rows,
-            suppress_headers,
-        )?;
-    } else {
-        pxh::present_results_human_readable(&["start_time", "command"], &rows, suppress_headers)?;
+        let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
+            .query_map((), |row| {
+                Ok(pxh::InvocationExport {
+                    session_id: row.get("session_id")?,
+                    full_command: row.get("full_command")?,
+                    shellname: row.get("shellname")?,
+                    working_directory: row.get("working_directory")?,
+                    hostname: row.get("hostname")?,
+                    username: row.get("username")?,
+                    exit_status: row.get("exit_status")?,
+                    start_unix_timestamp: row.get("start_unix_timestamp")?,
+                    end_unix_timestamp: row.get("end_unix_timestamp")?,
+                })
+            })?
+            .collect();
+        let mut rows = rows?;
+        rows.reverse();
+        if self.verbose {
+            pxh::present_results_human_readable(
+                &["start_time", "duration", "session", "context", "command"],
+                &rows,
+                self.suppress_headers,
+            )?;
+        } else {
+            pxh::present_results_human_readable(
+                &["start_time", "command"],
+                &rows,
+                self.suppress_headers,
+            )?;
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = PxhArgs::parse();
 
+    let mut conn = pxh::sqlite_connection(&args.db)?;
     match &args.command {
-        Commands::Insert {
-            shellname,
-            hostname,
-            username,
-            working_directory,
-            command,
-            exit_status,
-            start_unix_timestamp,
-            end_unix_timestamp,
-            session_id,
-        } => {
-            let mut conn = sqlite_connection(&args.db)?;
+        Commands::Insert(cmd) => {
             let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
-                command: pxh::BinaryStringHelper::from(pxh::command_as_bytes(command).as_slice()),
-                shellname: shellname.into(),
-                working_directory: working_directory.as_ref().map(pxh::BinaryStringHelper::from),
-                hostname: Some(pxh::BinaryStringHelper::from(hostname)),
-                username: Some(pxh::BinaryStringHelper::from(username)),
-                exit_status: *exit_status,
-                start_unix_timestamp: *start_unix_timestamp,
-                end_unix_timestamp: *end_unix_timestamp,
-                session_id: *session_id,
+                command: pxh::BinaryStringHelper::from(
+                    pxh::command_as_bytes(&cmd.command).as_slice(),
+                ),
+                shellname: cmd.shellname.clone(),
+                working_directory: cmd
+                    .working_directory
+                    .as_ref()
+                    .map(pxh::BinaryStringHelper::from),
+                hostname: Some(pxh::BinaryStringHelper::from(&cmd.hostname)),
+                username: Some(pxh::BinaryStringHelper::from(&cmd.username)),
+                exit_status: cmd.exit_status,
+                start_unix_timestamp: cmd.start_unix_timestamp,
+                end_unix_timestamp: cmd.end_unix_timestamp,
+                session_id: cmd.session_id,
             };
-            insert_subcommand(&tx, &invocation)?;
+            invocation.insert(&tx)?;
             tx.commit()?;
         }
-        Commands::Import { histfile, shellname, hostname, username } => {
-            let invocations = import_subcommand(histfile, shellname, hostname, username)?;
-            let mut conn = sqlite_connection(&args.db)?;
-            insert_invocations(&mut conn, invocations)?;
+        Commands::Import(cmd) => {
+            cmd.go(&mut conn)?;
         }
-        Commands::Export {} => {
-            let mut conn = sqlite_connection(&args.db)?;
-            export_subcommand(&mut conn)?;
+        Commands::Export(cmd) => {
+            cmd.go(&mut conn)?;
         }
-        Commands::Show {
-            limit,
-            substrings,
-            verbose,
-            suppress_headers,
-            here,
-            working_directory,
-            session,
-        } => {
-            let mut conn = sqlite_connection(&args.db)?;
-            let session = if let Some(maybe_session_hex) = session {
-                Some(i64::from_str_radix(maybe_session_hex, 16)?)
-            } else {
-                None
-            };
-            show_subcommand(
-                &mut conn,
-                *verbose,
-                *suppress_headers,
-                *here,
-                session,
-                working_directory.clone(),
-                *limit,
-                substrings,
-            )?;
+        Commands::Show(cmd) => {
+            cmd.go(&mut conn)?;
         }
-        Commands::Seal { session_id, exit_status, end_unix_timestamp } => {
-            let mut conn = sqlite_connection(&args.db)?;
-            seal_subcommand(&mut conn, *session_id, *exit_status, *end_unix_timestamp)?;
+        Commands::Seal(cmd) => {
+            cmd.go(&mut conn)?;
         }
-        Commands::ShellConfig { shellname } => {
-            shell_config_subcommand(shellname)?;
+        Commands::ShellConfig(cmd) => {
+            cmd.go()?;
         }
-        Commands::Install { shellname } => {
-            install_subcommand(shellname)?;
+        Commands::Install(cmd) => {
+            cmd.go()?;
         }
-        Commands::Sync { dirname } => {
-            let mut conn = sqlite_connection(&args.db)?;
-            synchronize(&mut conn, dirname)?;
+        Commands::Sync(cmd) => {
+            cmd.go(&mut conn)?;
         }
     }
     Ok(())

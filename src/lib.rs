@@ -12,11 +12,17 @@ use std::{
     },
     path::{Path, PathBuf},
     str,
+    sync::Arc,
+    time::Duration,
 };
 
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
+use regex::bytes::Regex;
+use rusqlite::{functions::FunctionFlags, Connection, Error, Result, Transaction};
 use serde::{Deserialize, Serialize};
+
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
@@ -87,6 +93,35 @@ impl Default for BinaryStringHelper {
     }
 }
 
+pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
+    let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_millis(100))?;
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "temp_store", "MEMORY")?;
+    conn.pragma_update(None, "cache_size", "16777216")?;
+
+    let schema = include_str!("base_schema.sql");
+    conn.execute_batch(schema)?;
+
+    // From rusqlite::functions example but adapted for non-utf8
+    // regexps.
+    conn.create_scalar_function("regexp", 2, FunctionFlags::SQLITE_DETERMINISTIC, move |ctx| {
+        assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
+        let regexp: Arc<Regex> = ctx
+            .get_or_create_aux(0, |vr| -> Result<_, BoxError> { Ok(Regex::new(vr.as_str()?)?) })?;
+        let is_match = {
+            let text = ctx.get_raw(1).as_bytes().map_err(|e| Error::UserFunctionError(e.into()))?;
+
+            regexp.is_match(text)
+        };
+
+        Ok(is_match)
+    })?;
+
+    Ok(conn)
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Invocation {
     pub command: BinaryStringHelper,
@@ -103,6 +138,43 @@ pub struct Invocation {
 impl Invocation {
     fn sameish(&self, other: &Self) -> bool {
         self.command == other.command && self.start_unix_timestamp == other.start_unix_timestamp
+    }
+
+    pub fn insert(&self, tx: &Transaction) -> Result<(), Box<dyn std::error::Error>> {
+        let command_bytes: Vec<u8> = self.command.to_bytes();
+        let username_bytes = self.username.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
+        let hostname_bytes = self.hostname.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
+        let working_directory_bytes =
+            self.working_directory.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
+
+        tx.execute(
+            r#"
+INSERT INTO command_history (
+    session_id,
+    full_command,
+    shellname,
+    hostname,
+    username,
+    working_directory,
+    exit_status,
+    start_unix_timestamp,
+    end_unix_timestamp
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            (
+                self.session_id,
+                command_bytes.as_slice(),
+                &self.shellname,
+                hostname_bytes,
+                username_bytes,
+                working_directory_bytes,
+                self.exit_status,
+                self.start_unix_timestamp,
+                self.end_unix_timestamp,
+            ),
+        )?;
+
+        Ok(())
     }
 }
 
