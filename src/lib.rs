@@ -40,22 +40,22 @@ pub enum BinaryStringHelper {
 impl BinaryStringHelper {
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
-            BinaryStringHelper::Encoded(b) => b.clone(),
-            BinaryStringHelper::Readable(s) => s.as_bytes().to_vec(),
+            Self::Encoded(b) => b.clone(),
+            Self::Readable(s) => s.as_bytes().to_vec(),
         }
     }
 
     pub fn to_string_lossy(&self) -> String {
         match self {
-            BinaryStringHelper::Encoded(b) => String::from_utf8_lossy(b).to_string(),
-            BinaryStringHelper::Readable(s) => s.clone(),
+            Self::Encoded(b) => String::from_utf8_lossy(b).to_string(),
+            Self::Readable(s) => s.clone(),
         }
     }
 
     pub fn to_os_str(&self) -> OsString {
         match self {
-            BinaryStringHelper::Encoded(b) => OsString::from_vec(b.to_vec()),
-            BinaryStringHelper::Readable(s) => OsString::from(s),
+            Self::Encoded(b) => OsString::from_vec(b.to_vec()),
+            Self::Readable(s) => OsString::from(s),
         }
     }
 }
@@ -63,33 +63,51 @@ impl BinaryStringHelper {
 impl From<&[u8]> for BinaryStringHelper {
     fn from(bytes: &[u8]) -> Self {
         match str::from_utf8(bytes) {
-            Ok(v) => BinaryStringHelper::Readable(v.to_string()),
-            _ => BinaryStringHelper::Encoded(bytes.to_vec()),
+            Ok(v) => Self::Readable(v.to_string()),
+            _ => Self::Encoded(bytes.to_vec()),
         }
+    }
+}
+
+impl From<&Vec<u8>> for BinaryStringHelper {
+    fn from(v: &Vec<u8>) -> Self {
+	Self::from(v.as_slice())
     }
 }
 
 impl From<&OsString> for BinaryStringHelper {
     fn from(osstr: &OsString) -> Self {
-        BinaryStringHelper::from(osstr.as_bytes())
+        Self::from(osstr.as_bytes())
     }
 }
 
 impl From<&OsStr> for BinaryStringHelper {
     fn from(osstr: &OsStr) -> Self {
-        BinaryStringHelper::from(osstr.as_bytes())
+        Self::from(osstr.as_bytes())
     }
 }
 
 impl From<&PathBuf> for BinaryStringHelper {
     fn from(pb: &PathBuf) -> Self {
-        BinaryStringHelper::from(pb.as_path().as_os_str())
+        Self::from(pb.as_path().as_os_str())
+    }
+}
+
+impl<T: From<T>> From<Option<T>> for BinaryStringHelper
+where
+    BinaryStringHelper: From<T>,
+{
+    fn from(t: Option<T>) -> Self {
+        match t {
+            Some(v) => Self::from(v),
+            _ => Self::default(),
+        }
     }
 }
 
 impl Default for BinaryStringHelper {
     fn default() -> Self {
-        BinaryStringHelper::Readable("".to_string())
+        Self::Readable("".to_string())
     }
 }
 
@@ -214,8 +232,8 @@ pub fn import_zsh_history(
                 let invocation = Invocation {
                     command: BinaryStringHelper::from(command),
                     shellname: "zsh".into(),
-                    hostname: Some(BinaryStringHelper::from(hostname.as_bytes())),
-                    username: Some(BinaryStringHelper::from(username.as_bytes())),
+                    hostname: Some(BinaryStringHelper::from(&hostname)),
+                    username: Some(BinaryStringHelper::from(&username)),
                     start_unix_timestamp: Some(start_unix_timestamp),
                     end_unix_timestamp: Some(
                         start_unix_timestamp + str::from_utf8(duration_seconds)?.parse::<i64>()?,
@@ -262,8 +280,8 @@ pub fn import_bash_history(
         let invocation = Invocation {
             command: BinaryStringHelper::from(line),
             shellname: "bash".into(),
-            hostname: Some(BinaryStringHelper::from(hostname.as_bytes())),
-            username: Some(BinaryStringHelper::from(username.as_bytes())),
+            hostname: Some(BinaryStringHelper::from(&hostname)),
+            username: Some(BinaryStringHelper::from(&username)),
             start_unix_timestamp: last_ts,
             session_id,
             ..Default::default()
@@ -313,14 +331,14 @@ pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::
     let invocations: Vec<Invocation> = rows
         .iter()
         .map(|row| Invocation {
-            command: BinaryStringHelper::from(row.full_command.as_slice()),
+            command: BinaryStringHelper::from(&row.full_command),
             shellname: row.shellname.clone(),
-            hostname: row.hostname.as_ref().map(|v| BinaryStringHelper::from(v.as_slice())),
-            username: row.username.as_ref().map(|v| BinaryStringHelper::from(v.as_slice())),
+            hostname: row.hostname.as_ref().map(BinaryStringHelper::from),
+            username: row.username.as_ref().map(BinaryStringHelper::from),
             working_directory: row
                 .working_directory
                 .as_ref()
-                .map(|v| BinaryStringHelper::from(v.as_slice())),
+                .map(BinaryStringHelper::from),
             exit_status: row.exit_status,
             start_unix_timestamp: row.start_unix_timestamp,
             end_unix_timestamp: row.end_unix_timestamp,
@@ -409,10 +427,9 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
             header: "Context",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
-                let row_hostname = match &row.hostname {
-                    None => return String::new(),
-                    Some(v) => BinaryStringHelper::from(v.as_slice()),
-                };
+                let row_hostname = BinaryStringHelper::from(
+                    row.hostname.as_ref()
+                );
                 let mut ret = String::new();
                 if current_hostname != row_hostname.to_os_str() {
                     write!(ret, "{}:", row_hostname.to_string_lossy()).unwrap_or_default();
