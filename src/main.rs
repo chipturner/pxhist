@@ -465,9 +465,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let args = PxhArgs::parse();
 
-    let mut conn = pxh::sqlite_connection(&args.db)?;
+    // TODO: refactor the sqlite_connection out below cleanly somehow
     match &args.command {
+        Commands::ShellConfig(cmd) => {
+            cmd.go()?;
+        }
+        Commands::Install(cmd) => {
+            cmd.go()?;
+        }
+        Commands::Import(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn)?;
+        }
+        Commands::Export(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn)?;
+        }
+        Commands::Show(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn)?;
+        }
+        Commands::Seal(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn)?;
+        }
+        Commands::Sync(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn)?;
+        }
         Commands::Insert(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
             let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
                 command: pxh::BinaryStringHelper::from(&cmd.command.join(OsStr::new(" "))),
@@ -485,27 +512,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             invocation.insert(&tx)?;
             tx.commit()?;
-        }
-        Commands::Import(cmd) => {
-            cmd.go(&mut conn)?;
-        }
-        Commands::Export(cmd) => {
-            cmd.go(&mut conn)?;
-        }
-        Commands::Show(cmd) => {
-            cmd.go(&mut conn)?;
-        }
-        Commands::Seal(cmd) => {
-            cmd.go(&mut conn)?;
-        }
-        Commands::ShellConfig(cmd) => {
-            cmd.go()?;
-        }
-        Commands::Install(cmd) => {
-            cmd.go()?;
-        }
-        Commands::Sync(cmd) => {
-            cmd.go(&mut conn)?;
         }
     }
     Ok(())
