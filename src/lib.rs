@@ -71,7 +71,7 @@ impl From<&[u8]> for BinaryStringHelper {
 
 impl From<&Vec<u8>> for BinaryStringHelper {
     fn from(v: &Vec<u8>) -> Self {
-	Self::from(v.as_slice())
+        Self::from(v.as_slice())
     }
 }
 
@@ -98,10 +98,7 @@ where
     BinaryStringHelper: From<T>,
 {
     fn from(t: Option<T>) -> Self {
-        match t {
-            Some(v) => Self::from(v),
-            _ => Self::default(),
-        }
+        t.map_or_else(Self::default, Self::from)
     }
 }
 
@@ -335,10 +332,7 @@ pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::
             shellname: row.shellname.clone(),
             hostname: row.hostname.as_ref().map(BinaryStringHelper::from),
             username: row.username.as_ref().map(BinaryStringHelper::from),
-            working_directory: row
-                .working_directory
-                .as_ref()
-                .map(BinaryStringHelper::from),
+            working_directory: row.working_directory.as_ref().map(BinaryStringHelper::from),
             exit_status: row.exit_status,
             start_unix_timestamp: row.start_unix_timestamp,
             end_unix_timestamp: row.end_unix_timestamp,
@@ -427,9 +421,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
             header: "Context",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
-                let row_hostname = BinaryStringHelper::from(
-                    row.hostname.as_ref()
-                );
+                let row_hostname = BinaryStringHelper::from(row.hostname.as_ref());
                 let mut ret = String::new();
                 if current_hostname != row_hostname.to_os_str() {
                     write!(ret, "{}:", row_hostname.to_string_lossy()).unwrap_or_default();
