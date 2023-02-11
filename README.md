@@ -50,6 +50,23 @@ $ pxh s ffmpeg
 ...
 ```
 
+### Use case: seeing examples of history grepping pxh can simplify
+
+Since _pxh_ was created to simplify history searching, if you tended
+to perform sequences of `history | grep ...` it may be useful to map
+those solutions to _pxh_ invocations:
+
+``` bash
+$ pxh s -v history grep
+ Start                Command
+ 2011-08-24 14:51:48  history | grep port | grep install
+ 2012-11-04 09:52:24  history | tail -50 | grep rm
+ 2013-02-02 23:45:06  history | grep ec2-descr
+ 2013-03-27 17:00:42  history | grep qemu
+ 2020-04-02 10:12:52  history | grep gphotos-sync | grep pip
+ 2021-03-29 09:14:34  history | grep squashfuse | grep -i release
+```
+
 ### Use case: exploring project-relative history commands
 
 Since _pxh_ tracks the directory you issue a command in, and since
@@ -77,7 +94,7 @@ You can view additional details such as the host, directory, duration,
 and exit code with the `-v` flag
 
 ``` bash
-pxh s -v cargo build
+$ pxh s -v cargo build
  Start                Duration  Session       Context                                           Command
 ...
  2023-02-06 22:10:20  1s        116ef63fc226  .                                                 cargo build --release
@@ -85,8 +102,8 @@ pxh s -v cargo build
  2023-02-07 05:50:02  0s        ee6e1989f3da  /home/chip                                        cargo build --release
  2023-02-07 06:32:04  37s       ee6e1989f3da  .                                                 cargo build --release
 ...
- ```
- 
+```
+
 ### Use case: ergonomic, intuitive search
 
 _pxh_ does the intuitive thing when given multiple search filters: it
@@ -198,6 +215,9 @@ begin and end.
 - P0: output commands "around" a timestamp (before, after,
   bracketing), like grep -C; bracket by time and number of commands,
   but be session aware
+- P1: add option for space-separated parameters to be matched in any
+  order (i.e., rather than join with `.*\s.*` do the equivalent of
+  `history | grep A | grep B`)
 - P1: expose column names as a `show` option to control output fields
   and order
 - P2: colorize output?  parts where regex matches in addition to columns
