@@ -251,21 +251,8 @@ SELECT session_id, full_command, shellname, hostname, username, working_director
   FROM command_history h
 ORDER BY id"#,
     )?;
-        let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
-            .query_map([], |row| {
-                Ok(pxh::InvocationExport {
-                    session_id: row.get("session_id")?,
-                    full_command: row.get("full_command")?,
-                    shellname: row.get("shellname")?,
-                    hostname: row.get("hostname")?,
-                    username: row.get("username")?,
-                    working_directory: row.get("working_directory")?,
-                    exit_status: row.get("exit_status")?,
-                    start_unix_timestamp: row.get("start_unix_timestamp")?,
-                    end_unix_timestamp: row.get("end_unix_timestamp")?,
-                })
-            })?
-            .collect();
+        let rows: Result<Vec<pxh::InvocationDatabaseRow>, _> =
+            stmt.query_map([], pxh::InvocationDatabaseRow::from_row)?.collect();
         let rows = rows?;
         pxh::json_export(&rows)?;
         Ok(())
@@ -426,21 +413,8 @@ SELECT session_id, full_command, shellname, working_directory, hostname, usernam
 ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
 "#)?;
 
-        let rows: Result<Vec<pxh::InvocationExport>, _> = stmt
-            .query_map((), |row| {
-                Ok(pxh::InvocationExport {
-                    session_id: row.get("session_id")?,
-                    full_command: row.get("full_command")?,
-                    shellname: row.get("shellname")?,
-                    working_directory: row.get("working_directory")?,
-                    hostname: row.get("hostname")?,
-                    username: row.get("username")?,
-                    exit_status: row.get("exit_status")?,
-                    start_unix_timestamp: row.get("start_unix_timestamp")?,
-                    end_unix_timestamp: row.get("end_unix_timestamp")?,
-                })
-            })?
-            .collect();
+        let rows: Result<Vec<pxh::InvocationDatabaseRow>, _> =
+            stmt.query_map([], pxh::InvocationDatabaseRow::from_row)?.collect();
         let mut rows = rows?;
         rows.reverse();
         if self.verbose {

@@ -19,7 +19,7 @@ use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
 use regex::bytes::Regex;
-use rusqlite::{functions::FunctionFlags, Connection, Error, Result, Transaction};
+use rusqlite::{functions::FunctionFlags, Connection, Error, Result, Row, Transaction};
 use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -226,9 +226,9 @@ fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
     }
 }
 
-pub struct InvocationExport {
+pub struct InvocationDatabaseRow {
     pub session_id: i64,
-    pub full_command: Vec<u8>,
+    pub command: Vec<u8>,
     pub shellname: String,
     pub working_directory: Option<Vec<u8>>,
     pub hostname: Option<Vec<u8>>,
@@ -238,21 +238,89 @@ pub struct InvocationExport {
     pub end_unix_timestamp: Option<i64>,
 }
 
-pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::Error>> {
-    let invocations: Vec<Invocation> = rows
-        .iter()
-        .map(|row| Invocation {
-            command: BString::from(row.full_command.as_slice()),
+impl InvocationDatabaseRow {
+    pub fn from_row(row: &Row) -> Result<Self, Error> {
+        Ok(InvocationDatabaseRow {
+            session_id: row.get("session_id")?,
+            command: row.get("full_command")?,
+            shellname: row.get("shellname")?,
+            working_directory: row.get("working_directory")?,
+            hostname: row.get("hostname")?,
+            username: row.get("username")?,
+            exit_status: row.get("exit_status")?,
+            start_unix_timestamp: row.get("start_unix_timestamp")?,
+            end_unix_timestamp: row.get("end_unix_timestamp")?,
+        })
+    }
+}
+
+// Create a pretty export string that gets serialized as an array of
+// bytes only if it isn't valid UTF-8; this makes the json export
+// prettier.
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+enum PrettyExportString {
+    Readable(String),
+    Encoded(Vec<u8>),
+}
+
+impl From<&[u8]> for PrettyExportString {
+    fn from(bytes: &[u8]) -> Self {
+        match str::from_utf8(bytes) {
+            Ok(v) => Self::Readable(v.to_string()),
+            _ => Self::Encoded(bytes.to_vec()),
+        }
+    }
+}
+
+impl From<Option<&Vec<u8>>> for PrettyExportString {
+    fn from(bytes: Option<&Vec<u8>>) -> Self {
+        // TODO: make this pretty
+        if let Some(v) = bytes {
+            match str::from_utf8(v.as_slice()) {
+                Ok(v) => Self::Readable(v.to_string()),
+                _ => Self::Encoded(v.to_vec()),
+            }
+        } else {
+            PrettyExportString::Readable("".to_string())
+        }
+    }
+}
+
+// A copy of Invocation byt witgh PrettyExportString instead of
+// BString; TODO: reconcile into one class perhaps?
+#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
+struct InvocationJsonExporter {
+    session_id: i64,
+    command: PrettyExportString,
+    shellname: String,
+    working_directory: PrettyExportString,
+    hostname: PrettyExportString,
+    username: PrettyExportString,
+    exit_status: Option<i64>,
+    start_unix_timestamp: Option<i64>,
+    end_unix_timestamp: Option<i64>,
+}
+
+impl InvocationJsonExporter {
+    fn new(row: &InvocationDatabaseRow) -> Self {
+        Self {
+            session_id: row.session_id,
+            command: row.command.as_slice().into(),
             shellname: row.shellname.clone(),
-            hostname: row.hostname.clone().map(|v| BString::from(v.as_slice())),
-            username: row.username.clone().map(|v| BString::from(v.as_slice())),
-            working_directory: row.working_directory.clone().map(|v| BString::from(v.as_slice())),
+            working_directory: row.working_directory.as_ref().into(),
+            hostname: row.hostname.as_ref().into(),
+            username: row.username.as_ref().into(),
             exit_status: row.exit_status,
             start_unix_timestamp: row.start_unix_timestamp,
             end_unix_timestamp: row.end_unix_timestamp,
-            session_id: row.session_id,
-        })
-        .collect();
+        }
+    }
+}
+
+pub fn json_export(rows: &[InvocationDatabaseRow]) -> Result<(), Box<dyn std::error::Error>> {
+    let invocations: Vec<InvocationJsonExporter> =
+        rows.iter().map(InvocationJsonExporter::new).collect();
     serde_json::to_writer(io::stdout(), &invocations)?;
     Ok(())
 }
@@ -261,7 +329,7 @@ pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::
 
 struct QueryResultColumnDisplayer {
     header: &'static str,
-    displayer: Box<dyn Fn(&InvocationExport) -> String>,
+    displayer: Box<dyn Fn(&InvocationDatabaseRow) -> String>,
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
@@ -283,7 +351,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "command",
         QueryResultColumnDisplayer {
             header: "Command",
-            displayer: Box::new(|row| binary_display_helper(&row.full_command)),
+            displayer: Box::new(|row| binary_display_helper(&row.command)),
         },
     );
     ret.insert(
@@ -360,7 +428,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
 
 pub fn present_results_human_readable(
     fields: &[&str],
-    rows: &[InvocationExport],
+    rows: &[InvocationDatabaseRow],
     suppress_headers: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let displayers = displayers();
