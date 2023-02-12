@@ -96,6 +96,12 @@ struct ImportCommand {
 #[derive(Parser, Debug)]
 struct SyncCommand {
     dirname: PathBuf,
+    #[clap(
+        long,
+        help = "Only export the current database; do not read other databases",
+        default_value_t = false
+    )]
+    export_only: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -276,14 +282,16 @@ impl SyncCommand {
         let output_path_str =
             output_path.to_str().ok_or("Unable to represent output filename as a string")?;
 
-        let entries = fs::read_dir(&self.dirname)?;
-        let db_extension = OsStr::new("db");
-        for entry in entries {
-            let path = entry?.path();
-            if path.extension() == Some(db_extension) && output_path != path {
-                print!("Syncing from {}...", path.to_string_lossy());
-                let (other_count, after_count) = Self::merge_into(conn, path)?;
-                println!("done, considered {other_count} rows and added {after_count}");
+        if !self.export_only {
+            let entries = fs::read_dir(&self.dirname)?;
+            let db_extension = OsStr::new("db");
+            for entry in entries {
+                let path = entry?.path();
+                if path.extension() == Some(db_extension) && output_path != path {
+                    print!("Syncing from {}...", path.to_string_lossy());
+                    let (other_count, after_count) = Self::merge_into(conn, path)?;
+                    println!("done, considered {other_count} rows and added {after_count}");
+                }
             }
         }
 
@@ -291,10 +299,15 @@ impl SyncCommand {
         // TODO: save to temp filename, rename over after vacuum succeeds.
         let _unused = fs::remove_file(&output_path);
         conn.execute("VACUUM INTO ?", (output_path_str,))?;
-        println!("Saved merged database to {output_path_str}");
+	if self.export_only {
+            println!("Backed-up database to {output_path_str}");
+	} else {
+            println!("Saved merged database to {output_path_str}");
+	}
 
         Ok(())
     }
+
     // Merge history from the file specified in `path` into the current
     // history database.
     fn merge_into(
