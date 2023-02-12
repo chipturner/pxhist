@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     env,
-    ffi::{OsStr, OsString},
     fmt::Write,
     fs::File,
     io,
@@ -16,6 +15,7 @@ use std::{
     time::Duration,
 };
 
+use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
 use regex::bytes::Regex;
@@ -26,86 +26,8 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
-pub fn get_hostname() -> OsString {
-    hostname::get().unwrap_or_else(|_| OsString::new())
-}
-
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-#[serde(untagged)]
-pub enum BinaryStringHelper {
-    Readable(String),
-    Encoded(Vec<u8>),
-}
-
-impl BinaryStringHelper {
-    pub fn to_bytes(&self) -> Vec<u8> {
-        match self {
-            Self::Encoded(b) => b.clone(),
-            Self::Readable(s) => s.as_bytes().to_vec(),
-        }
-    }
-
-    pub fn to_string_lossy(&self) -> String {
-        match self {
-            Self::Encoded(b) => String::from_utf8_lossy(b).to_string(),
-            Self::Readable(s) => s.clone(),
-        }
-    }
-
-    pub fn to_os_str(&self) -> OsString {
-        match self {
-            Self::Encoded(b) => OsString::from_vec(b.to_vec()),
-            Self::Readable(s) => OsString::from(s),
-        }
-    }
-}
-
-impl From<&[u8]> for BinaryStringHelper {
-    fn from(bytes: &[u8]) -> Self {
-        match str::from_utf8(bytes) {
-            Ok(v) => Self::Readable(v.to_string()),
-            _ => Self::Encoded(bytes.to_vec()),
-        }
-    }
-}
-
-impl From<&Vec<u8>> for BinaryStringHelper {
-    fn from(v: &Vec<u8>) -> Self {
-        Self::from(v.as_slice())
-    }
-}
-
-impl From<&OsString> for BinaryStringHelper {
-    fn from(osstr: &OsString) -> Self {
-        Self::from(osstr.as_bytes())
-    }
-}
-
-impl From<&OsStr> for BinaryStringHelper {
-    fn from(osstr: &OsStr) -> Self {
-        Self::from(osstr.as_bytes())
-    }
-}
-
-impl From<&PathBuf> for BinaryStringHelper {
-    fn from(pb: &PathBuf) -> Self {
-        Self::from(pb.as_path().as_os_str())
-    }
-}
-
-impl<T: From<T>> From<Option<T>> for BinaryStringHelper
-where
-    BinaryStringHelper: From<T>,
-{
-    fn from(t: Option<T>) -> Self {
-        t.map_or_else(Self::default, Self::from)
-    }
-}
-
-impl Default for BinaryStringHelper {
-    fn default() -> Self {
-        Self::Readable("".to_string())
-    }
+pub fn get_hostname() -> BString {
+    hostname::get().unwrap_or_default().as_bytes().into()
 }
 
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
@@ -139,11 +61,11 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Invocation {
-    pub command: BinaryStringHelper,
+    pub command: BString,
     pub shellname: String,
-    pub working_directory: Option<BinaryStringHelper>,
-    pub hostname: Option<BinaryStringHelper>,
-    pub username: Option<BinaryStringHelper>,
+    pub working_directory: Option<BString>,
+    pub hostname: Option<BString>,
+    pub username: Option<BString>,
     pub exit_status: Option<i64>,
     pub start_unix_timestamp: Option<i64>,
     pub end_unix_timestamp: Option<i64>,
@@ -156,12 +78,6 @@ impl Invocation {
     }
 
     pub fn insert(&self, tx: &Transaction) -> Result<(), Box<dyn std::error::Error>> {
-        let command_bytes: Vec<u8> = self.command.to_bytes();
-        let username_bytes = self.username.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
-        let hostname_bytes = self.hostname.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
-        let working_directory_bytes =
-            self.working_directory.as_ref().map_or_else(Vec::new, |v| v.to_bytes());
-
         tx.execute(
             r#"
 INSERT INTO command_history (
@@ -178,11 +94,11 @@ INSERT INTO command_history (
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             (
                 self.session_id,
-                command_bytes.as_slice(),
-                &self.shellname,
-                hostname_bytes,
-                username_bytes,
-                working_directory_bytes,
+                self.command.as_slice(),
+                self.shellname.clone(),
+                self.hostname.as_ref().map(|v| v.to_vec()),
+                self.username.as_ref().map(|v| v.to_vec()),
+                self.working_directory.as_ref().map(|v| v.to_vec()),
                 self.exit_status,
                 self.start_unix_timestamp,
                 self.end_unix_timestamp,
@@ -205,17 +121,16 @@ fn generate_import_session_id(histfile: &Path) -> i64 {
 
 pub fn import_zsh_history(
     histfile: &Path,
-    hostname: Option<&OsString>,
-    username: Option<&OsString>,
+    hostname: Option<BString>,
+    username: Option<BString>,
 ) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
     let mut f = File::open(histfile)?;
     let mut buf = Vec::new();
     let _ = f.read_to_end(&mut buf)?;
     let username = username
-        .cloned()
-        .or_else(users::get_current_username)
-        .unwrap_or_else(|| OsString::from("unknown"));
-    let hostname = hostname.cloned().unwrap_or_else(get_hostname);
+        .or_else(|| users::get_current_username().map(|v| BString::from(v.into_vec())))
+        .unwrap_or_else(|| BString::from("unknown"));
+    let hostname = hostname.unwrap_or_else(get_hostname);
     let buf_iter = buf.split(|&ch| ch == b'\n');
 
     let mut ret = vec![];
@@ -227,10 +142,10 @@ pub fn import_zsh_history(
             {
                 let start_unix_timestamp = str::from_utf8(&start_time[1..])?.parse::<i64>()?; // 1.. is to skip the leading space!
                 let invocation = Invocation {
-                    command: BinaryStringHelper::from(command),
+                    command: BString::from(command),
                     shellname: "zsh".into(),
-                    hostname: Some(BinaryStringHelper::from(&hostname)),
-                    username: Some(BinaryStringHelper::from(&username)),
+                    hostname: Some(BString::from(hostname.as_bytes())),
+                    username: Some(BString::from(username.as_bytes())),
                     start_unix_timestamp: Some(start_unix_timestamp),
                     end_unix_timestamp: Some(
                         start_unix_timestamp + str::from_utf8(duration_seconds)?.parse::<i64>()?,
@@ -249,17 +164,16 @@ pub fn import_zsh_history(
 
 pub fn import_bash_history(
     histfile: &Path,
-    hostname: Option<&OsString>,
-    username: Option<&OsString>,
+    hostname: Option<BString>,
+    username: Option<BString>,
 ) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
     let mut f = File::open(histfile)?;
     let mut buf = Vec::new();
     let _ = f.read_to_end(&mut buf)?;
     let username = username
-        .cloned()
-        .or_else(users::get_current_username)
-        .unwrap_or_else(|| OsString::from("unknown"));
-    let hostname = hostname.cloned().unwrap_or_else(get_hostname);
+        .or_else(|| users::get_current_username().map(|v| BString::from(v.as_bytes())))
+        .unwrap_or_else(|| BString::from("unknown"));
+    let hostname = hostname.unwrap_or_else(get_hostname);
     let buf_iter = buf.split(|&ch| ch == b'\n').filter(|l| !l.is_empty());
 
     let mut ret = vec![];
@@ -275,10 +189,10 @@ pub fn import_bash_history(
             }
         }
         let invocation = Invocation {
-            command: BinaryStringHelper::from(line),
+            command: BString::from(line),
             shellname: "bash".into(),
-            hostname: Some(BinaryStringHelper::from(&hostname)),
-            username: Some(BinaryStringHelper::from(&username)),
+            hostname: Some(BString::from(hostname.as_bytes())),
+            username: Some(BString::from(username.as_bytes())),
             start_unix_timestamp: last_ts,
             session_id,
             ..Default::default()
@@ -328,11 +242,11 @@ pub fn json_export(rows: &[InvocationExport]) -> Result<(), Box<dyn std::error::
     let invocations: Vec<Invocation> = rows
         .iter()
         .map(|row| Invocation {
-            command: BinaryStringHelper::from(&row.full_command),
+            command: BString::from(row.full_command.as_slice()),
             shellname: row.shellname.clone(),
-            hostname: row.hostname.as_ref().map(BinaryStringHelper::from),
-            username: row.username.as_ref().map(BinaryStringHelper::from),
-            working_directory: row.working_directory.as_ref().map(BinaryStringHelper::from),
+            hostname: row.hostname.clone().map(|v| BString::from(v.as_slice())),
+            username: row.username.clone().map(|v| BString::from(v.as_slice())),
+            working_directory: row.working_directory.clone().map(|v| BString::from(v.as_slice())),
             exit_status: row.exit_status,
             start_unix_timestamp: row.start_unix_timestamp,
             end_unix_timestamp: row.end_unix_timestamp,
@@ -421,10 +335,10 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
             header: "Context",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
-                let row_hostname = BinaryStringHelper::from(row.hostname.as_ref());
+                let row_hostname = row.hostname.clone().map(BString::from).unwrap_or_default();
                 let mut ret = String::new();
-                if current_hostname != row_hostname.to_os_str() {
-                    write!(ret, "{}:", row_hostname.to_string_lossy()).unwrap_or_default();
+                if current_hostname != row_hostname {
+                    write!(ret, "{row_hostname}:").unwrap_or_default();
                 }
                 let current_directory = env::current_dir().unwrap_or_default();
                 ret.push_str(&row.working_directory.as_ref().map_or_else(String::new, |v| {

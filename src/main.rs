@@ -5,10 +5,12 @@ use std::{
     fs::{File, OpenOptions},
     io,
     io::{BufRead, BufReader, Write},
+    os::unix::ffi::{OsStrExt, OsStringExt},
     path::PathBuf,
     str,
 };
 
+use bstr::{BString, ByteSlice};
 use clap::{Parser, Subcommand};
 use rusqlite::{Connection, Result};
 
@@ -140,13 +142,13 @@ impl ImportCommand {
         let invocations = match self.shellname.as_ref() {
             "zsh" => pxh::import_zsh_history(
                 &self.histfile,
-                self.hostname.as_ref(),
-                self.username.as_ref(),
+                self.hostname.as_ref().map(|v| v.as_bytes().into()),
+                self.username.as_ref().map(|v| v.as_bytes().into()),
             ),
             "bash" => pxh::import_bash_history(
                 &self.histfile,
-                self.hostname.as_ref(),
-                self.username.as_ref(),
+                self.hostname.as_ref().map(|v| v.as_bytes().into()),
+                self.username.as_ref().map(|v| v.as_bytes().into()),
             ),
             "json" => pxh::import_json_history(&self.histfile),
             _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", self.shellname))),
@@ -280,11 +282,11 @@ impl SyncCommand {
             fs::create_dir(&self.dirname)?;
         }
         let mut output_path = self.dirname.clone();
-        output_path.push(pxh::get_hostname());
+        output_path.push(pxh::get_hostname().to_path_lossy());
         output_path.set_extension("db");
         // TODO: vacuum seems to want a plain text path, unlike ATTACH
-        // above, so we can't use BinaryStringHelper to get a vec<u8>.
-        // Look into why this is and if there is a workaround.
+        // above, so we can't use BString to get a vec<u8>.  Look into
+        // why this is and if there is a workaround.
         let output_path_str =
             output_path.to_str().ok_or("Unable to represent output filename as a string")?;
 
@@ -316,10 +318,7 @@ impl SyncCommand {
         let tx = conn.transaction()?;
         let before_count: u64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
-        tx.execute(
-            "ATTACH DATABASE ? AS other",
-            (pxh::BinaryStringHelper::from(&path).to_bytes(),),
-        )?;
+        tx.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
         let other_count: u64 = tx
             .prepare("SELECT COUNT(*) FROM other.command_history")?
             .query_row((), |r| r.get(0))?;
@@ -497,14 +496,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut conn = pxh::sqlite_connection(&args.db)?;
             let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
-                command: pxh::BinaryStringHelper::from(&cmd.command.join(OsStr::new(" "))),
+                command: cmd.command.join(OsStr::new(" ")).as_bytes().into(),
                 shellname: cmd.shellname.clone(),
                 working_directory: cmd
                     .working_directory
                     .as_ref()
-                    .map(pxh::BinaryStringHelper::from),
-                hostname: Some(pxh::BinaryStringHelper::from(&cmd.hostname)),
-                username: Some(pxh::BinaryStringHelper::from(&cmd.username)),
+                    .map(|v| BString::from(v.as_path().as_os_str().as_bytes())),
+                hostname: Some(BString::from(cmd.hostname.clone().into_vec())),
+                username: Some(BString::from(cmd.username.clone().into_vec())),
                 exit_status: cmd.exit_status,
                 start_unix_timestamp: cmd.start_unix_timestamp,
                 end_unix_timestamp: cmd.end_unix_timestamp,

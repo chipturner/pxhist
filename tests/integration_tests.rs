@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf};
 
 use assert_cmd::Command;
+use bstr::BString;
 use tempfile::TempDir;
 
 // Simple struct and helpers for invoking pxh with a given testdb.
@@ -161,7 +162,7 @@ fn test_insert_seal_roundtrip() {
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     assert_eq!(invocations.len(), commands.len());
     for (idx, val) in invocations.iter().enumerate() {
-        assert_eq!(val.command.to_string_lossy(), commands[idx]);
+        assert_eq!(val.command, commands[idx]);
     }
 }
 
@@ -169,9 +170,9 @@ fn test_insert_seal_roundtrip() {
 // a bit of a torture test of non-utf8 data, spaces, etc.
 fn matches_expected_history(invocations: &[pxh::Invocation]) {
     let expected = vec![
-        pxh::BinaryStringHelper::Readable(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
-        pxh::BinaryStringHelper::Readable("fd zsh".to_string()),
-        pxh::BinaryStringHelper::Encoded(
+        BString::from(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
+        BString::from("fd zsh".to_string()),
+        BString::from(
             [101, 99, 104, 111, 32, 0xf0, 0xce, 0xb1, 0xce, 0xa5, 0xef, 0xbd, 0xa9].to_vec(),
         ),
     ];
