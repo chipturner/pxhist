@@ -1,4 +1,4 @@
-# pxhist
+# pxh
 Portable, extensible history manager for interactive shells and other
 REPL tools (pxh for short).
 

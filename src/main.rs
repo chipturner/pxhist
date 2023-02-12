@@ -28,7 +28,7 @@ struct PxhArgs {
 enum Commands {
     #[clap(visible_alias = "s", about = "search for and display history entries")]
     Show(ShowCommand),
-    #[clap(about = "install pxhist helpers by modifying your shell rc file")]
+    #[clap(about = "install pxh helpers by modifying your shell rc file")]
     Install(InstallCommand),
     #[clap(about = "import history entries from your existing shell history or from an export")]
     Import(ImportCommand),
@@ -259,9 +259,8 @@ ORDER BY id"#,
     }
 }
 
-// Merge all (hopefully) pxhist files ending in .db in the specified
-// path into the current database, then write an output with our
-// hostname.
+// Merge all (hopefully) pxh files ending in .db in the specified path
+// into the current database, then write an output with our hostname.
 
 impl SyncCommand {
     fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
