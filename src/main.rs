@@ -299,11 +299,11 @@ impl SyncCommand {
         // TODO: save to temp filename, rename over after vacuum succeeds.
         let _unused = fs::remove_file(&output_path);
         conn.execute("VACUUM INTO ?", (output_path_str,))?;
-	if self.export_only {
+        if self.export_only {
             println!("Backed-up database to {output_path_str}");
-	} else {
+        } else {
             println!("Saved merged database to {output_path_str}");
-	}
+        }
 
         Ok(())
     }
