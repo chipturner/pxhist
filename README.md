@@ -207,17 +207,9 @@ This tool embeds the very useful
 provides very zsh-like extensions for Bash to track when commands
 begin and end.
 
-## TODO
+## TODO / Ideas
 
 ### Usability / UX
-- P0: Create github action release automation
-- P0: Publish periodic releases to crates.io
-- P0: output commands "around" a timestamp (before, after,
-  bracketing), like grep -C; bracket by time and number of commands,
-  but be session aware
-- P1: add option for space-separated parameters to be matched in any
-  order (i.e., rather than join with `.*\s.*` do the equivalent of
-  `history | grep A | grep B`)
 - P1: expose column names as a `show` option to control output fields
   and order
 - P2: colorize output?  parts where regex matches in addition to columns
@@ -231,8 +223,7 @@ begin and end.
 - P3: stats subcommand to show some interesting data
 
 ### Extensions
-- P1: more shell support
-  - P1: fish?
+- P2: more shell support
   - P2: and then non-shells like mysql, python, gdb, sqlite_history
     ...
 - P3: explore using _pxh_ for interactive shell incremental history
