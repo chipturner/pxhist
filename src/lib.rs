@@ -136,27 +136,24 @@ pub fn import_zsh_history(
     let mut ret = vec![];
     let session_id = generate_import_session_id(histfile);
     for line in buf_iter {
-        if let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() {
-            if let Some((_skip, start_time, duration_seconds)) =
-                fields.splitn(3, |&ch| ch == b':').collect_tuple()
-            {
-                let start_unix_timestamp = str::from_utf8(&start_time[1..])?.parse::<i64>()?; // 1.. is to skip the leading space!
-                let invocation = Invocation {
-                    command: BString::from(command),
-                    shellname: "zsh".into(),
-                    hostname: Some(BString::from(hostname.as_bytes())),
-                    username: Some(BString::from(username.as_bytes())),
-                    start_unix_timestamp: Some(start_unix_timestamp),
-                    end_unix_timestamp: Some(
-                        start_unix_timestamp + str::from_utf8(duration_seconds)?.parse::<i64>()?,
-                    ),
-                    session_id,
-                    ..Default::default()
-                };
+        let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() else { continue };
+        let Some((_skip, start_time, duration_seconds)) =
+            fields.splitn(3, |&ch| ch == b':').collect_tuple() else { continue } ;
+        let start_unix_timestamp = str::from_utf8(&start_time[1..])?.parse::<i64>()?; // 1.. is to skip the leading space!
+        let invocation = Invocation {
+            command: BString::from(command),
+            shellname: "zsh".into(),
+            hostname: Some(BString::from(hostname.as_bytes())),
+            username: Some(BString::from(username.as_bytes())),
+            start_unix_timestamp: Some(start_unix_timestamp),
+            end_unix_timestamp: Some(
+                start_unix_timestamp + str::from_utf8(duration_seconds)?.parse::<i64>()?,
+            ),
+            session_id,
+            ..Default::default()
+        };
 
-                ret.push(invocation);
-            }
-        }
+        ret.push(invocation);
     }
 
     Ok(dedup_invocations(ret))
@@ -212,18 +209,16 @@ pub fn import_json_history(histfile: &Path) -> Result<Vec<Invocation>, Box<dyn s
 
 fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
     let mut it = invocations.into_iter();
-    match it.next() {
-        Some(first) => {
-            let mut ret = vec![first];
-            for elem in it {
-                if !elem.sameish(ret.last().unwrap()) {
-                    ret.push(elem);
-                }
-            }
-            ret
+    let Some(first) = it.next() else {
+	return vec![]
+    };
+    let mut ret = vec![first];
+    for elem in it {
+        if !elem.sameish(ret.last().unwrap()) {
+            ret.push(elem);
         }
-        _ => vec![],
     }
+    ret
 }
 
 pub struct InvocationDatabaseRow {
@@ -438,12 +433,11 @@ pub fn present_results_human_readable(
     if !suppress_headers {
         let mut title_row = prettytable::Row::empty();
         for field in fields {
-            let title = match displayers.get(field) {
-                Some(d) => d.header,
-                None => return Err(Box::from(format!("Invalid 'show' field: {field}"))),
-            };
+            let Some(d) = displayers.get(field) else {
+		return Err(Box::from(format!("Invalid 'show' field: {field}")))
+	    };
 
-            title_row.add_cell(prettytable::Cell::new(title));
+            title_row.add_cell(prettytable::Cell::new(d.header));
         }
         table.set_titles(title_row);
     }
