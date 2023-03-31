@@ -78,7 +78,7 @@ fn test_show_with_here() {
     // Prepare some test data: four commands, three from /dirN and one
     // from wherever the test runs.
     let mut pc = PxhCaller::new();
-    for i in 1..3 {
+    for i in 1..=3 {
         let cmd = format!("insert --shellname s --hostname h --username u --session-id 1 --working-directory /dir{i} test_command_{i}");
         pc.call(cmd).assert().success();
     }
@@ -90,7 +90,7 @@ fn test_show_with_here() {
     let output = pc.call("show --suppress-headers --here").output().unwrap();
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1);
 
-    for i in 1..3 {
+    for i in 1..=3 {
         let cmd =
             format!("show --suppress-headers --here --working-directory /dir{i} test_command_{i}");
         let output = pc.call(cmd).output().unwrap();
@@ -107,7 +107,7 @@ fn test_show_with_loosen() {
 
     // Prepare some test data: three commands of the form test.*xyz
     let mut pc = PxhCaller::new();
-    for i in 1..3 {
+    for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i} xyz"
         );
@@ -116,7 +116,7 @@ fn test_show_with_loosen() {
 
     // Verify we see all three commands with traditional show
     let output = pc.call("show --suppress-headers test xyz").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
 
     // Now verify we see none if we invert the order
     let output = pc.call("show --suppress-headers xyz test").output().unwrap();
@@ -124,7 +124,7 @@ fn test_show_with_loosen() {
 
     // Finally, the real test: loosen makes them show back up again
     let output = pc.call("show --suppress-headers --loosen xyz test").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
 }
 
 #[test]
@@ -136,24 +136,26 @@ fn test_show_with_session_id() {
 
     // Prepare some test data: four commands spread across three sessions.
     let mut pc = PxhCaller::new();
-    for i in 1..3 {
+    for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
         );
         pc.call(cmd).assert().success();
     }
-    let cmd = format!(
-        "insert --shellname s --hostname h --username u --session-id {} test_command_{}",
-        1, 4
-    );
+    let cmd = "insert --shellname s --hostname h --username u --session-id 1 test_command_4";
     pc.call(cmd).assert().success();
 
     // Now make sure we only see the relevant results when we specify
-    // sessions to `show`.
+    // sessions to `show`.  First make sure we see all commands:
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 4);
+
+    // Now two in session 1
     let output = pc.call("show --suppress-headers --session 1").output().unwrap();
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
 
-    for i in 2..3 {
+    // Finally, one in sessions 2 and 3
+    for i in 2..=3 {
         let cmd = format!("show --suppress-headers --session {i}");
         let output = pc.call(cmd).output().unwrap();
         assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1);
