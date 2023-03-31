@@ -78,13 +78,13 @@ struct ShowCommand {
     session: Option<String>,
     #[clap(
         long,
-        help = "if specified, list of substrings can be matched in any order against command lines"
+        help = "if specified, list of patterns can be matched in any order against command lines"
     )]
     loosen: bool,
     #[clap(
         help = "one or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
     )]
-    substrings: Vec<String>,
+    patterns: Vec<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -374,10 +374,10 @@ impl ShowCommand {
         // If we are loosening then just use the first string for the
         // sqlite query.  This requires fetching all matches, however,
         // to properly limit the final count.
-        let substring = if self.loosen {
-            self.substrings.first().map_or_else(String::default, String::clone)
+        let pattern = if self.loosen {
+            self.patterns.first().map_or_else(String::default, String::clone)
         } else {
-            self.substrings.join(".*\\s.*")
+            self.patterns.join(".*\\s.*")
         };
         let limit = if self.limit == 0 || self.loosen { i32::MAX as usize } else { self.limit };
 
@@ -399,7 +399,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ? AND session_id = ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (substring, session_id, limit),
+                (pattern, session_id, limit),
             )?;
         } else if self.here {
             conn.execute(
@@ -411,7 +411,7 @@ SELECT rowid, start_unix_timestamp, id
    AND full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (working_directory.to_string_lossy(), substring, limit),
+                (working_directory.to_string_lossy(), pattern, limit),
             )?;
         } else {
             conn.execute(
@@ -422,7 +422,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (substring, limit),
+                (pattern, limit),
             )?;
         }
 
@@ -439,7 +439,7 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
 "#)?;
 
         let regexes: Result<Vec<Regex>, _> =
-            self.substrings.iter().skip(1).map(|s| Regex::new(s.as_str())).collect();
+            self.patterns.iter().skip(1).map(|s| Regex::new(s.as_str())).collect();
         let regexes = regexes?;
         let rows: Result<Vec<pxh::InvocationDatabaseRow>, _> =
             stmt.query_map([], pxh::InvocationDatabaseRow::from_row)?.collect();
