@@ -12,6 +12,7 @@ use std::{
 
 use bstr::{BString, ByteSlice};
 use clap::{Parser, Subcommand};
+use regex::bytes::Regex;
 use rusqlite::{Connection, Result};
 
 #[derive(Parser, Debug)]
@@ -58,7 +59,7 @@ struct ShowCommand {
         default_value_t = 50,
         help = "display at most this many entries; 0 for unlimited"
     )]
-    limit: i32,
+    limit: usize,
     #[clap(short, long, help = "display extra fields in the output")]
     verbose: bool,
     #[clap(long, help = "suppress headers")]
@@ -75,6 +76,11 @@ struct ShowCommand {
         help = "display only commands from the specified session (use $PXH_SESSION_ID for this session)"
     )]
     session: Option<String>,
+    #[clap(
+        long,
+        help = "if specified, list of substrings can be matched in any order against command lines"
+    )]
+    loosen: bool,
     #[clap(
         help = "one or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
     )]
@@ -365,8 +371,15 @@ FROM other.command_history
 // just use a temp memory table.
 impl ShowCommand {
     fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
-        let substring = self.substrings.join(".*\\s.*");
-        let limit = if self.limit <= 0 { i32::MAX } else { self.limit };
+        // If we are loosening then just use the first string for the
+        // sqlite query.  This requires fetching all matches, however,
+        // to properly limit the final count.
+        let substring = if self.loosen {
+            self.substrings.first().map_or_else(String::default, String::clone)
+        } else {
+            self.substrings.join(".*\\s.*")
+        };
+        let limit = if self.limit == 0 || self.loosen { i32::MAX as usize } else { self.limit };
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
 
@@ -425,10 +438,17 @@ SELECT session_id, full_command, shellname, working_directory, hostname, usernam
 ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
 "#)?;
 
+        let regexes: Result<Vec<Regex>, _> =
+            self.substrings.iter().skip(1).map(|s| Regex::new(s.as_str())).collect();
+        let regexes = regexes?;
         let rows: Result<Vec<pxh::InvocationDatabaseRow>, _> =
             stmt.query_map([], pxh::InvocationDatabaseRow::from_row)?.collect();
-        let mut rows = rows?;
-        rows.reverse();
+        let rows: Vec<pxh::InvocationDatabaseRow> = rows?
+            .into_iter()
+            .filter(|row| match_all_regexes(row, &regexes))
+            .rev()
+            .take(self.limit)
+            .collect();
         if self.verbose {
             pxh::present_results_human_readable(
                 &["start_time", "duration", "session", "context", "command"],
@@ -444,6 +464,10 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
         }
         Ok(())
     }
+}
+
+fn match_all_regexes(row: &pxh::InvocationDatabaseRow, regexes: &[Regex]) -> bool {
+    regexes.iter().all(|regex| regex.is_match(&row.command))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
