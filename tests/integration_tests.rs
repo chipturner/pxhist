@@ -99,6 +99,35 @@ fn test_show_with_here() {
 }
 
 #[test]
+fn test_show_with_loosen() {
+    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
+
+    // Prepare some test data: three commands of the form test.*xyz
+    let mut pc = PxhCaller::new();
+    for i in 1..3 {
+        let cmd = format!(
+            "insert --shellname s --hostname h --username u --session-id {i} test_command_{i} xyz"
+        );
+        pc.call(cmd).assert().success();
+    }
+
+    // Verify we see all three commands with traditional show
+    let output = pc.call("show --suppress-headers test xyz").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+
+    // Now verify we see none if we invert the order
+    let output = pc.call("show --suppress-headers xyz test").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+
+    // Finally, the real test: loosen makes them show back up again
+    let output = pc.call("show --suppress-headers --loosen xyz test").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+}
+
+#[test]
 fn test_show_with_session_id() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
