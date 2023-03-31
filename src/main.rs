@@ -379,7 +379,8 @@ impl ShowCommand {
         } else {
             self.patterns.join(".*\\s.*")
         };
-        let limit = if self.limit == 0 || self.loosen { i32::MAX as usize } else { self.limit };
+        let actual_limit =
+            if self.limit == 0 || self.loosen { i32::MAX as usize } else { self.limit };
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
 
@@ -399,7 +400,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ? AND session_id = ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (pattern, session_id, limit),
+                (pattern, session_id, actual_limit),
             )?;
         } else if self.here {
             conn.execute(
@@ -411,7 +412,7 @@ SELECT rowid, start_unix_timestamp, id
    AND full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (working_directory.to_string_lossy(), pattern, limit),
+                (working_directory.to_string_lossy(), pattern, actual_limit),
             )?;
         } else {
             conn.execute(
@@ -422,13 +423,17 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (pattern, limit),
+                (pattern, actual_limit),
             )?;
         }
 
-        self.present_results(conn)
+        self.present_results(conn, actual_limit)
     }
-    fn present_results(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn present_results(
+        &self,
+        conn: &mut Connection,
+        limit: usize,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Now that we have the relevant rows, just present the output
         let mut stmt = conn.prepare(
 	r#"
@@ -447,7 +452,7 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
             .into_iter()
             .filter(|row| match_all_regexes(row, &regexes))
             .rev()
-            .take(self.limit)
+            .take(limit)
             .collect();
         if self.verbose {
             pxh::present_results_human_readable(

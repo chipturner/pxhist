@@ -160,6 +160,31 @@ fn test_show_with_session_id() {
     }
 }
 
+#[test]
+fn test_show_with_limit() {
+    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
+
+    // Prepare some test data: 100 test commands
+    let mut pc = PxhCaller::new();
+    for i in 1..=100 {
+        let cmd = format!(
+            "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
+        );
+        pc.call(cmd).assert().success();
+    }
+
+    // Verify we see all three commands with traditional show
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 50);
+
+    // Verify explicit limit 0 gives all results
+    let output = pc.call("show --suppress-headers --limit 0").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 100);
+}
+
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn test_insert_seal_roundtrip() {
