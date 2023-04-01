@@ -1,6 +1,6 @@
 [package]
 name = "pxh"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 authors = [ "Chip Turner <cturner@pattern.net>" ]
 description = """
