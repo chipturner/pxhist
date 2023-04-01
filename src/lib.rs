@@ -324,6 +324,7 @@ pub fn json_export(rows: &[InvocationDatabaseRow]) -> Result<(), Box<dyn std::er
 
 struct QueryResultColumnDisplayer {
     header: &'static str,
+    style: &'static str,
     displayer: Box<dyn Fn(&InvocationDatabaseRow) -> String>,
 }
 
@@ -346,6 +347,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "command",
         QueryResultColumnDisplayer {
             header: "Command",
+            style: "Fw",
             displayer: Box::new(|row| binary_display_helper(&row.command)),
         },
     );
@@ -353,6 +355,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "start_time",
         QueryResultColumnDisplayer {
             header: "Start",
+            style: "Fg",
             displayer: Box::new(|row| time_display_helper(row.start_unix_timestamp)),
         },
     );
@@ -360,6 +363,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "end_time",
         QueryResultColumnDisplayer {
             header: "End",
+            style: "Fg",
             displayer: Box::new(|row| time_display_helper(row.end_unix_timestamp)),
         },
     );
@@ -367,25 +371,33 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "duration",
         QueryResultColumnDisplayer {
             header: "Duration",
+            style: "Fm",
             displayer: Box::new(|row| match (row.start_unix_timestamp, row.end_unix_timestamp) {
                 (Some(start), Some(end)) => format!("{}s", end - start),
                 _ => "n/a".into(),
             }),
         },
     );
+    // TODO: Move the style into the displayer (which would return a
+    // Cell) to allow for color based on per-column values, like red
+    // for non-zero exit statuses.
     ret.insert(
         "status",
         QueryResultColumnDisplayer {
             header: "Status",
+            style: "Fr",
             displayer: Box::new(|row| {
                 row.exit_status.map_or_else(|| "n/a".into(), |s| s.to_string())
             }),
         },
     );
+    // TODO: Make session similar to "context" and just print `.` when
+    // it is the current session.
     ret.insert(
         "session",
         QueryResultColumnDisplayer {
             header: "Session",
+            style: "Fc",
             displayer: Box::new(|row| format!("{:x}", row.session_id)),
         },
     );
@@ -396,6 +408,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "context",
         QueryResultColumnDisplayer {
             header: "Context",
+            style: "bFb",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
                 let row_hostname = row.hostname.clone().map(BString::from).unwrap_or_default();
@@ -437,7 +450,7 @@ pub fn present_results_human_readable(
 		return Err(Box::from(format!("Invalid 'show' field: {field}")))
 	    };
 
-            title_row.add_cell(prettytable::Cell::new(d.header));
+            title_row.add_cell(prettytable::Cell::new(d.header).style_spec("bFg"));
         }
         table.set_titles(title_row);
     }
@@ -445,8 +458,10 @@ pub fn present_results_human_readable(
     for row in rows.iter() {
         let mut display_row = prettytable::Row::empty();
         for field in fields {
-            display_row
-                .add_cell(prettytable::Cell::new((displayers[field].displayer)(row).as_str()));
+            display_row.add_cell(
+                prettytable::Cell::new((displayers[field].displayer)(row).as_str())
+                    .style_spec(displayers[field].style),
+            );
         }
         table.add_row(display_row);
     }

@@ -456,7 +456,7 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
             .collect();
         if self.verbose {
             pxh::present_results_human_readable(
-                &["start_time", "duration", "session", "context", "command"],
+                &["start_time", "duration", "session", "context", "status", "command"],
                 &rows,
                 self.suppress_headers,
             )?;
