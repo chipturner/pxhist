@@ -307,3 +307,38 @@ fn test_timestamped_bash_import_roundtrip() {
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
 }
+
+#[test]
+fn test_scrub_command() {
+    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
+
+    // Prepare some test data: 10 test commands
+    let mut pc = PxhCaller::new();
+    for i in 1..=10 {
+        let cmd = format!(
+            "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
+        );
+        pc.call(cmd).assert().success();
+    }
+
+    // Verify the rows are present
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 10);
+
+    // Scrub `test_command_10`
+    let _output = pc.call("scrub test_command_10").output().unwrap();
+
+    // Verify we have 9 rows now.
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 9);
+
+    // Scrub the rest
+    let _output = pc.call("scrub test_command_").output().unwrap();
+
+    // Verify we have none.
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+}
