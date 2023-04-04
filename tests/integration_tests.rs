@@ -27,6 +27,10 @@ impl PxhCaller {
     }
 }
 
+fn count_lines(bytes: &[u8]) -> usize {
+    bytes.iter().filter(|&ch| *ch == b'\n').count()
+}
+
 #[test]
 fn test_trivial_invocation() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
@@ -54,17 +58,17 @@ fn test_trivial_invocation() {
     // Ensure we see our history with show w/o a regex, don't see it
     // with a valid one, and see it with multiple joined regexes
     let output = pc.call("show --suppress-headers").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+    assert_eq!(count_lines(&output.stdout), 2);
 
     let output = pc.call("show --suppress-headers non-matching-regex").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+    assert_eq!(count_lines(&output.stdout), 0);
 
     let output = pc.call("show --suppress-headers test").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+    assert_eq!(count_lines(&output.stdout), 2);
 
     // Make sure we properly filter by joining regexes (which would then not match)
     let output = pc.call("show --suppress-headers command_1 command_2").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+    assert_eq!(count_lines(&output.stdout), 0);
 }
 
 #[test]
@@ -93,13 +97,13 @@ fn test_show_with_here() {
     // Now make sure we only see the relevant results when --here is
     // provided, both with and without --working-directory
     let output = pc.call("show --suppress-headers --here").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1);
+    assert_eq!(count_lines(&output.stdout), 1);
 
     for i in 1..=3 {
         let cmd =
             format!("show --suppress-headers --here --working-directory /dir{i} test_command_{i}");
         let output = pc.call(cmd).output().unwrap();
-        assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1);
+        assert_eq!(count_lines(&output.stdout), 1);
     }
 }
 
@@ -121,15 +125,15 @@ fn test_show_with_loosen() {
 
     // Verify we see all three commands with traditional show
     let output = pc.call("show --suppress-headers test xyz").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
+    assert_eq!(count_lines(&output.stdout), 3);
 
     // Now verify we see none if we invert the order
     let output = pc.call("show --suppress-headers xyz test").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+    assert_eq!(count_lines(&output.stdout), 0);
 
     // Finally, the real test: loosen makes them show back up again
     let output = pc.call("show --suppress-headers --loosen xyz test").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
+    assert_eq!(count_lines(&output.stdout), 3);
 }
 
 #[test]
@@ -153,17 +157,17 @@ fn test_show_with_session_id() {
     // Now make sure we only see the relevant results when we specify
     // sessions to `show`.  First make sure we see all commands:
     let output = pc.call("show --suppress-headers").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 4);
+    assert_eq!(count_lines(&output.stdout), 4);
 
     // Now two in session 1
     let output = pc.call("show --suppress-headers --session 1").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 2);
+    assert_eq!(count_lines(&output.stdout), 2);
 
     // Finally, one in sessions 2 and 3
     for i in 2..=3 {
         let cmd = format!("show --suppress-headers --session {i}");
         let output = pc.call(cmd).output().unwrap();
-        assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1);
+        assert_eq!(count_lines(&output.stdout), 1);
     }
 }
 
@@ -185,11 +189,11 @@ fn test_show_with_limit() {
 
     // Verify we see all three commands with traditional show
     let output = pc.call("show --suppress-headers").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 50);
+    assert_eq!(count_lines(&output.stdout), 50);
 
     // Verify explicit limit 0 gives all results
     let output = pc.call("show --suppress-headers --limit 0").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 100);
+    assert_eq!(count_lines(&output.stdout), 100);
 }
 
 // Basic round trip test of inserting/sealing, then verify with json export.
@@ -212,11 +216,11 @@ fn test_insert_seal_roundtrip() {
     let output = pc.call("show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), commands.len());
+    assert_eq!(count_lines(&output.stdout), commands.len());
 
     // Trivial regexp
     let output = pc.call("show --suppress-headers u....Z?e").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 1,);
+    assert_eq!(count_lines(&output.stdout), 1,);
 
     let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
@@ -261,7 +265,7 @@ fn test_zsh_import_roundtrip() {
     let output = pc.call("show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
+    assert_eq!(count_lines(&output.stdout), 3);
 
     let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
@@ -283,7 +287,7 @@ fn test_bash_import_roundtrip() {
     let output = pc.call("show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
+    assert_eq!(count_lines(&output.stdout), 3);
 
     let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
@@ -305,7 +309,7 @@ fn test_timestamped_bash_import_roundtrip() {
     let output = pc.call("show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 3);
+    assert_eq!(count_lines(&output.stdout), 3);
 
     let json_output = pc.call("export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
@@ -331,36 +335,52 @@ fn test_scrub_command() {
 
     // Verify the rows are present
     let output = pc.call("show --suppress-headers").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 10);
+    assert_eq!(count_lines(&output.stdout), 10);
 
     // Scrub `test_command_10`
     let _output = pc.call("scrub test_command_10").output().unwrap();
 
     // Verify we have 9 rows now.
     let output = pc.call("show --suppress-headers").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 9);
+    assert_eq!(count_lines(&output.stdout), 9);
 
     // Scrub the rest
     let _output = pc.call("scrub test_command_").output().unwrap();
 
     // Verify we have none.
     let output = pc.call("show --suppress-headers").output().unwrap();
-    assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+    assert_eq!(count_lines(&output.stdout), 0);
+}
+
+fn verify_file_matches(path: &PathBuf, expected_contents: &str) {
+    let fh = File::open(&path).unwrap();
+
+    let reader = BufReader::new(fh);
+    let file_lines: Vec<_> = reader.lines().collect::<Result<Vec<_>, _>>().unwrap();
+    let expected_lines: Vec<_> = expected_contents.split('\n').collect();
+    assert_eq!(file_lines, expected_lines);
 }
 
 #[test]
 fn test_atomic_line_remove() {
     let mut tmpfile = NamedTempFile::new().unwrap();
-    writeln!(tmpfile, "line1").unwrap();
-    writeln!(tmpfile, "line2").unwrap();
-    writeln!(tmpfile, "line3").unwrap();
+    write!(tmpfile, "line1\nline2\nline3\n").unwrap();
 
     let (_, path) = tmpfile.keep().unwrap();
     pxh::atomically_remove_lines_from_file(&path, "line2").unwrap();
-    let fh = File::open(path).unwrap();
+    verify_file_matches(&path, "line1\nline3");
 
-    let reader = BufReader::new(fh);
-    reader.lines().zip(["line1", "line3"]).for_each(|(left, right)| {
-        assert!(left.unwrap().as_str() == right);
-    });
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3").unwrap();
+
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_lines_from_file(&path, "line2").unwrap();
+    verify_file_matches(&path, "line1\nline3");
+
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3").unwrap();
+
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_lines_from_file(&path, "line9").unwrap();
+    verify_file_matches(&path, "line1\nline2\nline3");
 }
