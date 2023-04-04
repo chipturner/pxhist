@@ -1,10 +1,10 @@
 use std::{
     collections::HashMap,
     env,
-    fmt::Write,
+    fmt::Write as FmtWrite,
     fs::File,
     io,
-    io::{BufReader, Read},
+    io::{BufReader, BufWriter, Read, Write as IoWrite},
     os::unix::{
         ffi::{OsStrExt, OsStringExt},
         fs::MetadataExt,
@@ -15,7 +15,7 @@ use std::{
     time::Duration,
 };
 
-use bstr::{BString, ByteSlice};
+use bstr::{io::BufReadExt, BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
 use regex::bytes::Regex;
@@ -466,5 +466,30 @@ pub fn present_results_human_readable(
         table.add_row(display_row);
     }
     table.printstd();
+    Ok(())
+}
+
+// Rewrite a file with lines matching `contraband` removed.  utf-8
+// safe for the file (TODO: I guess make contraband a `BString` too)
+pub fn atomically_remove_lines_from_file(
+    input_filepath: &PathBuf,
+    contraband: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let input_file = File::open(input_filepath)?;
+    let mut input_reader = BufReader::new(input_file);
+
+    let output_filepath = input_filepath.with_extension(".new"); // good enough for zsh, good enough for us
+    let output_file = File::create(&output_filepath)?;
+    let mut output_writer = BufWriter::new(output_file);
+
+    input_reader.for_byte_line_with_terminator(|line| {
+        if !line.contains_str(contraband) {
+            output_writer.write_all(line)?;
+        }
+        Ok(true)
+    })?;
+
+    output_writer.flush()?;
+    std::fs::rename(output_filepath, input_filepath)?;
     Ok(())
 }

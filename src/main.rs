@@ -114,6 +114,8 @@ struct SyncCommand {
 
 #[derive(Parser, Debug)]
 struct ScrubCommand {
+    #[clap(long, help = "If specified, also remove lines from this file; typically $HISTFILE")]
+    histfile: Option<PathBuf>,
     #[clap(
         short = 'n',
         long,
@@ -442,10 +444,14 @@ impl PrintableCommand for ScrubCommand {
 }
 
 impl ScrubCommand {
-    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(
+        &self,
+        conn: &mut Connection,
+        histfile: &Option<PathBuf>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let contraband = match &self.contraband {
             Some(value) => {
-                println!("WARNING: specifying the contraband on the command line is inherently risky; prefer not specifying it");
+                println!("WARNING: specifying the contraband on the command line is inherently risky; prefer not specifying it\n");
                 value.clone()
             }
             None => {
@@ -470,7 +476,7 @@ SELECT rowid, start_unix_timestamp, id
   FROM command_history h
  WHERE INSTR(full_command, ?) > 0
 ORDER BY start_unix_timestamp DESC, id DESC"#,
-            (contraband,),
+            (&contraband,),
         )?;
         println!("Entries to scrub from pxh database...\n");
         self.present_results(conn)?;
@@ -485,7 +491,12 @@ ORDER BY start_unix_timestamp DESC, id DESC"#,
             println!("\nDry-run, no entries scrubbed.");
         } else {
             tx.commit()?;
-            println!("\nEntries scrubbed.");
+            if let Some(histfile) = histfile {
+                pxh::atomically_remove_lines_from_file(histfile, &contraband)?;
+                println!("\nEntries scrubbed from database and {}.", &histfile.display());
+            } else {
+                println!("\nEntries scrubbed from database.");
+            }
         }
         Ok(())
     }
@@ -620,7 +631,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Scrub(cmd) => {
             let mut conn = pxh::sqlite_connection(&args.db)?;
-            cmd.go(&mut conn)?;
+            cmd.go(&mut conn, &cmd.histfile)?;
         }
         Commands::Seal(cmd) => {
             let mut conn = pxh::sqlite_connection(&args.db)?;

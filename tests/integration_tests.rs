@@ -1,8 +1,13 @@
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    fs::File,
+    io::{BufRead, BufReader, Write},
+    path::PathBuf,
+};
 
 use assert_cmd::Command;
 use bstr::BString;
-use tempfile::TempDir;
+use tempfile::{NamedTempFile, TempDir};
 
 // Simple struct and helpers for invoking pxh with a given testdb.
 struct PxhCaller {
@@ -341,4 +346,21 @@ fn test_scrub_command() {
     // Verify we have none.
     let output = pc.call("show --suppress-headers").output().unwrap();
     assert_eq!(output.stdout.iter().filter(|&ch| *ch == b'\n').count(), 0);
+}
+
+#[test]
+fn test_atomic_line_remove() {
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    writeln!(tmpfile, "line1").unwrap();
+    writeln!(tmpfile, "line2").unwrap();
+    writeln!(tmpfile, "line3").unwrap();
+
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_lines_from_file(&path, "line2").unwrap();
+    let fh = File::open(path).unwrap();
+
+    let reader = BufReader::new(fh);
+    reader.lines().zip(["line1", "line3"]).for_each(|(left, right)| {
+        assert!(left.unwrap().as_str() == right);
+    });
 }
