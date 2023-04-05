@@ -32,7 +32,7 @@ fn count_lines(bytes: &[u8]) -> usize {
 }
 
 #[test]
-fn test_trivial_invocation() {
+fn trivial_invocation() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
@@ -72,7 +72,7 @@ fn test_trivial_invocation() {
 }
 
 #[test]
-fn test_show_with_here() {
+fn show_with_here() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
@@ -108,7 +108,7 @@ fn test_show_with_here() {
 }
 
 #[test]
-fn test_show_with_loosen() {
+fn show_with_loosen() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
@@ -137,7 +137,7 @@ fn test_show_with_loosen() {
 }
 
 #[test]
-fn test_show_with_session_id() {
+fn show_with_session_id() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
@@ -172,7 +172,7 @@ fn test_show_with_session_id() {
 }
 
 #[test]
-fn test_show_with_limit() {
+fn show_with_limit() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
@@ -198,7 +198,7 @@ fn test_show_with_limit() {
 
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
-fn test_insert_seal_roundtrip() {
+fn insert_seal_roundtrip() {
     let mut pc = PxhCaller::new();
     let commands = vec!["df", "sleep 1", "uptime"];
     for command in &commands {
@@ -252,7 +252,7 @@ fn matches_expected_history(invocations: &[pxh::Invocation]) {
 // Test cases for multiple shell history format roundtrips.
 
 #[test]
-fn test_zsh_import_roundtrip() {
+fn zsh_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
     let mut pc = PxhCaller::new();
     pc.call(format!(
@@ -274,7 +274,7 @@ fn test_zsh_import_roundtrip() {
 }
 
 #[test]
-fn test_bash_import_roundtrip() {
+fn bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
     let mut pc = PxhCaller::new();
     pc.call(format!(
@@ -296,7 +296,7 @@ fn test_bash_import_roundtrip() {
 }
 
 #[test]
-fn test_timestamped_bash_import_roundtrip() {
+fn timestamped_bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
     let mut pc = PxhCaller::new();
     pc.call(format!(
@@ -318,7 +318,7 @@ fn test_timestamped_bash_import_roundtrip() {
 }
 
 #[test]
-fn test_scrub_command() {
+fn scrub_command() {
     let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
     let mut show_cmd = Command::cargo_bin("pxh").unwrap();
@@ -362,7 +362,7 @@ fn verify_file_matches(path: &PathBuf, expected_contents: &str) {
 }
 
 #[test]
-fn test_atomic_line_remove() {
+fn atomic_line_remove() {
     let mut tmpfile = NamedTempFile::new().unwrap();
     write!(tmpfile, "line1\nline2\nline3\n").unwrap();
 
