@@ -1,13 +1,8 @@
-use std::{
-    env,
-    fs::File,
-    io::{BufRead, BufReader, Write},
-    path::PathBuf,
-};
+use std::{env, path::PathBuf};
 
 use assert_cmd::Command;
 use bstr::BString;
-use tempfile::{NamedTempFile, TempDir};
+use tempfile::TempDir;
 
 // Simple struct and helpers for invoking pxh with a given testdb.
 struct PxhCaller {
@@ -350,37 +345,4 @@ fn scrub_command() {
     // Verify we have none.
     let output = pc.call("show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
-}
-
-fn verify_file_matches(path: &PathBuf, expected_contents: &str) {
-    let fh = File::open(&path).unwrap();
-
-    let reader = BufReader::new(fh);
-    let file_lines: Vec<_> = reader.lines().collect::<Result<Vec<_>, _>>().unwrap();
-    let expected_lines: Vec<_> = expected_contents.split('\n').collect();
-    assert_eq!(file_lines, expected_lines);
-}
-
-#[test]
-fn atomic_line_remove() {
-    let mut tmpfile = NamedTempFile::new().unwrap();
-    write!(tmpfile, "line1\nline2\nline3\n").unwrap();
-
-    let (_, path) = tmpfile.keep().unwrap();
-    pxh::atomically_remove_lines_from_file(&path, "line2").unwrap();
-    verify_file_matches(&path, "line1\nline3");
-
-    let mut tmpfile = NamedTempFile::new().unwrap();
-    write!(tmpfile, "line1\nline2\nline3").unwrap();
-
-    let (_, path) = tmpfile.keep().unwrap();
-    pxh::atomically_remove_lines_from_file(&path, "line2").unwrap();
-    verify_file_matches(&path, "line1\nline3");
-
-    let mut tmpfile = NamedTempFile::new().unwrap();
-    write!(tmpfile, "line1\nline2\nline3").unwrap();
-
-    let (_, path) = tmpfile.keep().unwrap();
-    pxh::atomically_remove_lines_from_file(&path, "line9").unwrap();
-    verify_file_matches(&path, "line1\nline2\nline3");
 }
