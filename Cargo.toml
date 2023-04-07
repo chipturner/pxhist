@@ -35,6 +35,14 @@ serde_json = { version = "1.0.108", features = ["arbitrary_precision"] }
 regex = "1.10.2"
 hostname = "0.3.1"
 rusqlite = { version = "0.30.0", features = ["bundled", "functions"] }
+memoize = "0.4.0"
+rayon = "1.7.0"
+password-hash = "0.5.0"
+argon2 = "0.5.0"
+pbkdf2 = { version = "0.12.1", features = ["simple"] }
+scrypt = "0.11.0"
+rpassword = "7.2.0"
+jemallocator = "0.5.0"
 
 [dev-dependencies]
 assert_cmd = "2.0.12"

@@ -212,10 +212,17 @@ begin and end.
 ### Usability / UX
 - P1: expose column names as a `show` option to control output fields
   and order
+- P1: move db etc to XDG-compliant directory
 - P2: colorize output?  parts where regex matches in addition to columns
 - P3: special handling of ctrl-z when displaying shell
   history... annoying, need signal number, find a crate?
 - P3: optional pretty ncurses-style interface?
+
+### Secret Protection
+- P1: Teach hashscan to support hashes from cli, file, or database (default)
+- P2: Teach hashscan or scrub to clean hashes matching db entries
+- P2: Cache or otherwise store scanned status of command entries, have scan update?
+- P3: make it fast enough to realtime prevent credentials from being stored in history for shells that allow it
 
 ### Core Features
 - P1: Add more complex filtering to `show` to select history entries
