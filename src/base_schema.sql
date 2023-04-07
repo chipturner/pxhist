@@ -29,6 +29,13 @@ CREATE TABLE IF NOT EXISTS settings (
        value BLOB
 );
 
+CREATE TABLE IF NOT EXISTS forbidden_strings (
+       prefix_hash TEXT NOT NULL,
+       full_hash TEXT NOT NULL,
+       prefix_cutoff INT NOT NULL,
+       timestamp INTEGER NOT NULL
+);
+
 ATTACH DATABASE ':memory:' AS memdb;
 CREATE TABLE memdb.show_results (
        ch_rowid INTEGER NOT NULL,

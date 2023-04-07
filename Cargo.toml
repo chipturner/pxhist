@@ -40,6 +40,14 @@ crossterm = { version = "0.28", features = ["use-dev-tty"] }
 nucleo = "0.5"
 toml = "0.8"
 unicode-width = "0.2"
+memoize = "0.4.0"
+rayon = "1.7.0"
+password-hash = "0.5.0"
+argon2 = "0.5.0"
+pbkdf2 = { version = "0.12.1", features = ["simple"] }
+scrypt = "0.11.0"
+rpassword = "7.2.0"
+jemallocator = "0.5.0"
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }

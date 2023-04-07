@@ -15,11 +15,15 @@ use std::{
     time::Duration,
 };
 
+use argon2::{Algorithm, Argon2, ParamsBuilder, Version};
 use bstr::{BString, ByteSlice, io::BufReadExt};
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
-use regex::bytes::Regex;
+use password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
+use pbkdf2::Pbkdf2;
+use regex::bytes::{Match, Regex};
 use rusqlite::{Connection, Error, Result, Row, Transaction, functions::FunctionFlags};
+use scrypt::Scrypt;
 use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -369,8 +373,8 @@ fn time_display_helper(t: Option<i64>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-fn binary_display_helper(v: &BString) -> String {
-    String::from_utf8_lossy(v.as_slice()).to_string()
+pub fn binary_display_helper(v: &[u8]) -> String {
+    String::from_utf8_lossy(v).to_string()
 }
 
 fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
@@ -553,6 +557,118 @@ pub fn atomically_remove_matching_lines_from_file(
     output_writer.flush()?;
     std::fs::rename(output_filepath, input_filepath)?;
     Ok(())
+}
+
+pub fn all_long_word_boundaries<T: ?Sized + AsRef<[u8]>>(s: &T) -> Vec<Match<'_>> {
+    let word_re = Regex::new(r"\b").unwrap();
+    word_re.find_iter(s.as_ref()).collect()
+}
+
+pub struct CredentialPosition {
+    pub start: usize,
+    pub end: usize,
+    pub bytes: Vec<u8>,
+}
+
+pub fn long_credential_windows<T: ?Sized + AsRef<[u8]>>(
+    s: &T,
+    min_threshold: usize,
+) -> Vec<CredentialPosition> {
+    let s = s.as_ref();
+    let matches = all_long_word_boundaries(s);
+    let mut ret = vec![];
+    for combos in matches.iter().combinations(2) {
+        let (p0, p1) = combos.iter().collect_tuple().unwrap();
+        if s[p0.start()] != b' '
+            && s[p1.end() - 1] != b' '
+            && p1.end() - p0.end() >= min_threshold
+            && s[p1.end() - 1] != b' '
+        {
+            ret.push(CredentialPosition {
+                start: p0.start(),
+                end: p1.end(),
+                bytes: s[p0.start()..p1.end()].to_vec(),
+            })
+        }
+    }
+    ret
+}
+
+// For now, just have some hard coded limits for practical purposes.
+// Eventually the upper bound could become a cutoff for a short/long
+// filter where we have two hashes, one for at most the cutoff length,
+// and the other unbounded.  Then we only consider the unbounded one
+// when the cutoff is hit.  This would reduce the search space
+// considerably at the cost of hits of cutoff-length strings double
+// hashing to find the rest... should be worth it in practice.
+pub const MIN_SECRET_LENGTH: usize = 6;
+pub const SECRET_OPTIMIZATION_CUTOFF_LENGTH: usize = 41;
+
+use memoize::memoize;
+#[memoize(Capacity: 65536)]
+fn check_match(hash_string: String, s: Vec<u8>) -> bool {
+    let hash = PasswordHash::new(hash_string.as_str()).unwrap();
+    let algs: &[&dyn PasswordVerifier] = &[&Argon2::default(), &Pbkdf2, &Scrypt];
+    hash.verify_password(algs, s).is_ok()
+}
+
+pub struct HashedSecret {
+    prefix_hash: String,
+    full_hash: String,
+    prefix_cutoff: usize,
+}
+
+impl HashedSecret {
+    pub fn new(hash: &str) -> Self {
+        Self::from_full(hash, hash, hash.len())
+    }
+
+    pub fn from_full(prefix_hash: &str, full_hash: &str, prefix_cutoff: usize) -> Self {
+        Self { prefix_hash: prefix_hash.into(), full_hash: full_hash.into(), prefix_cutoff }
+    }
+
+    pub fn search_haystack<T: ?Sized + AsRef<[u8]>>(
+        &self,
+        haystack: &T,
+    ) -> Option<CredentialPosition> {
+        long_credential_windows(haystack, MIN_SECRET_LENGTH).into_iter().find(|potential_secret| {
+            let prefix_bytes: Vec<u8> =
+                potential_secret.bytes.iter().take(self.prefix_cutoff).copied().collect();
+            let prefix_matches = check_match(String::from(&self.prefix_hash), prefix_bytes);
+            if prefix_matches && potential_secret.bytes.len() >= self.prefix_cutoff {
+                if self.full_hash != self.prefix_hash {
+                    return check_match(self.full_hash.clone(), potential_secret.bytes.clone());
+                }
+                return false;
+            }
+            prefix_matches
+        })
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum HashAlgorithm {
+    Argon2(u32, u32, u32),
+    Argon2Default,
+    Pbkdf2,
+    Scrypt,
+}
+
+pub fn hash_password(algorithm: HashAlgorithm, password: &[u8]) -> String {
+    let salt = SaltString::generate(OsRng);
+
+    match algorithm {
+        HashAlgorithm::Argon2(m, t, p) => {
+            let params = ParamsBuilder::new().m_cost(m).t_cost(t).p_cost(p).build().unwrap();
+            let ctx = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+            ctx.hash_password(password, &salt).unwrap().to_string()
+        }
+        HashAlgorithm::Argon2Default => {
+            Argon2::default().hash_password(password, &salt).unwrap().to_string()
+        }
+        HashAlgorithm::Pbkdf2 => Pbkdf2.hash_password(password, &salt).unwrap().to_string(),
+        HashAlgorithm::Scrypt => Scrypt.hash_password(password, &salt).unwrap().to_string(),
+    }
 }
 
 // Helper functions for command parsing and path resolution

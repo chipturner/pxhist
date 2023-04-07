@@ -8,6 +8,7 @@ use std::{
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     str,
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use bstr::{BString, ByteSlice};
@@ -60,16 +61,25 @@ enum Commands {
     Show(ShowCommand),
     #[clap(visible_alias = "r", about = "interactive history search (Ctrl-R replacement)")]
     Recall(pxh::recall::RecallCommand),
-    #[clap(about = "install pxh helpers by modifying your shell rc file")]
-    Install(InstallCommand),
     #[clap(about = "import history entries from your existing shell history or from an export")]
     Import(ImportCommand),
     #[clap(about = "export full history as JSON")]
     Export(ExportCommand),
     #[clap(about = "synchronize to and from a directory of other pxh history databases")]
     Sync(SyncCommand),
-    #[clap(about = "scrub (remove) history entries matching the prompted-for string")]
+
+    #[clap(about = "install pxh helpers by modifying your shell rc file")]
+    Install(InstallCommand),
+
+    #[clap(about = "(experimental) scrub (remove) history entries matching prompted-for string")]
     Scrub(ScrubCommand),
+    #[clap(
+        about = "(experimental) generate (and optionally store) hashes of the prompted-for string"
+    )]
+    Hashgen(HashgenCommand),
+    #[clap(about = "(experimental) scan history entries matching the specified hashes")]
+    Hashscan(HashscanCommand),
+
     #[clap(about = "(internal) invoked by the shell to insert a history entry")]
     Insert(InsertCommand),
     #[clap(about = "(internal) seal the previous inserted command to mark status, timing, etc")]
@@ -242,6 +252,20 @@ struct ScrubCommand {
 }
 
 #[derive(Parser, Debug)]
+struct HashscanCommand {
+    #[clap(long)]
+    hashfile: PathBuf,
+}
+
+#[derive(Parser, Debug)]
+struct HashgenCommand {
+    #[clap(short = 'a', long, default_value = "argon2")]
+    algorithm: String,
+    #[clap(short = 'i', long, default_value_t = false)]
+    insert: bool,
+}
+
+#[derive(Parser, Debug)]
 struct InsertCommand {
     #[clap(long)]
     shellname: String,
@@ -396,7 +420,7 @@ impl InstallCommand {
         let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
         pb.push(rc_file);
 
-        // Skip installationif "pxh shell-config" is present in the
+        // Skip installation if "pxh shell-config" is present in the
         // current RC file.
         let file = File::open(&pb)?;
         let reader = BufReader::new(&file);
@@ -1597,6 +1621,48 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
     }
 }
 
+use rayon::prelude::*;
+
+impl HashscanCommand {
+    fn go(&self, conn: &mut Connection, path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(&file);
+        let mut forbidden_hashes = vec![];
+        for line in reader.lines() {
+            let line = line.unwrap();
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let hashed_secret = match fields.len() {
+		1 => pxh::HashedSecret::from_full(fields[0], fields[0], fields[0].len()),
+		3 => pxh::HashedSecret::from_full(fields[0], fields[1], fields[2].parse::<usize>()?),
+		_ => return Err("Unable to parse hashed file contents; only 1 or 3 fields per line are allowed.".into())
+	    };
+            forbidden_hashes.push(hashed_secret);
+        }
+
+        let mut stmt = conn.prepare("SELECT full_command FROM command_history")?;
+        let mut all_commands =
+            stmt.query_map([], |row| row.get(0))?.collect::<Result<Vec<Vec<u8>>, _>>()?;
+        all_commands.retain(|s| s.len() >= pxh::MIN_SECRET_LENGTH);
+        all_commands.sort_by_key(|v| v.len());
+
+        let num_processed = AtomicUsize::new(0);
+        all_commands.par_iter().for_each(|command| {
+            for secret in forbidden_hashes.iter() {
+                print!(
+                    "\rChecked {}/{}",
+                    num_processed.fetch_add(1, Ordering::SeqCst),
+                    all_commands.len() * forbidden_hashes.len()
+                );
+                io::stdout().flush().unwrap();
+                if let Some(m) = secret.search_haystack(command) {
+                    println!("\nFound forbidden hash: {}", pxh::binary_display_helper(&m.bytes));
+                }
+            }
+        });
+        Ok(())
+    }
+}
+
 impl PrintableCommand for ScrubCommand {
     fn verbose(&self) -> bool {
         false
@@ -1615,6 +1681,51 @@ impl PrintableCommand for ScrubCommand {
         rows: Vec<pxh::Invocation>,
     ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
         Ok(rows)
+    }
+}
+
+fn prompt_password(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
+    loop {
+        let first = rpassword::prompt_password(prompt)?.trim().to_string();
+        let second = rpassword::prompt_password("Confirm: ")?.trim().to_string();
+        if first == second {
+            return Ok(first);
+        }
+        println!("Error, input doesn't match. Try again.");
+    }
+}
+
+impl HashgenCommand {
+    fn go(
+        &self,
+        conn: &mut Connection,
+        algorithm: &str,
+        insert: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let alg = match algorithm {
+            "argon2-fast" => pxh::HashAlgorithm::Argon2(32, 2, 1),
+            "argon2-default" => pxh::HashAlgorithm::Argon2Default,
+            "pbkdf2" => pxh::HashAlgorithm::Pbkdf2,
+            "scrypt" => pxh::HashAlgorithm::Scrypt,
+            _ => return Err("Hash algorithm must be one of argon2, pbkdf2, or scrypt".into()),
+        };
+        let password = prompt_password("Password to hash: ")?;
+        let cutoff = pxh::SECRET_OPTIMIZATION_CUTOFF_LENGTH;
+        let prefix_hashed = pxh::hash_password(
+            alg,
+            &password.as_bytes().iter().take(cutoff).cloned().collect::<Vec<_>>(),
+        );
+        let full_hashed = pxh::hash_password(alg, password.as_bytes());
+        println!("{} {}", &prefix_hashed, &full_hashed);
+
+        if insert {
+            conn.execute(
+                "INSERT INTO forbidden_strings (prefix_hash, full_hash, prefix_cutoff, timestamp) VALUES (?, ?, ?, unixepoch())",
+                (&prefix_hashed, &full_hashed, cutoff as i64),
+            )?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1935,13 +2046,7 @@ impl ScrubCommand {
                 );
                 value.clone()
             }
-            None => {
-                let mut input = String::new();
-                print!("String to scrub: ");
-                std::io::stdout().flush()?;
-                io::stdin().read_line(&mut input)?;
-                input.trim_end().into()
-            }
+            None => prompt_password("String to scrub: ")?,
         };
 
         if contraband.is_empty() {
@@ -2098,6 +2203,11 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
     regexes.iter().all(|regex| regex.is_match(row.command.as_slice()))
 }
 
+use jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
@@ -2146,6 +2256,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Scrub(cmd) => {
             cmd.go(make_conn()?)?;
         }
+        Commands::Hashgen(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn, &cmd.algorithm, cmd.insert)?;
+        }
+        Commands::Hashscan(cmd) => {
+            let mut conn = pxh::sqlite_connection(&args.db)?;
+            cmd.go(&mut conn, &cmd.hashfile)?;
+        }
         Commands::Seal(cmd) => {
             cmd.go(make_conn()?)?;
         }
@@ -2163,8 +2281,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Insert(cmd) => {
             let mut conn = make_conn()?;
+            let mut stmt = conn
+                .prepare("SELECT prefix_hash, full_hash, prefix_cutoff FROM forbidden_strings")?;
+            let all_hashes: Vec<(String, String, i64)> = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<usize, String>(0)?,
+                        row.get::<usize, String>(1)?,
+                        row.get::<usize, i64>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            drop(stmt);
+
+            let command_bytes: BString = cmd.command.join(OsStr::new(" ")).as_bytes().into();
+            for row in all_hashes {
+                let secret = pxh::HashedSecret::from_full(&row.0, &row.1, row.2 as usize);
+                if secret.search_haystack(&command_bytes).is_some() {
+                    eprintln!("pxh error: skipping history for command, matches hash {}", &row.1);
+                    return Ok(());
+                }
+            }
+
             let invocation = pxh::Invocation {
-                command: cmd.command.join(OsStr::new(" ")).as_bytes().into(),
+                command: command_bytes,
                 shellname: cmd.shellname.clone(),
                 working_directory: cmd
                     .working_directory
