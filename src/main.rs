@@ -551,10 +551,13 @@ impl ShowCommand {
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
 
-        let working_directory = self
-            .working_directory
-            .as_ref()
-            .map_or_else(|| env::current_dir().unwrap_or_default(), |v| v.clone());
+        let working_directory = self.working_directory.as_ref().map_or_else(
+            || env::var_os("PWD")
+                .map(PathBuf::from)
+                .or_else(|| env::current_dir().ok())
+		.unwrap_or_default(),
+            |v| v.clone(),
+        );
 
         if let Some(ref maybe_session_hex) = self.session {
             let session_id = i64::from_str_radix(maybe_session_hex, 16)?;
