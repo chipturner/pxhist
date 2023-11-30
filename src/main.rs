@@ -552,10 +552,12 @@ impl ShowCommand {
         conn.execute("DELETE FROM memdb.show_results", ())?;
 
         let working_directory = self.working_directory.as_ref().map_or_else(
-            || env::var_os("PWD")
-                .map(PathBuf::from)
-                .or_else(|| env::current_dir().ok())
-		.unwrap_or_default(),
+            || {
+                env::var_os("PWD")
+                    .map(PathBuf::from)
+                    .or_else(|| env::current_dir().ok())
+                    .unwrap_or_default()
+            },
             |v| v.clone(),
         );
 

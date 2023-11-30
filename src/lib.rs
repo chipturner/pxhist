@@ -136,9 +136,14 @@ pub fn import_zsh_history(
     let mut ret = vec![];
     let session_id = generate_import_session_id(histfile);
     for line in buf_iter {
-        let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() else { continue };
+        let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() else {
+            continue;
+        };
         let Some((_skip, start_time, duration_seconds)) =
-            fields.splitn(3, |&ch| ch == b':').collect_tuple() else { continue } ;
+            fields.splitn(3, |&ch| ch == b':').collect_tuple()
+        else {
+            continue;
+        };
         let start_unix_timestamp = str::from_utf8(&start_time[1..])?.parse::<i64>()?; // 1.. is to skip the leading space!
         let invocation = Invocation {
             command: BString::from(command),
@@ -209,9 +214,7 @@ pub fn import_json_history(histfile: &Path) -> Result<Vec<Invocation>, Box<dyn s
 
 fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
     let mut it = invocations.into_iter();
-    let Some(first) = it.next() else {
-	return vec![]
-    };
+    let Some(first) = it.next() else { return vec![] };
     let mut ret = vec![first];
     for elem in it {
         if !elem.sameish(ret.last().unwrap()) {
@@ -447,8 +450,8 @@ pub fn present_results_human_readable(
         let mut title_row = prettytable::Row::empty();
         for field in fields {
             let Some(d) = displayers.get(field) else {
-		return Err(Box::from(format!("Invalid 'show' field: {field}")))
-	    };
+                return Err(Box::from(format!("Invalid 'show' field: {field}")));
+            };
 
             title_row.add_cell(prettytable::Cell::new(d.header).style_spec("bFg"));
         }
