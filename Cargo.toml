@@ -20,22 +20,22 @@ license = "MIT"
 path = "src/lib.rs"
 
 [dependencies]
-bstr = { version = "1.8.0", features = ["serde"] }
-clap = { version = "4.4.10", features = ["derive", "env", "wrap_help"] }
-log = "0.4.20"
-env_logger = "0.10.1"
-home = "0.5.5"
-itertools = "0.12.0"
+bstr = { version = "1.10.0", features = ["serde"] }
+clap = { version = "4.5.13", features = ["derive", "env", "wrap_help"] }
+log = "0.4.22"
+env_logger = "0.11.5"
+home = "0.5.9"
+itertools = "0.13.0"
 prettytable-rs = "0.10.0"
 rand = "0.8.5"
-chrono = "0.4.31"
+chrono = "0.4.38"
 users = "0.11.0"
-serde = { version = "1.0.193", features = ["derive"] }
-serde_json = { version = "1.0.108", features = ["arbitrary_precision"] }
-regex = "1.10.2"
-hostname = "0.3.1"
-rusqlite = { version = "0.30.0", features = ["bundled", "functions"] }
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = { version = "1.0.122", features = ["arbitrary_precision"] }
+regex = "1.10.6"
+hostname = "0.4.0"
+rusqlite = { version = "0.32.1", features = ["bundled", "functions"] }
 
 [dev-dependencies]
-assert_cmd = "2.0.12"
-tempfile = "3.8.1"
+assert_cmd = "2.0.15"
+tempfile = "3.11.0"
