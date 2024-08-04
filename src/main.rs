@@ -169,7 +169,7 @@ struct ShellConfigCommand {
 struct ExportCommand {}
 
 impl ImportCommand {
-    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         let invocations = match self.shellname.as_ref() {
             "zsh" => pxh::import_zsh_history(
                 &self.histfile,
@@ -261,7 +261,7 @@ fi"#
 }
 
 impl SealCommand {
-    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         conn.execute(
             r#"
 UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
@@ -275,7 +275,7 @@ UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
 }
 
 impl ExportCommand {
-    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         let mut stmt = conn.prepare(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
@@ -294,13 +294,13 @@ ORDER BY id"#,
 // into the current database, then write an output with our hostname.
 
 impl SyncCommand {
-    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         if !self.dirname.exists() {
             fs::create_dir(&self.dirname)?;
         }
         let mut output_path = self.dirname.clone();
         let original_hostname =
-            pxh::get_setting(conn, "original_hostname")?.unwrap_or_else(pxh::get_hostname);
+            pxh::get_setting(&conn, "original_hostname")?.unwrap_or_else(pxh::get_hostname);
         output_path.push(original_hostname.to_path_lossy());
         output_path.set_extension("db");
         // TODO: vacuum seems to want a plain text path, unlike ATTACH
@@ -316,7 +316,7 @@ impl SyncCommand {
                 let path = entry?.path();
                 if path.extension() == Some(db_extension) && output_path != path {
                     print!("Syncing from {}...", path.to_string_lossy());
-                    let (other_count, after_count) = Self::merge_into(conn, path)?;
+                    let (other_count, after_count) = Self::merge_into(&mut conn, path)?;
                     println!("done, considered {other_count} rows and added {after_count}");
                 }
             }
@@ -394,7 +394,7 @@ trait PrintableCommand {
         rows: Vec<pxh::InvocationDatabaseRow>,
     ) -> Result<Vec<pxh::InvocationDatabaseRow>, Box<dyn std::error::Error>>;
 
-    fn present_results(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn present_results(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         // Now that we have the relevant rows, just present the output
         let mut stmt = conn.prepare(
 	r#"
@@ -448,7 +448,7 @@ impl PrintableCommand for ScrubCommand {
 impl ScrubCommand {
     fn go(
         &self,
-        conn: &mut Connection,
+        mut conn: Connection,
         histfile: &Option<PathBuf>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let contraband = match &self.contraband {
@@ -481,7 +481,7 @@ ORDER BY start_unix_timestamp DESC, id DESC"#,
             (&contraband,),
         )?;
         println!("Entries to scrub from pxh database...\n");
-        self.present_results(conn)?;
+        self.present_results(&conn)?;
 
         let tx = conn.transaction()?;
         tx.execute(
@@ -541,7 +541,7 @@ impl PrintableCommand for ShowCommand {
 }
 
 impl ShowCommand {
-    fn go(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         // If we are loosening then just use the first string for the
         // sqlite query.  This requires fetching all matches, however,
         // to properly limit the final count.
@@ -601,7 +601,7 @@ LIMIT ?"#,
             )?;
         }
 
-        self.present_results(conn)
+        self.present_results(&conn)
     }
 }
 
@@ -613,7 +613,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
     let mut args = PxhArgs::parse();
 
-    // TODO: refactor the sqlite_connection out below cleanly somehow
+    let make_conn = || pxh::sqlite_connection(&args.db);
     match &mut args.command {
         Commands::ShellConfig(cmd) => {
             cmd.go()?;
@@ -622,34 +622,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go()?;
         }
         Commands::Import(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
-            cmd.go(&mut conn)?;
+            cmd.go(make_conn()?)?;
         }
         Commands::Export(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
-            cmd.go(&mut conn)?;
+            cmd.go(make_conn()?)?;
         }
         Commands::Show(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
             let actual_limit =
                 if cmd.limit == 0 || cmd.loosen { i32::MAX as usize } else { cmd.limit };
             cmd.limit = actual_limit;
-            cmd.go(&mut conn)?;
+            cmd.go(make_conn()?)?;
         }
         Commands::Scrub(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
-            cmd.go(&mut conn, &cmd.histfile)?;
+            cmd.go(make_conn()?, &cmd.histfile)?;
         }
         Commands::Seal(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
-            cmd.go(&mut conn)?;
+            cmd.go(make_conn()?)?;
         }
         Commands::Sync(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
-            cmd.go(&mut conn)?;
+            cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {
-            let mut conn = pxh::sqlite_connection(&args.db)?;
+            let mut conn = make_conn()?;
             let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
                 command: cmd.command.join(OsStr::new(" ")).as_bytes().into(),
