@@ -299,7 +299,9 @@ impl SyncCommand {
             fs::create_dir(&self.dirname)?;
         }
         let mut output_path = self.dirname.clone();
-        output_path.push(pxh::get_hostname().to_path_lossy());
+        let original_hostname =
+            pxh::get_setting(conn, "original_hostname")?.unwrap_or_else(pxh::get_hostname);
+        output_path.push(original_hostname.to_path_lossy());
         output_path.set_extension("db");
         // TODO: vacuum seems to want a plain text path, unlike ATTACH
         // above, so we can't use BString to get a vec<u8>.  Look into

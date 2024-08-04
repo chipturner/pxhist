@@ -24,6 +24,33 @@ use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+pub fn get_setting(
+    conn: &Connection,
+    key: &str,
+) -> Result<Option<BString>, Box<dyn std::error::Error>> {
+    let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?")?;
+    let mut rows = stmt.query([key])?;
+
+    if let Some(row) = rows.next()? {
+        let value: Vec<u8> = row.get(0)?;
+        Ok(Some(BString::from(value)))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn set_setting(
+    conn: &Connection,
+    key: &str,
+    value: &BString,
+) -> Result<(), Box<dyn std::error::Error>> {
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+        (key, value.as_bytes()),
+    )?;
+    Ok(())
+}
+
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 pub fn get_hostname() -> BString {
@@ -55,6 +82,12 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
 
         Ok(is_match)
     })?;
+
+    // Check and set the original_hostname if it's not already set
+    if let Ok(None) = get_setting(&conn, "original_hostname") {
+        let hostname = get_hostname();
+        set_setting(&conn, "original_hostname", &hostname)?;
+    }
 
     Ok(conn)
 }

@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS command_history  (
+CREATE TABLE IF NOT EXISTS command_history (
        id INTEGER PRIMARY KEY AUTOINCREMENT,
        session_id INTEGER NOT NULL,
        full_command BLOB NOT NULL,
@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS command_history  (
 
 CREATE INDEX IF NOT EXISTS history_session_id ON command_history(session_id);
 CREATE INDEX IF NOT EXISTS history_start_time ON command_history(start_unix_timestamp);
+
+CREATE TABLE IF NOT EXISTS settings (
+       key TEXT PRIMARY KEY,
+       value BLOB
+);
 
 ATTACH DATABASE ':memory:' AS memdb;
 CREATE TABLE memdb.show_results (
