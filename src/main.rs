@@ -138,13 +138,13 @@ struct InsertCommand {
     #[clap(long)]
     username: OsString,
     #[clap(long)]
-    working_directory: Option<PathBuf>,
+    working_directory: Option<PathBuf>, // TODO: let's make this non-optional
     #[clap(long)]
     exit_status: Option<i64>,
     #[clap(long)]
     session_id: i64,
     #[clap(long)]
-    start_unix_timestamp: Option<i64>,
+    start_unix_timestamp: Option<i64>, // TODO: let's make this non-optional
     #[clap(long)]
     end_unix_timestamp: Option<i64>,
     command: Vec<OsString>,

@@ -2,21 +2,28 @@ use std::{env, path::PathBuf};
 
 use assert_cmd::Command;
 use bstr::BString;
+use rand::{distributions::Alphanumeric, Rng};
 use tempfile::TempDir;
+
+fn generate_random_string(length: usize) -> String {
+    rand::thread_rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
+}
 
 // Simple struct and helpers for invoking pxh with a given testdb.
 struct PxhCaller {
     tmpdir: TempDir,
+    hostname: String,
 }
 
 impl PxhCaller {
     fn new() -> Self {
-        PxhCaller { tmpdir: TempDir::new().unwrap() }
+        PxhCaller { tmpdir: TempDir::new().unwrap(), hostname: generate_random_string(12) }
     }
 
     fn call<S: AsRef<str>>(&mut self, args: S) -> Command {
         let mut ret = Command::cargo_bin("pxh").unwrap();
         ret.env_clear().env("PXH_DB_PATH", &self.tmpdir.path().join("test"));
+        ret.env("PXH_HOSTNAME", &self.hostname);
         ret.args(args.as_ref().split(' '));
         ret
     }
@@ -345,4 +352,41 @@ fn scrub_command() {
     // Verify we have none.
     let output = pc.call("show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
+}
+
+#[test]
+fn sync_roundtrip() {
+    // Prepare some test data: 40 test commands
+    let mut pc_even = PxhCaller::new();
+    let mut pc_odd = PxhCaller::new();
+    for i in 1..=40 {
+        let cmd = format!(
+	    "insert --shellname s --hostname h --username u --working-directory d --start-unix-timestamp 1 --session-id {i} test_command_{i}",
+        );
+        if i % 2 == 0 {
+            pc_even.call(cmd).assert().success();
+        } else {
+            pc_odd.call(cmd).assert().success();
+        }
+    }
+
+    let sync_dir = TempDir::new().unwrap();
+    let sync_cmd = format!("sync {}", sync_dir.path().to_string_lossy());
+    pc_even.call(&sync_cmd).assert().success();
+    pc_odd.call(&sync_cmd).assert().success();
+
+    let even_output = pc_even.call("show --suppress-headers").output().unwrap();
+    let even_odd_output = pc_odd.call("show --suppress-headers").output().unwrap();
+
+    assert_eq!(count_lines(&even_output.stdout), 20);
+    assert_eq!(count_lines(&even_odd_output.stdout), 40); // 40, not 20!  because the sync pulled in the 20 from the even sync above
+
+    // For thoroughness case, let's see we pull in both files (total
+    // of 60 entries) and properly dedupe into 40 just like the
+    // even_odd case above.
+    let mut pc_merged = PxhCaller::new();
+    pc_merged.call(&sync_cmd).assert().success();
+    let merged_output = pc_merged.call("show --suppress-headers").output().unwrap();
+
+    assert_eq!(count_lines(&merged_output.stdout), 40);
 }
