@@ -54,7 +54,7 @@ pub fn set_setting(
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 pub fn get_hostname() -> BString {
-    env::var_os("PXH_HOSTNAME").ok_or_else(hostname::get).unwrap_or_default().as_bytes().into()
+    env::var_os("PXH_HOSTNAME").unwrap_or_else(|| hostname::get().unwrap_or_default()).as_bytes().into()
 }
 
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
