@@ -14,6 +14,7 @@ use bstr::{BString, ByteSlice};
 use clap::{Parser, Subcommand};
 use regex::bytes::Regex;
 use rusqlite::{Connection, Result};
+use tempfile::NamedTempFile;
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -138,13 +139,13 @@ struct InsertCommand {
     #[clap(long)]
     username: OsString,
     #[clap(long)]
-    working_directory: Option<PathBuf>, // TODO: let's make this non-optional
+    working_directory: Option<PathBuf>, // option because importing may lack working dir
     #[clap(long)]
     exit_status: Option<i64>,
     #[clap(long)]
     session_id: i64,
     #[clap(long)]
-    start_unix_timestamp: Option<i64>, // TODO: let's make this non-optional
+    start_unix_timestamp: Option<i64>, // similar to above
     #[clap(long)]
     end_unix_timestamp: Option<i64>,
     command: Vec<OsString>,
@@ -322,10 +323,9 @@ impl SyncCommand {
             }
         }
 
-        // VACUUM wants the output to not exist, so delete it if it does.
-        // TODO: save to temp filename, rename over after vacuum succeeds.
-        let _unused = fs::remove_file(&output_path);
-        conn.execute("VACUUM INTO ?", (output_path_str,))?;
+        let temp_file = NamedTempFile::new_in(self.dirname.as_path())?;
+        conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
+        temp_file.persist(output_path_str)?;
         if self.export_only {
             println!("Backed-up database to {output_path_str}");
         } else {

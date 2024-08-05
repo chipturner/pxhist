@@ -318,7 +318,7 @@ impl From<Option<&Vec<u8>>> for PrettyExportString {
     }
 }
 
-// A copy of Invocation byt witgh PrettyExportString instead of
+// A copy of Invocation but with PrettyExportString instead of
 // BString; TODO: reconcile into one class perhaps?
 #[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
 struct InvocationJsonExporter {
