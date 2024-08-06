@@ -150,7 +150,7 @@ More advanced usage and flags can be explored via `pxh help`.
 
 ## Getting Started
 
-- Install the bxh binary
+- Install the _pxh_ binary
 - Install the _pxh_ shell helper: `pxh install YOUR_SHELL_NAME`
   (e.g. `zsh`).
   - _pxh_ will be active on future shells.  To activate for this an

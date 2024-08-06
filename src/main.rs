@@ -524,7 +524,7 @@ impl PrintableCommand for ShowCommand {
             .into_iter()
             .filter(|row| match_all_regexes(row, &regexes))
             .rev()
-            .take(self.limit)
+            .take(self.display_limit())
             .collect())
     }
 
@@ -574,7 +574,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ? AND session_id = ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (pattern, session_id, self.limit),
+                (pattern, session_id, self.display_limit()),
             )?;
         } else if self.here {
             conn.execute(
@@ -586,7 +586,7 @@ SELECT rowid, start_unix_timestamp, id
    AND full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (working_directory.to_string_lossy(), pattern, self.limit),
+                (working_directory.to_string_lossy(), pattern, self.display_limit()),
             )?;
         } else {
             conn.execute(
@@ -597,7 +597,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (pattern, self.limit),
+                (pattern, self.display_limit()),
             )?;
         }
 
