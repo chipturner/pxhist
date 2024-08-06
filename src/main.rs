@@ -304,9 +304,10 @@ impl SyncCommand {
             pxh::get_setting(&conn, "original_hostname")?.unwrap_or_else(pxh::get_hostname);
         output_path.push(original_hostname.to_path_lossy());
         output_path.set_extension("db");
-        // TODO: vacuum seems to want a plain text path, unlike ATTACH
-        // above, so we can't use BString to get a vec<u8>.  Look into
-        // why this is and if there is a workaround.
+        // TODO: vacuum seems to want a plain text string path, unlike
+        // ATTACH below which takes an os_str as bytes, so we can't
+        // use BString to get a vec<u8>.  Look into why this is and if
+        // there is a workaround.
         let output_path_str =
             output_path.to_str().ok_or("Unable to represent output filename as a string")?;
 
