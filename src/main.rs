@@ -612,7 +612,14 @@ fn match_all_regexes(row: &pxh::InvocationDatabaseRow, regexes: &[Regex]) -> boo
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let mut args = PxhArgs::parse();
+    let mut args: Vec<String> = std::env::args().collect();
+
+    // If no subcommand is provided, default to "show"
+    if !args[1].starts_with('-') && !Commands::has_subcommand(&args[1]) {
+        args.insert(1, "show".to_string());
+    }
+
+    let mut args = PxhArgs::parse_from(args);
 
     let make_conn = || pxh::sqlite_connection(&args.db);
     match &mut args.command {
