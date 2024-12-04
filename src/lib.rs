@@ -67,6 +67,7 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "cache_size", "16777216")?;
+    conn.pragma_update(None, "busy_timeout", "100")?;
 
     let schema = include_str!("base_schema.sql");
     conn.execute_batch(schema)?;
