@@ -63,11 +63,10 @@ pub fn get_hostname() -> BString {
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     let conn = Connection::open(path)?;
-    conn.busy_timeout(Duration::from_millis(100))?;
+    conn.busy_timeout(Duration::from_millis(500))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
     conn.pragma_update(None, "cache_size", "16777216")?;
-    conn.pragma_update(None, "busy_timeout", "500")?;
 
     let schema = include_str!("base_schema.sql");
     conn.execute_batch(schema)?;
