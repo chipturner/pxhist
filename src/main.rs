@@ -13,7 +13,7 @@ use std::{
 use bstr::{BString, ByteSlice};
 use clap::{Parser, Subcommand};
 use regex::bytes::Regex;
-use rusqlite::{Connection, Result};
+use rusqlite::{Connection, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
 
 #[derive(Parser, Debug)]
@@ -652,7 +652,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Insert(cmd) => {
             let mut conn = make_conn()?;
-            let tx = conn.transaction()?;
             let invocation = pxh::Invocation {
                 command: cmd.command.join(OsStr::new(" ")).as_bytes().into(),
                 shellname: cmd.shellname.clone(),
@@ -667,6 +666,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 end_unix_timestamp: cmd.end_unix_timestamp,
                 session_id: cmd.session_id,
             };
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
             invocation.insert(&tx)?;
             tx.commit()?;
         }
