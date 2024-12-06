@@ -12,4 +12,3 @@ Cargo.lock
 perf.data
 perf.data.old
 .aider*
-.env
