@@ -1,3 +1,5 @@
+DROP INDEX idx_command_history_unique;
+
 CREATE TABLE command_history_new (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id INTEGER NOT NULL,
@@ -61,3 +63,5 @@ WHERE rn = 1;
 
 DROP TABLE command_history;
 ALTER TABLE command_history_new RENAME TO command_history;
+
+VACUUM;
