@@ -116,7 +116,7 @@ impl Invocation {
     pub fn insert(&self, tx: &Transaction) -> Result<(), Box<dyn std::error::Error>> {
         tx.execute(
             r#"
-INSERT INTO command_history (
+INSERT OR IGNORE INTO command_history (
     session_id,
     full_command,
     shellname,

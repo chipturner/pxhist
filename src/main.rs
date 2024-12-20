@@ -351,7 +351,7 @@ impl SyncCommand {
             .query_row((), |r| r.get(0))?;
         tx.execute(
             r#"
-INSERT INTO main.command_history (
+INSERT OR IGNORE INTO main.command_history (
     session_id,
     full_command,
     shellname,
