@@ -1,4 +1,8 @@
-use std::{env, path::PathBuf};
+use std::{
+    env,
+    fs::{self, File},
+    path::PathBuf,
+};
 
 use assert_cmd::Command;
 use bstr::BString;
@@ -317,6 +321,94 @@ fn timestamped_bash_import_roundtrip() {
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
+}
+
+#[test]
+fn install_command() {
+    let tmpdir = TempDir::new().unwrap();
+    let home = tmpdir.path();
+
+    // Create empty RC files
+    let zshrc = home.join(".zshrc");
+    let bashrc = home.join(".bashrc");
+    File::create(&zshrc).unwrap();
+    File::create(&bashrc).unwrap();
+
+    // Test zsh installation
+    let output = Command::cargo_bin("pxh")
+        .unwrap()
+        .env_clear()
+        .env("HOME", home)
+        .args(["install", "zsh"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let zshrc_content = fs::read_to_string(&zshrc).unwrap();
+    assert!(zshrc_content.contains("pxh shell-config zsh"));
+
+    // Test bash installation
+    let output = Command::cargo_bin("pxh")
+        .unwrap()
+        .env_clear()
+        .env("HOME", home)
+        .args(["install", "bash"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let bashrc_content = fs::read_to_string(&bashrc).unwrap();
+    assert!(bashrc_content.contains("pxh shell-config bash"));
+
+    // Test invalid shell
+    let output = Command::cargo_bin("pxh")
+        .unwrap()
+        .env_clear()
+        .env("HOME", home)
+        .args(["install", "invalid"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+}
+
+#[test]
+fn shell_config_command() {
+    // Test zsh config output
+    let output = Command::cargo_bin("pxh")
+        .unwrap()
+        .env_clear()
+        .args(["shell-config", "zsh"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.len() > 0);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("_pxh_addhistory"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("add-zsh-hook"));
+
+    // Test bash config output
+    let output = Command::cargo_bin("pxh")
+        .unwrap()
+        .env_clear()
+        .args(["shell-config", "bash"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(output.stdout.len() > 0);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("preexec()"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("bash-preexec.sh"));
+
+    // Test invalid shell
+    let output = Command::cargo_bin("pxh")
+        .unwrap()
+        .env_clear()
+        .args(["shell-config", "invalid"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
 }
 
 #[test]
