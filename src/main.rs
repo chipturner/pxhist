@@ -56,6 +56,8 @@ struct InstallCommand {
 
 #[derive(Parser, Debug)]
 struct ShowCommand {
+    #[clap(short = 'i', long, help = "perform case-insensitive matching", default_value_t = false)]
+    ignore_case: bool,
     #[clap(
         short,
         long,
@@ -550,6 +552,13 @@ impl ShowCommand {
             self.patterns.first().map_or_else(String::default, String::clone)
         } else {
             self.patterns.join(".*\\s.*")
+        };
+
+        // Add case-insensitive modifier and convert pattern to lowercase if needed
+        let pattern = if self.ignore_case {
+            format!("(?i){}", pattern.to_lowercase())
+        } else {
+            pattern
         };
 
         conn.execute("DELETE FROM memdb.show_results", ())?;

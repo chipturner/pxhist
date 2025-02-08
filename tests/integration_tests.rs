@@ -202,6 +202,45 @@ fn show_with_limit() {
     assert_eq!(count_lines(&output.stdout), 100);
 }
 
+#[test]
+fn show_with_case_insensitive() {
+    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
+
+    // Prepare some test data: three commands with mixed case
+    let mut pc = PxhCaller::new();
+    for i in 1..=3 {
+        let cmd = format!(
+            "insert --shellname s --hostname h --username u --session-id {i} TEST_command_{i}"
+        );
+        pc.call(cmd).assert().success();
+    }
+
+    // Test case-sensitive search (should find only exact match)
+    let output = pc.call("show --suppress-headers test_command").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 0);
+
+    // Test case-insensitive search (should find all variations)
+    let output = pc.call("show --suppress-headers --ignore-case test_command").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 3);
+
+    // Test with multiple patterns case-insensitive
+    let output = pc.call("show --suppress-headers --ignore-case TEST_COMMAND").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 3);
+
+    // Test that uppercase pattern is converted to lowercase
+    let output = pc.call("show --suppress-headers --ignore-case TEST_COMMAND_1").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+    let output = pc.call("show --suppress-headers --ignore-case test_command_1").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+
+    // Verify case-sensitive still works
+    let output = pc.call("show --suppress-headers TEST").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 3);
+}
+
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn insert_seal_roundtrip() {
