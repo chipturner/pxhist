@@ -149,7 +149,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
 // If that fails, just create a random one.
 fn generate_import_session_id(histfile: &Path) -> i64 {
     if let Ok(st) = std::fs::metadata(histfile) {
-        (st.ino() << 16 | st.dev()) as i64
+        ((st.ino() << 16) | st.dev()) as i64
     } else {
         (rand::random::<u64>() >> 1) as i64
     }
@@ -260,27 +260,15 @@ fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
     ret
 }
 
-pub struct InvocationDatabaseRow {
-    pub session_id: i64,
-    pub command: Vec<u8>,
-    pub shellname: String,
-    pub working_directory: Option<Vec<u8>>,
-    pub hostname: Option<Vec<u8>>,
-    pub username: Option<Vec<u8>>,
-    pub exit_status: Option<i64>,
-    pub start_unix_timestamp: Option<i64>,
-    pub end_unix_timestamp: Option<i64>,
-}
-
-impl InvocationDatabaseRow {
+impl Invocation {
     pub fn from_row(row: &Row) -> Result<Self, Error> {
-        Ok(InvocationDatabaseRow {
+        Ok(Invocation {
             session_id: row.get("session_id")?,
-            command: row.get("full_command")?,
+            command: BString::from(row.get::<_, Vec<u8>>("full_command")?),
             shellname: row.get("shellname")?,
-            working_directory: row.get("working_directory")?,
-            hostname: row.get("hostname")?,
-            username: row.get("username")?,
+            working_directory: row.get::<_, Option<Vec<u8>>>("working_directory")?.map(BString::from),
+            hostname: row.get::<_, Option<Vec<u8>>>("hostname")?.map(BString::from),
+            username: row.get::<_, Option<Vec<u8>>>("username")?.map(BString::from),
             exit_status: row.get("exit_status")?,
             start_unix_timestamp: row.get("start_unix_timestamp")?,
             end_unix_timestamp: row.get("end_unix_timestamp")?,
@@ -309,53 +297,44 @@ impl From<&[u8]> for PrettyExportString {
 
 impl From<Option<&Vec<u8>>> for PrettyExportString {
     fn from(bytes: Option<&Vec<u8>>) -> Self {
-        // TODO: make this pretty
-        if let Some(v) = bytes {
-            match str::from_utf8(v.as_slice()) {
-                Ok(v) => Self::Readable(v.to_string()),
+        match bytes {
+            Some(v) => match str::from_utf8(v.as_slice()) {
+                Ok(s) => Self::Readable(s.to_string()),
                 _ => Self::Encoded(v.to_vec()),
-            }
-        } else {
-            PrettyExportString::Readable("".to_string())
+            },
+            None => Self::Readable(String::new()),
         }
     }
 }
 
-// A copy of Invocation but with PrettyExportString instead of
-// BString; TODO: reconcile into one class perhaps?
-#[derive(Debug, Eq, PartialEq, Serialize, Deserialize, Clone)]
-struct InvocationJsonExporter {
-    session_id: i64,
-    command: PrettyExportString,
-    shellname: String,
-    working_directory: PrettyExportString,
-    hostname: PrettyExportString,
-    username: PrettyExportString,
-    exit_status: Option<i64>,
-    start_unix_timestamp: Option<i64>,
-    end_unix_timestamp: Option<i64>,
-}
-
-impl InvocationJsonExporter {
-    fn new(row: &InvocationDatabaseRow) -> Self {
-        Self {
-            session_id: row.session_id,
-            command: row.command.as_slice().into(),
-            shellname: row.shellname.clone(),
-            working_directory: row.working_directory.as_ref().into(),
-            hostname: row.hostname.as_ref().into(),
-            username: row.username.as_ref().into(),
-            exit_status: row.exit_status,
-            start_unix_timestamp: row.start_unix_timestamp,
-            end_unix_timestamp: row.end_unix_timestamp,
-        }
+impl Invocation {
+    fn to_json_export(&self) -> serde_json::Value {
+        serde_json::json!({
+            "session_id": self.session_id,
+            "command": PrettyExportString::from(self.command.as_slice()),
+            "shellname": self.shellname,
+            "working_directory": self.working_directory.as_ref().map_or(
+                PrettyExportString::Readable(String::new()),
+                |b| PrettyExportString::from(b.as_slice())
+            ),
+            "hostname": self.hostname.as_ref().map_or(
+                PrettyExportString::Readable(String::new()),
+                |b| PrettyExportString::from(b.as_slice())
+            ),
+            "username": self.username.as_ref().map_or(
+                PrettyExportString::Readable(String::new()),
+                |b| PrettyExportString::from(b.as_slice())
+            ),
+            "exit_status": self.exit_status,
+            "start_unix_timestamp": self.start_unix_timestamp,
+            "end_unix_timestamp": self.end_unix_timestamp,
+        })
     }
 }
 
-pub fn json_export(rows: &[InvocationDatabaseRow]) -> Result<(), Box<dyn std::error::Error>> {
-    let invocations: Vec<InvocationJsonExporter> =
-        rows.iter().map(InvocationJsonExporter::new).collect();
-    serde_json::to_writer(io::stdout(), &invocations)?;
+pub fn json_export(rows: &[Invocation]) -> Result<(), Box<dyn std::error::Error>> {
+    let json_values: Vec<serde_json::Value> = rows.iter().map(|r| r.to_json_export()).collect();
+    serde_json::to_writer(io::stdout(), &json_values)?;
     Ok(())
 }
 
@@ -364,7 +343,7 @@ pub fn json_export(rows: &[InvocationDatabaseRow]) -> Result<(), Box<dyn std::er
 struct QueryResultColumnDisplayer {
     header: &'static str,
     style: &'static str,
-    displayer: Box<dyn Fn(&InvocationDatabaseRow) -> String>,
+    displayer: Box<dyn Fn(&Invocation) -> String>,
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
@@ -376,8 +355,8 @@ fn time_display_helper(t: Option<i64>) -> String {
         .unwrap_or_else(|| "n/a".to_string())
 }
 
-fn binary_display_helper(v: &[u8]) -> String {
-    String::from_utf8_lossy(v).to_string()
+fn binary_display_helper(v: &BString) -> String {
+    String::from_utf8_lossy(v.as_slice()).to_string()
 }
 
 fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
@@ -450,14 +429,14 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
             style: "bFb",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
-                let row_hostname = row.hostname.clone().map(BString::from).unwrap_or_default();
+                let row_hostname = row.hostname.clone().unwrap_or_default();
                 let mut ret = String::new();
                 if current_hostname != row_hostname {
                     write!(ret, "{row_hostname}:").unwrap_or_default();
                 }
                 let current_directory = env::current_dir().unwrap_or_default();
                 ret.push_str(&row.working_directory.as_ref().map_or_else(String::new, |v| {
-                    let v = String::from_utf8_lossy(v).to_string();
+                    let v = String::from_utf8_lossy(v.as_slice()).to_string();
                     if v == current_directory.to_string_lossy() {
                         String::from(".")
                     } else {
@@ -475,7 +454,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
 
 pub fn present_results_human_readable(
     fields: &[&str],
-    rows: &[InvocationDatabaseRow],
+    rows: &[Invocation],
     suppress_headers: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let displayers = displayers();

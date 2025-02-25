@@ -285,8 +285,8 @@ SELECT session_id, full_command, shellname, hostname, username, working_director
   FROM command_history h
 ORDER BY id"#,
     )?;
-        let rows: Result<Vec<pxh::InvocationDatabaseRow>, _> =
-            stmt.query_map([], pxh::InvocationDatabaseRow::from_row)?.collect();
+        let rows: Result<Vec<pxh::Invocation>, _> =
+            stmt.query_map([], pxh::Invocation::from_row)?.collect();
         let rows = rows?;
         pxh::json_export(&rows)?;
         Ok(())
@@ -394,8 +394,8 @@ trait PrintableCommand {
 
     fn extra_filter_step(
         &self,
-        rows: Vec<pxh::InvocationDatabaseRow>,
-    ) -> Result<Vec<pxh::InvocationDatabaseRow>, Box<dyn std::error::Error>>;
+        rows: Vec<pxh::Invocation>,
+    ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>>;
 
     fn present_results(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
         // Now that we have the relevant rows, just present the output
@@ -407,8 +407,8 @@ SELECT session_id, full_command, shellname, working_directory, hostname, usernam
 ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
 "#)?;
 
-        let rows: Result<Vec<pxh::InvocationDatabaseRow>, _> =
-            stmt.query_map([], pxh::InvocationDatabaseRow::from_row)?.collect();
+        let rows: Result<Vec<pxh::Invocation>, _> =
+            stmt.query_map([], pxh::Invocation::from_row)?.collect();
         let rows = self.extra_filter_step(rows?)?;
         if self.verbose() {
             pxh::present_results_human_readable(
@@ -442,8 +442,8 @@ impl PrintableCommand for ScrubCommand {
 
     fn extra_filter_step(
         &self,
-        rows: Vec<pxh::InvocationDatabaseRow>,
-    ) -> Result<Vec<pxh::InvocationDatabaseRow>, Box<dyn std::error::Error>> {
+        rows: Vec<pxh::Invocation>,
+    ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
         Ok(rows)
     }
 }
@@ -518,8 +518,8 @@ ORDER BY start_unix_timestamp DESC, id DESC"#,
 impl PrintableCommand for ShowCommand {
     fn extra_filter_step(
         &self,
-        rows: Vec<pxh::InvocationDatabaseRow>,
-    ) -> Result<Vec<pxh::InvocationDatabaseRow>, Box<dyn std::error::Error>> {
+        rows: Vec<pxh::Invocation>,
+    ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
         let regexes: Result<Vec<Regex>, _> =
             self.patterns.iter().skip(1).map(|s| Regex::new(s.as_str())).collect();
         let regexes = regexes?;
@@ -615,8 +615,8 @@ LIMIT ?"#,
     }
 }
 
-fn match_all_regexes(row: &pxh::InvocationDatabaseRow, regexes: &[Regex]) -> bool {
-    regexes.iter().all(|regex| regex.is_match(&row.command))
+fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
+    regexes.iter().all(|regex| regex.is_match(row.command.as_slice()))
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
