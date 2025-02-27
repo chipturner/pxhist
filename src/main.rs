@@ -555,11 +555,8 @@ impl ShowCommand {
         };
 
         // Add case-insensitive modifier and convert pattern to lowercase if needed
-        let pattern = if self.ignore_case {
-            format!("(?i){}", pattern.to_lowercase())
-        } else {
-            pattern
-        };
+        let pattern =
+            if self.ignore_case { format!("(?i){}", pattern.to_lowercase()) } else { pattern };
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
 
@@ -619,9 +616,63 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
     regexes.iter().all(|regex| regex.is_match(row.command.as_slice()))
 }
 
+// Separate function to facilitate testing
+fn determine_is_pxhs(args: &[String]) -> bool {
+    args.first()
+        .and_then(|arg| {
+            PathBuf::from(arg).file_name().map(|name| name.to_string_lossy().contains("pxhs"))
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_determine_is_pxhs() {
+        // Test normal pxh invocation
+        assert!(!determine_is_pxhs(&["/usr/bin/pxh".to_string()]));
+        assert!(!determine_is_pxhs(&["/path/to/pxh".to_string()]));
+        assert!(!determine_is_pxhs(&["./pxh".to_string()]));
+
+        // Test pxhs invocation (symlink behavior)
+        assert!(determine_is_pxhs(&["/usr/bin/pxhs".to_string()]));
+        assert!(determine_is_pxhs(&["/path/to/pxhs".to_string()]));
+        assert!(determine_is_pxhs(&["./pxhs".to_string()]));
+
+        // Edge cases
+        assert!(determine_is_pxhs(&["pxhs".to_string()]));
+        assert!(determine_is_pxhs(&["pxhs-something".to_string()]));
+        assert!(!determine_is_pxhs(&["".to_string()]));
+        assert!(!determine_is_pxhs(&[]));
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
-    let mut args = PxhArgs::parse();
+
+    // Check if binary was invoked as "pxhs", which is a shorthand for "pxh show"
+    let args_vec = env::args().collect::<Vec<_>>();
+
+    // Check if the executable name contains "pxhs" (handles both direct calls and symlinks)
+    let is_pxhs = determine_is_pxhs(&args_vec);
+
+    let mut args = if is_pxhs {
+        // When invoked as pxhs, always transform to "pxh show ..."
+        let program = args_vec[0].clone(); // Get program name
+        let rest = args_vec.iter().skip(1).cloned(); // Get remaining args
+
+        // Build new args with "show" inserted after program name
+        let combined_args = std::iter::once(program)
+            .chain(std::iter::once(String::from("show")))
+            .chain(rest)
+            .collect::<Vec<_>>();
+
+        PxhArgs::parse_from(combined_args)
+    } else {
+        PxhArgs::parse()
+    };
 
     let make_conn = || pxh::sqlite_connection(&args.db);
     match &mut args.command {

@@ -486,6 +486,66 @@ fn scrub_command() {
 }
 
 #[test]
+fn symlink_pxhs_behavior() {
+    // Create a temporary directory for our symlinks
+    let tempdir = TempDir::new().unwrap();
+    let pxh_path = tempdir.path().join("pxh");
+    let pxhs_path = tempdir.path().join("pxhs");
+
+    // Get the actual binary path and create symlinks
+    let bin_path = Command::cargo_bin("pxh").unwrap().get_program().to_string_lossy().to_string();
+    std::os::unix::fs::symlink(&bin_path, &pxh_path).unwrap();
+    std::os::unix::fs::symlink(&pxh_path, &pxhs_path).unwrap();
+
+    // Create a PxhCaller for our test
+    let mut pc = PxhCaller::new();
+
+    // Insert test data
+    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
+        .assert()
+        .success();
+
+    // Make sure the data is properly sealed with exit status
+    pc.call("seal --session-id 12345678 --exit-status 0 --end-unix-timestamp 1600000000")
+        .assert()
+        .success();
+
+    // Test 1: Verify our test data using the regular pxh command
+    let base_output = pc.call("show --suppress-headers").output().unwrap();
+    assert!(base_output.status.success());
+    assert!(String::from_utf8_lossy(&base_output.stdout).contains("test_command_1"));
+
+    // Test 2: pxhs with search term should inject "show" and work like "pxh show"
+    let shorthand_output = Command::new(&pxhs_path)
+        .env("PXH_DB_PATH", &pc.tmpdir.path().join("test"))
+        .env("PXH_HOSTNAME", &pc.hostname)
+        .args(["test_command"])
+        .output()
+        .unwrap();
+
+    assert!(shorthand_output.status.success());
+    let shorthand_str = String::from_utf8_lossy(&shorthand_output.stdout);
+    assert!(
+        shorthand_str.contains("test_command_1"),
+        "The shorthand form pxhs should act like pxh show"
+    );
+
+    // Test 3: pxhs with "--help" should work correctly and show help for the show command
+    let help_output = Command::new(&pxhs_path)
+        .env("PXH_DB_PATH", &pc.tmpdir.path().join("test"))
+        .args(["--help"])
+        .output()
+        .unwrap();
+
+    assert!(help_output.status.success());
+    let help_str = String::from_utf8_lossy(&help_output.stdout);
+    assert!(
+        help_str.contains("search for and display history entries"),
+        "Help output should include the show command description"
+    );
+}
+
+#[test]
 fn sync_roundtrip() {
     // Prepare some test data: 40 test commands
     let mut pc_even = PxhCaller::new();

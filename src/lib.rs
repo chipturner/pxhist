@@ -266,7 +266,9 @@ impl Invocation {
             session_id: row.get("session_id")?,
             command: BString::from(row.get::<_, Vec<u8>>("full_command")?),
             shellname: row.get("shellname")?,
-            working_directory: row.get::<_, Option<Vec<u8>>>("working_directory")?.map(BString::from),
+            working_directory: row
+                .get::<_, Option<Vec<u8>>>("working_directory")?
+                .map(BString::from),
             hostname: row.get::<_, Option<Vec<u8>>>("hostname")?.map(BString::from),
             username: row.get::<_, Option<Vec<u8>>>("username")?.map(BString::from),
             exit_status: row.get("exit_status")?,
