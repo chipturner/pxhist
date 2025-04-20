@@ -6,7 +6,7 @@ use std::{
 
 use assert_cmd::Command;
 use bstr::BString;
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{Rng, distributions::Alphanumeric};
 use tempfile::TempDir;
 
 fn generate_random_string(length: usize) -> String {
@@ -94,10 +94,15 @@ fn show_with_here() {
     // from wherever the test runs.
     let mut pc = PxhCaller::new();
     for i in 1..=3 {
-        let cmd = format!("insert --shellname s --hostname h --username u --session-id 1 --working-directory /dir{i} test_command_{i}");
+        let cmd = format!(
+            "insert --shellname s --hostname h --username u --session-id 1 --working-directory /dir{i} test_command_{i}"
+        );
         pc.call(cmd).assert().success();
     }
-    let cmd = format!("insert --shellname s --hostname h --username u --session-id 1 --working-directory {} test_command_cwd", env::current_dir().unwrap_or_default().to_string_lossy());
+    let cmd = format!(
+        "insert --shellname s --hostname h --username u --session-id 1 --working-directory {} test_command_cwd",
+        env::current_dir().unwrap_or_default().to_string_lossy()
+    );
     pc.call(cmd).assert().success();
 
     // Now make sure we only see the relevant results when --here is
@@ -552,7 +557,7 @@ fn sync_roundtrip() {
     let mut pc_odd = PxhCaller::new();
     for i in 1..=40 {
         let cmd = format!(
-	    "insert --shellname s --hostname h --username u --working-directory d --start-unix-timestamp 1 --session-id {i} test_command_{i}",
+            "insert --shellname s --hostname h --username u --working-directory d --start-unix-timestamp 1 --session-id {i} test_command_{i}",
         );
         if i % 2 == 0 {
             pc_even.call(cmd).assert().success();

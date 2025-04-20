@@ -15,11 +15,11 @@ use std::{
     time::Duration,
 };
 
-use bstr::{io::BufReadExt, BString, ByteSlice};
+use bstr::{BString, ByteSlice, io::BufReadExt};
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
 use regex::bytes::Regex;
-use rusqlite::{functions::FunctionFlags, Connection, Error, Result, Row, Transaction};
+use rusqlite::{Connection, Error, Result, Row, Transaction, functions::FunctionFlags};
 use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -439,11 +439,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
                 let current_directory = env::current_dir().unwrap_or_default();
                 ret.push_str(&row.working_directory.as_ref().map_or_else(String::new, |v| {
                     let v = String::from_utf8_lossy(v.as_slice()).to_string();
-                    if v == current_directory.to_string_lossy() {
-                        String::from(".")
-                    } else {
-                        v
-                    }
+                    if v == current_directory.to_string_lossy() { String::from(".") } else { v }
                 }));
 
                 ret

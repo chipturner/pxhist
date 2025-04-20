@@ -211,7 +211,7 @@ impl ShellConfigCommand {
                 return Err(Box::from(format!(
                     "Unsupported shell: {} (PRs welcome!)",
                     self.shellname
-                )))
+                )));
             }
         };
         io::stdout().write_all(contents.as_bytes())?;
@@ -456,7 +456,9 @@ impl ScrubCommand {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let contraband = match &self.contraband {
             Some(value) => {
-                println!("WARNING: specifying the contraband on the command line is inherently risky; prefer not specifying it\n");
+                println!(
+                    "WARNING: specifying the contraband on the command line is inherently risky; prefer not specifying it\n"
+                );
                 value.clone()
             }
             None => {
