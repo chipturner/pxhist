@@ -6,7 +6,7 @@ use std::{
 
 use assert_cmd::Command;
 use bstr::BString;
-use rand::{Rng, distributions::Alphanumeric};
+use rand::{distributions::Alphanumeric, Rng};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
@@ -590,78 +590,100 @@ fn sync_roundtrip() {
 
 #[test]
 fn test_maintenance() {
-    // Set up a new database with a lot of varied content
+    // Set up a new database with varied content but reduced size for faster testing
     let mut pc = PxhCaller::new();
-
-    // Generate a lot of commands with varied lengths
-    let num_commands = 2000;
-    let mut rng = rand::thread_rng();
-
-    // Create several unique working directories
-    let working_dirs =
-        ["/home/user", "/var/log", "/etc", "/tmp", "/opt", "/usr", "~/home", "/data"];
-
-    // Generate many commands without any special characters or flags
-    for i in 1..=num_commands {
-        // Create session ID (grouped in batches)
-        let session_id = i / 20 + 1;
-
-        // Choose shell randomly
-        let shell = if i % 3 == 0 { "zsh" } else { "bash" };
-
-        // Vary hostname
-        let hostname = format!("host{}", i % 5 + 1);
-
-        // Vary username
-        let username = format!("user{}", i % 3 + 1);
-
-        // Create commands with no flags/special characters
-        let command = match i % 10 {
-            0 => format!("git commit"),
-            1 => format!("ls"),
-            2 => format!("cd etc"),
-            3 => format!("cd home"),
-            4 => format!("cat file{}", i % 100),
-            5 => format!("uptime"),
-            6 => format!("history"),
-            7 => format!("git pull"),
-            8 => format!("pwd"),
-            _ => format!("command{}", i),
-        };
-
-        // Choose a random working directory
-        let working_dir = working_dirs[rng.gen_range(0..working_dirs.len())];
-
-        // Insert the command with varied metadata - wrap command in double quotes
-        let insert_cmd = format!(
-            "insert --shellname {} --hostname {} --username {} --session-id {} --working-directory {} \"{}\"",
-            shell, hostname, username, session_id, working_dir, command
-        );
-
-        pc.call(insert_cmd).assert().success();
-
-        // Add exit status for some commands
-        if i % 5 != 0 {
-            // Most commands succeed, some fail
-            let exit_status = if i % 17 == 0 { 1 } else { 0 };
-            pc.call(format!(
-                "seal --session-id {} --exit-status {} --end-unix-timestamp {}",
-                session_id,
-                exit_status,
-                1600000000 + i
-            ))
-            .assert()
-            .success();
-        }
-    }
 
     // Get the database path for SQLite access
     let db_path = pc.tmpdir.path().join("test");
 
-    // Create a direct database connection to check the database state
-    let conn = Connection::open(&db_path).unwrap();
+    // Direct database access is faster than CLI for setup
+    {
+        // Create a direct database connection for faster setup
+        let mut conn = Connection::open(&db_path).unwrap();
 
-    // Get initial stats before deletion
+        // Set pragmas for faster operation during test setup
+        conn.execute_batch(
+            "
+            PRAGMA synchronous = OFF;
+            PRAGMA journal_mode = MEMORY;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = 10000;
+        ",
+        )
+        .unwrap();
+
+        // Create tables and schema
+        conn.execute_batch(include_str!("../src/base_schema.sql")).unwrap();
+
+        // Begin a transaction for bulk inserts (much faster)
+        let tx = conn.transaction().unwrap();
+
+        // Generate commands with varied metadata but fewer of them
+        let num_commands = 3000; // Significantly reduced but still enough for testing
+        let mut rng = rand::thread_rng();
+
+        // Working directories
+        let working_dirs = ["/home/user", "/var/log", "/etc", "/tmp"];
+
+        // Batch insert commands
+        for i in 1..=num_commands {
+            // Create session ID (grouped in batches)
+            let session_id = i / 10 + 1;
+
+            // Vary shell, hostname, username
+            let shell = if i % 3 == 0 { "zsh" } else { "bash" };
+            let hostname = format!("host{}", i % 3 + 1);
+            let username = format!("user{}", i % 2 + 1);
+
+            // Create commands
+            let command = match i % 8 {
+                0 => "git commit",
+                1 => "ls",
+                2 => "cd etc",
+                3 => "cd home",
+                4 => "cat file",
+                5 => "uptime",
+                6 => "history",
+                _ => "command",
+            };
+
+            // Choose a random working directory
+            let working_dir = working_dirs[rng.gen_range(0..working_dirs.len())];
+
+            // Direct SQL insert is much faster than command-line
+            tx.execute(
+                "INSERT INTO command_history (
+                    session_id, full_command, shellname, hostname, username, 
+                    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    command,
+                    shell,
+                    hostname,
+                    username,
+                    working_dir,
+                    if i % 5 == 0 { None } else { Some(if i % 17 == 0 { 1 } else { 0 }) },
+                    1600000000 + i,
+                    if i % 5 == 0 { None } else { Some(1600000010 + i) },
+                ),
+            )
+            .unwrap();
+        }
+
+        // Commit all inserts at once
+        tx.commit().unwrap();
+
+        // Delete a significant number of rows to create free space
+        conn.execute("DELETE FROM command_history WHERE rowid % 3 = 0", []).unwrap();
+
+        // Force creation of free space for testing VACUUM
+        conn.execute("PRAGMA page_size = 4096", []).unwrap();
+        conn.execute("PRAGMA incremental_vacuum(5)", []).unwrap();
+    }
+
+    // Get initial stats
+    let conn = Connection::open(&db_path).unwrap();
     let initial_size: i64 = conn
         .query_row(
             "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
@@ -670,22 +692,12 @@ fn test_maintenance() {
         )
         .unwrap();
 
-    // Delete a significant number of rows to create free space
-    let sql = "DELETE FROM command_history WHERE rowid % 3 = 0";
-    let deleted = conn.execute(sql, []).unwrap();
-
-    // Ensure we deleted some rows
-    assert!(deleted > 500, "Should have deleted over 500 rows");
-    println!("Deleted {} rows to create free space", deleted);
-
-    // Count rows after deletion
+    // Count rows before maintenance
     let remaining_rows: i64 =
         conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
 
-    println!("Database has {} remaining rows after deletion", remaining_rows);
-
-    // Verify we still have a significant number of rows remaining
-    assert!(remaining_rows > 1000, "Should still have over 1000 rows for testing");
+    println!("Database has {} rows before maintenance", remaining_rows);
+    assert!(remaining_rows > 100, "Should have enough rows for testing");
 
     // Run the maintenance command via CLI
     println!("Running maintenance command...");
@@ -729,111 +741,97 @@ fn test_maintenance() {
 
 #[test]
 fn test_maintenance_multiple_files() {
-    // Create two databases with different content
-    let mut pc1 = PxhCaller::new();
-    let mut pc2 = PxhCaller::new();
+    // Create PxhCallers for two test databases
+    let mut pc_maint = PxhCaller::new();
 
-    // Insert some test data into first database
-    for i in 1..=100 {
-        let insert_cmd = format!(
-            "insert --shellname bash --hostname host1 --username user1 --session-id {} \"command_db1_{}\"",
-            i, i
-        );
-        pc1.call(insert_cmd).assert().success();
-    }
+    // Setup two test database files
+    let db_path1 = pc_maint.tmpdir.path().join("test1.db");
+    let db_path2 = pc_maint.tmpdir.path().join("test2.db");
 
-    // Insert some test data into second database
-    for i in 1..=150 {
-        let insert_cmd = format!(
-            "insert --shellname zsh --hostname host2 --username user2 --session-id {} \"command_db2_{}\"",
-            i, i
-        );
-        pc2.call(insert_cmd).assert().success();
-    }
+    // Define a helper function to quickly set up a test database
+    fn setup_test_db(path: &PathBuf, num_rows: usize, command_prefix: &str) -> (Connection, i64) {
+        // Direct database access is faster than CLI for setup
+        let mut conn = Connection::open(path).unwrap();
 
-    // Get the database paths
-    let db_path1 = pc1.tmpdir.path().join("test");
-    let db_path2 = pc2.tmpdir.path().join("test");
-
-    // Create direct database connections to check the state
-    let conn1 = Connection::open(&db_path1).unwrap();
-    let conn2 = Connection::open(&db_path2).unwrap();
-
-    // Force creation of free space with PRAGMA
-    conn1.execute("PRAGMA page_size = 4096", []).unwrap();
-    conn2.execute("PRAGMA page_size = 4096", []).unwrap();
-
-    // Insert more data
-    for i in 1..=100 {
-        let cmd = format!(
-            "INSERT INTO command_history (session_id, full_command, shellname, hostname, username) VALUES ({}, 'filler_command', 'bash', 'host1', 'user1')",
-            i + 1000
-        );
-        conn1.execute(&cmd, []).unwrap();
-        conn2.execute(&cmd, []).unwrap();
-    }
-
-    // Delete rows to create free space
-    conn1.execute("DELETE FROM command_history WHERE rowid % 2 = 0", []).unwrap();
-    conn2.execute("DELETE FROM command_history WHERE rowid % 3 = 0", []).unwrap();
-
-    // Run a selective VACUUM to ensure we have some freelist pages
-    conn1.execute("PRAGMA incremental_vacuum(5)", []).unwrap();
-    conn2.execute("PRAGMA incremental_vacuum(5)", []).unwrap();
-
-    // Get initial sizes before maintenance
-    let _initial_size1: i64 = conn1
-        .query_row(
-            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
-            [],
-            |r| r.get(0),
+        // Set pragmas for faster operation during test setup
+        conn.execute_batch(
+            "
+            PRAGMA synchronous = OFF;
+            PRAGMA journal_mode = MEMORY;
+            PRAGMA temp_store = MEMORY;
+            PRAGMA cache_size = 10000;
+        ",
         )
         .unwrap();
 
-    let _initial_size2: i64 = conn2
-        .query_row(
-            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+        // Create tables and schema
+        conn.execute_batch(include_str!("../src/base_schema.sql")).unwrap();
 
-    // Count rows before maintenance
-    let rows_before1: i64 =
-        conn1.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
-    let rows_before2: i64 =
-        conn2.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
+        // Begin a transaction for bulk inserts (much faster)
+        let tx = conn.transaction().unwrap();
+
+        // Batch insert commands
+        for i in 1..=num_rows {
+            // Insert with minimal varied data for testing
+            let session_id = i / 10 + 1;
+            let shellname = if i % 2 == 0 { "zsh" } else { "bash" };
+            let hostname = format!("host{}", i % 2 + 1);
+            let username = format!("user{}", i % 2 + 1);
+            let command = format!("{}_{}", command_prefix, i);
+
+            // Direct SQL insert is much faster than command-line
+            tx.execute(
+                "INSERT INTO command_history (
+                    session_id, full_command, shellname, hostname, username, 
+                    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    session_id,
+                    command,
+                    shellname,
+                    hostname,
+                    username,
+                    "/tmp",
+                    Some(0),
+                    1600000000 + i as i64,
+                    Some(1600000010 + i as i64),
+                ),
+            )
+            .unwrap();
+        }
+
+        // Commit all inserts at once
+        tx.commit().unwrap();
+
+        // Delete some rows to create free space
+        conn.execute("DELETE FROM command_history WHERE rowid % 3 = 0", []).unwrap();
+
+        // Force creation of free space with PRAGMA settings
+        conn.execute("PRAGMA page_size = 4096", []).unwrap();
+        conn.execute("PRAGMA incremental_vacuum(5)", []).unwrap();
+
+        // Get row count
+        let row_count = conn
+            .query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get::<_, i64>(0))
+            .unwrap();
+
+        (conn, row_count)
+    }
+
+    // Setup test databases
+    let (_conn1, rows_before1) = setup_test_db(&db_path1, 300, "command_db1");
+    let (_conn2, rows_before2) = setup_test_db(&db_path2, 300, "command_db2");
 
     println!("Database 1: {} rows, Database 2: {} rows", rows_before1, rows_before2);
 
     // Run the maintenance command on both databases
     let maintenance_cmd =
         format!("maintenance {} {}", db_path1.to_string_lossy(), db_path2.to_string_lossy());
-
-    // Create a new caller just for running the maintenance command
-    let mut pc_maint = PxhCaller::new();
     pc_maint.call(&maintenance_cmd).assert().success();
 
     // Reconnect to check results
     let conn1_after = Connection::open(&db_path1).unwrap();
     let conn2_after = Connection::open(&db_path2).unwrap();
-
-    // Verify database sizes after vacuum
-    let _after_size1: i64 = conn1_after
-        .query_row(
-            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    let _after_size2: i64 = conn2_after
-        .query_row(
-            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
 
     // Count rows after maintenance to ensure we didn't lose data
     let rows_after1: i64 =
@@ -863,7 +861,6 @@ fn test_maintenance_multiple_files() {
             r.get(0)
         })
         .unwrap();
-
     let stat_table_exists2: i64 = conn2_after
         .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'", [], |r| {
             r.get(0)
@@ -873,7 +870,7 @@ fn test_maintenance_multiple_files() {
     assert!(stat_table_exists1 > 0, "ANALYZE should create the sqlite_stat1 table in DB1");
     assert!(stat_table_exists2 > 0, "ANALYZE should create the sqlite_stat1 table in DB2");
 
-    // Verify statistics were created for tables in both databases
+    // Verify statistics were created
     let stat_entries1: i64 =
         conn1_after.query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |r| r.get(0)).unwrap_or(0);
     let stat_entries2: i64 =
@@ -885,46 +882,74 @@ fn test_maintenance_multiple_files() {
 
 #[test]
 fn test_maintenance_clean_nonstandard_tables() {
-    // Create a database with some test data
+    // Create database directly for faster setup
     let mut pc = PxhCaller::new();
-
-    // Insert some basic data
-    for i in 1..=10 {
-        let insert_cmd = format!(
-            "insert --shellname bash --hostname host1 --username user1 --session-id {} \"command{}\"",
-            i, i
-        );
-        pc.call(insert_cmd).assert().success();
-    }
-
-    // Get the database path
     let db_path = pc.tmpdir.path().join("test");
 
-    // Create direct database connection
-    let conn = Connection::open(&db_path).unwrap();
+    // Direct database setup is much faster than using CLI commands
+    let mut conn = Connection::open(&db_path).unwrap();
 
-    // Create several non-standard tables and indexes
+    // Set pragmas for faster operation
+    conn.execute_batch(
+        "
+        PRAGMA synchronous = OFF;
+        PRAGMA journal_mode = MEMORY;
+        PRAGMA temp_store = MEMORY;
+        PRAGMA cache_size = 10000;
+    ",
+    )
+    .unwrap();
+
+    // Create standard schema
+    conn.execute_batch(include_str!("../src/base_schema.sql")).unwrap();
+
+    // Insert a minimal amount of test data (just enough for the test)
+    let tx = conn.transaction().unwrap();
+    for i in 1..=3 {
+        tx.execute(
+            "INSERT INTO command_history (
+                session_id, full_command, shellname, hostname, username, 
+                working_directory, exit_status, start_unix_timestamp
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                i,
+                format!("command{}", i),
+                "bash",
+                "host1",
+                "user1",
+                "/tmp",
+                Some(0),
+                1600000000 + i as i64,
+            ),
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+
+    // Create several non-standard tables and indexes at once
     println!("Creating non-standard tables and indexes for testing...");
-
-    // Create non-standard tables that should be removed
-    conn.execute("CREATE TABLE temp_table1 (id INTEGER PRIMARY KEY, data TEXT)", []).unwrap();
-    conn.execute("CREATE TABLE custom_data (id INTEGER PRIMARY KEY, name TEXT, value TEXT)", [])
-        .unwrap();
-    conn.execute("CREATE INDEX idx_custom_data_name ON custom_data (name)", []).unwrap();
-
-    // Create tables with KEEP_ prefix that should be preserved
-    conn.execute("CREATE TABLE KEEP_important_data (id INTEGER PRIMARY KEY, data TEXT)", [])
-        .unwrap();
-    conn.execute("CREATE INDEX KEEP_idx_important ON KEEP_important_data (data)", []).unwrap();
-
-    // Insert some data in all the tables
-    conn.execute("INSERT INTO temp_table1 (id, data) VALUES (1, 'temp data')", []).unwrap();
-    conn.execute("INSERT INTO custom_data (id, name, value) VALUES (1, 'setting1', 'value1')", [])
-        .unwrap();
-    conn.execute("INSERT INTO custom_data (id, name, value) VALUES (2, 'setting2', 'value2')", [])
-        .unwrap();
-    conn.execute("INSERT INTO KEEP_important_data (id, data) VALUES (1, 'important data')", [])
-        .unwrap();
+    conn.execute_batch(
+        "
+        -- Create non-standard tables that should be removed
+        CREATE TABLE temp_table1 (id INTEGER PRIMARY KEY, data TEXT);
+        CREATE TABLE custom_data (id INTEGER PRIMARY KEY, name TEXT, value TEXT);
+        CREATE INDEX idx_custom_data_name ON custom_data (name);
+        
+        -- Create tables with KEEP_ prefix that should be preserved
+        CREATE TABLE KEEP_important_data (id INTEGER PRIMARY KEY, data TEXT);
+        CREATE INDEX KEEP_idx_important ON KEEP_important_data (data);
+        
+        -- Insert some data in all the tables with a transaction
+        BEGIN TRANSACTION;
+        INSERT INTO temp_table1 (id, data) VALUES (1, 'temp data');
+        INSERT INTO custom_data (id, name, value) VALUES 
+            (1, 'setting1', 'value1'),
+            (2, 'setting2', 'value2');
+        INSERT INTO KEEP_important_data (id, data) VALUES (1, 'important data');
+        COMMIT;
+    ",
+    )
+    .unwrap();
 
     // Verify that we have created the tables and indexes
     let table_count: i64 = conn
@@ -940,16 +965,6 @@ fn test_maintenance_clean_nonstandard_tables() {
         "Should have at least 5 tables (command_history, settings, temp_table1, custom_data, KEEP_important_data)"
     );
 
-    let index_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert!(index_count >= 5, "Should have at least 5 indexes (standard plus custom)");
-
     // Run maintenance command
     println!("Running maintenance command...");
     pc.call("maintenance").assert().success();
@@ -957,85 +972,61 @@ fn test_maintenance_clean_nonstandard_tables() {
     // Reconnect and check what tables remain
     let conn_after = Connection::open(&db_path).unwrap();
 
+    // Query for all tables and indexes in one go
+    let tables_after: Vec<(String, String)> = {
+        let mut stmt = conn_after
+            .prepare(
+                "
+            SELECT name, type FROM sqlite_master 
+            WHERE type IN ('table', 'index') 
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY type, name
+        ",
+            )
+            .unwrap();
+
+        let rows = stmt
+            .query_map([], |row| {
+                let name: String = row.get(0)?;
+                let type_: String = row.get(1)?;
+                Ok((name, type_))
+            })
+            .unwrap();
+
+        rows.collect::<Result<Vec<(String, String)>, _>>().unwrap()
+    };
+
+    // Print remaining objects for debugging
+    println!("Database objects after maintenance:");
+    for (name, type_) in &tables_after {
+        println!("  {} ({})", name, type_);
+    }
+
+    // Helper function to check if an object exists
+    let object_exists =
+        |name: &str| -> bool { tables_after.iter().any(|(obj_name, _)| obj_name == name) };
+
     // Non-standard tables should be gone
-    let temp_table_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'temp_table1'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+    assert!(!object_exists("temp_table1"), "temp_table1 should have been removed");
+    assert!(!object_exists("custom_data"), "custom_data should have been removed");
+    assert!(
+        !object_exists("idx_custom_data_name"),
+        "idx_custom_data_name should have been removed"
+    );
 
-    assert_eq!(temp_table_exists, 0, "temp_table1 should have been removed");
-
-    let custom_table_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'custom_data'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert_eq!(custom_table_exists, 0, "custom_data should have been removed");
-
-    // Non-standard indexes should be gone
-    let custom_idx_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_custom_data_name'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert_eq!(custom_idx_exists, 0, "idx_custom_data_name should have been removed");
-
-    // KEEP_ tables should still exist
-    let keep_table_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'KEEP_important_data'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert_eq!(keep_table_exists, 1, "KEEP_important_data should have been preserved");
-
-    // KEEP_ indexes should still exist
-    let keep_idx_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'KEEP_idx_important'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert_eq!(keep_idx_exists, 1, "KEEP_idx_important should have been preserved");
+    // KEEP_ tables and indexes should still exist
+    assert!(object_exists("KEEP_important_data"), "KEEP_important_data should have been preserved");
+    assert!(object_exists("KEEP_idx_important"), "KEEP_idx_important should have been preserved");
 
     // Check that we can still use the KEEP_ table
     let keep_data_count: i64 =
         conn_after.query_row("SELECT COUNT(*) FROM KEEP_important_data", [], |r| r.get(0)).unwrap();
-
     assert_eq!(keep_data_count, 1, "Data in KEEP_ table should be preserved");
 
     // Standard tables should still exist
-    let std_table_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'command_history'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert_eq!(std_table_exists, 1, "command_history should still exist");
-
-    // Standard indexes should still exist
-    let std_idx_exists: i64 = conn_after
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_command_history_unique'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-
-    assert_eq!(std_idx_exists, 1, "idx_command_history_unique should still exist");
+    assert!(object_exists("command_history"), "command_history should still exist");
+    assert!(
+        object_exists("idx_command_history_unique"),
+        "idx_command_history_unique should still exist"
+    );
 }

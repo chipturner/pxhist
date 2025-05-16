@@ -15,7 +15,8 @@
       "Bash(wc:*)",
       "Bash(rm:*)",
       "Bash(ls:*)",
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(time cargo test --test integration_tests 'test_maintenance' -- --nocapture)"
     ],
     "deny": []
   }
