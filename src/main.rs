@@ -46,7 +46,9 @@ enum Commands {
     Seal(SealCommand),
     #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
     ShellConfig(ShellConfigCommand),
-    #[clap(about = "perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space")]
+    #[clap(
+        about = "perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space"
+    )]
     Maintenance(MaintenanceCommand),
 }
 
@@ -175,7 +177,9 @@ struct ExportCommand {}
 
 #[derive(Parser, Debug)]
 struct MaintenanceCommand {
-    #[clap(help = "Path(s) to SQLite database files to maintain (if not specified, maintains the current database)")]
+    #[clap(
+        help = "Path(s) to SQLite database files to maintain (if not specified, maintains the current database)"
+    )]
     files: Vec<PathBuf>,
 }
 
@@ -312,7 +316,10 @@ impl MaintenanceCommand {
         }
 
         // Helper function to run maintenance on a single database connection
-        fn maintain_database(conn: &Connection, db_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+        fn maintain_database(
+            conn: &Connection,
+            db_name: &str,
+        ) -> Result<(), Box<dyn std::error::Error>> {
             // Show database information before maintenance
             let (page_count, page_size, freelist_count) = get_db_info(conn)?;
             let total_size = page_count * page_size;
@@ -326,10 +333,93 @@ impl MaintenanceCommand {
             println!("  Freelist count: {}", freelist_count);
 
             // Show row counts for main tables
-            let command_count: i64 = conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))
-                .unwrap_or_default();  // Handle case where table might not exist
+            let command_count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))
+                .unwrap_or_default(); // Handle case where table might not exist
             println!("  Command history entries: {}", command_count);
             println!();
+
+            // Remove non-standard tables (except those prefixed with KEEP_)
+            println!("Looking for non-standard tables to clean up...");
+            let mut cleanup_count = 0;
+
+            // Define the standard tables (excluding memory database tables)
+            let standard_tables = ["command_history", "settings", "sqlite_sequence"];
+
+            // Get all tables from the database
+            let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'
+                                        EXCEPT SELECT name FROM sqlite_master WHERE name IN (?1, ?2, ?3)")?;
+
+            let non_standard_tables: Vec<String> = stmt
+                .query_map(
+                    [&standard_tables[0], &standard_tables[1], &standard_tables[2]],
+                    |row| row.get(0),
+                )?
+                .collect::<Result<Vec<String>, _>>()?;
+
+            for table_name in non_standard_tables {
+                if table_name.starts_with("KEEP_") {
+                    println!("  Keeping user table: {}", table_name);
+                    continue;
+                }
+
+                println!("  Dropping non-standard table: {}", table_name);
+                conn.execute(&format!("DROP TABLE IF EXISTS {}", table_name), [])?;
+                cleanup_count += 1;
+            }
+
+            if cleanup_count > 0 {
+                println!("Cleaned up {} non-standard tables", cleanup_count);
+            } else {
+                println!("No non-standard tables found to clean up");
+            }
+
+            // Clean up non-standard indexes (except those prefixed with KEEP_)
+            println!("Looking for non-standard indexes to clean up...");
+            let standard_indexes =
+                ["idx_command_history_unique", "history_session_id", "history_start_time"];
+
+            // Exclude system indexes (sqlite_autoindex_*) and the standard indexes.
+            // Also exclude indexes that relate to PRIMARY KEY or UNIQUE constraints to avoid errors
+            let mut stmt = conn.prepare(
+                "SELECT name FROM sqlite_master WHERE type='index' AND 
+                                        name NOT LIKE 'sqlite_autoindex_%' AND 
+                                        tbl_name NOT LIKE 'sqlite_%' AND 
+                                        name NOT IN (?1, ?2, ?3)",
+            )?;
+
+            let non_standard_indexes: Vec<String> = stmt
+                .query_map(
+                    [&standard_indexes[0], &standard_indexes[1], &standard_indexes[2]],
+                    |row| row.get(0),
+                )?
+                .collect::<Result<Vec<String>, _>>()?;
+
+            cleanup_count = 0;
+            for index_name in non_standard_indexes {
+                if index_name.starts_with("KEEP_") {
+                    println!("  Keeping user index: {}", index_name);
+                    continue;
+                }
+
+                // Try to drop the index, but don't fail if it can't be dropped
+                // (might be a PRIMARY KEY or UNIQUE constraint)
+                match conn.execute(&format!("DROP INDEX IF EXISTS {}", index_name), []) {
+                    Ok(_) => {
+                        println!("  Dropping non-standard index: {}", index_name);
+                        cleanup_count += 1;
+                    }
+                    Err(e) => {
+                        println!("  Skipping index {}: {}", index_name, e);
+                    }
+                }
+            }
+
+            if cleanup_count > 0 {
+                println!("Cleaned up {} non-standard indexes", cleanup_count);
+            } else {
+                println!("No non-standard indexes found to clean up");
+            }
 
             // Run ANALYZE to update statistics
             println!("Running ANALYZE...");
@@ -367,7 +457,7 @@ impl MaintenanceCommand {
         for file_path in &self.files {
             let file_str = file_path.to_string_lossy();
             println!("\nPerforming maintenance on: {}", file_str);
-            
+
             // Open the database connection for this file
             match Connection::open(file_path) {
                 Ok(conn) => {
