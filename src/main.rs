@@ -46,7 +46,7 @@ enum Commands {
     Seal(SealCommand),
     #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
     ShellConfig(ShellConfigCommand),
-    #[clap(about = "perform ANALYZE and VACUUM to optimize database performance and reclaim space")]
+    #[clap(about = "perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space")]
     Maintenance(MaintenanceCommand),
 }
 
@@ -174,7 +174,10 @@ struct ShellConfigCommand {
 struct ExportCommand {}
 
 #[derive(Parser, Debug)]
-struct MaintenanceCommand {}
+struct MaintenanceCommand {
+    #[clap(help = "Path(s) to SQLite database files to maintain (if not specified, maintains the current database)")]
+    files: Vec<PathBuf>,
+}
 
 impl ImportCommand {
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -299,7 +302,7 @@ ORDER BY id"#,
 }
 
 impl MaintenanceCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, default_conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         // Helper function to get database size and other stats
         fn get_db_info(conn: &Connection) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
             let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
@@ -308,48 +311,84 @@ impl MaintenanceCommand {
             Ok((page_count, page_size, freelist_count))
         }
 
-        // Show database information before maintenance
-        let (page_count, page_size, freelist_count) = get_db_info(&conn)?;
-        let total_size = page_count * page_size;
-        let freelist_size = freelist_count * page_size;
+        // Helper function to run maintenance on a single database connection
+        fn maintain_database(conn: &Connection, db_name: &str) -> Result<(), Box<dyn std::error::Error>> {
+            // Show database information before maintenance
+            let (page_count, page_size, freelist_count) = get_db_info(conn)?;
+            let total_size = page_count * page_size;
+            let freelist_size = freelist_count * page_size;
 
-        println!("Database information before maintenance:");
-        println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
-        println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
-        println!("  Page count: {}", page_count);
-        println!("  Page size: {} bytes", page_size);
-        println!("  Freelist count: {}", freelist_count);
+            println!("Database '{}' information before maintenance:", db_name);
+            println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
+            println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
+            println!("  Page count: {}", page_count);
+            println!("  Page size: {} bytes", page_size);
+            println!("  Freelist count: {}", freelist_count);
 
-        // Show row counts for main tables
-        let command_count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))?;
-        println!("  Command history entries: {}", command_count);
-        println!();
+            // Show row counts for main tables
+            let command_count: i64 = conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))
+                .unwrap_or_default();  // Handle case where table might not exist
+            println!("  Command history entries: {}", command_count);
+            println!();
 
-        // Run ANALYZE to update statistics
-        println!("Running ANALYZE...");
-        conn.execute("ANALYZE", [])?;
-        println!("ANALYZE completed successfully.");
+            // Run ANALYZE to update statistics
+            println!("Running ANALYZE...");
+            conn.execute("ANALYZE", [])?;
+            println!("ANALYZE completed successfully.");
 
-        // Run VACUUM to reclaim space
-        println!("Running VACUUM...");
-        conn.execute("VACUUM", [])?;
-        println!("VACUUM completed successfully.");
+            // Run VACUUM to reclaim space
+            println!("Running VACUUM...");
+            conn.execute("VACUUM", [])?;
+            println!("VACUUM completed successfully.");
 
-        // Show database information after maintenance
-        let (page_count, page_size, freelist_count) = get_db_info(&conn)?;
-        let total_size = page_count * page_size;
-        let freelist_size = freelist_count * page_size;
+            // Show database information after maintenance
+            let (page_count, page_size, freelist_count) = get_db_info(conn)?;
+            let total_size = page_count * page_size;
+            let freelist_size = freelist_count * page_size;
 
-        println!("\nDatabase information after maintenance:");
-        println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
-        println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
-        println!("  Page count: {}", page_count);
-        println!("  Page size: {} bytes", page_size);
-        println!("  Freelist count: {}", freelist_count);
+            println!("\nDatabase '{}' information after maintenance:", db_name);
+            println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
+            println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
+            println!("  Page count: {}", page_count);
+            println!("  Page size: {} bytes", page_size);
+            println!("  Freelist count: {}", freelist_count);
 
-        println!("\nDatabase maintenance completed.");
-        Ok(())
+            println!("\nDatabase '{}' maintenance completed.", db_name);
+            Ok(())
+        }
+
+        // If no files specified, use the default connection
+        if self.files.is_empty() {
+            return maintain_database(&default_conn, "default");
+        }
+
+        // Otherwise, process each file
+        let mut success = true;
+        for file_path in &self.files {
+            let file_str = file_path.to_string_lossy();
+            println!("\nPerforming maintenance on: {}", file_str);
+            
+            // Open the database connection for this file
+            match Connection::open(file_path) {
+                Ok(conn) => {
+                    if let Err(err) = maintain_database(&conn, &file_str) {
+                        println!("Error maintaining database '{}': {}", file_str, err);
+                        success = false;
+                    }
+                }
+                Err(err) => {
+                    println!("Error opening database '{}': {}", file_str, err);
+                    success = false;
+                }
+            }
+        }
+
+        if success {
+            println!("\nAll database maintenance operations completed successfully.");
+            Ok(())
+        } else {
+            Err("One or more database maintenance operations failed".into())
+        }
     }
 }
 

@@ -726,3 +726,151 @@ fn test_maintenance() {
     println!("Database has {} statistic entries after ANALYZE", stat_entries);
     assert!(stat_entries > 0, "sqlite_stat1 should have entries after ANALYZE");
 }
+
+#[test]
+fn test_maintenance_multiple_files() {
+    // Create two databases with different content
+    let mut pc1 = PxhCaller::new();
+    let mut pc2 = PxhCaller::new();
+    
+    // Insert some test data into first database
+    for i in 1..=100 {
+        let insert_cmd = format!(
+            "insert --shellname bash --hostname host1 --username user1 --session-id {} \"command_db1_{}\"",
+            i, i
+        );
+        pc1.call(insert_cmd).assert().success();
+    }
+    
+    // Insert some test data into second database
+    for i in 1..=150 {
+        let insert_cmd = format!(
+            "insert --shellname zsh --hostname host2 --username user2 --session-id {} \"command_db2_{}\"",
+            i, i
+        );
+        pc2.call(insert_cmd).assert().success();
+    }
+    
+    // Get the database paths
+    let db_path1 = pc1.tmpdir.path().join("test");
+    let db_path2 = pc2.tmpdir.path().join("test");
+    
+    // Create direct database connections to check the state
+    let conn1 = Connection::open(&db_path1).unwrap();
+    let conn2 = Connection::open(&db_path2).unwrap();
+    
+    // Force creation of free space with PRAGMA
+    conn1.execute("PRAGMA page_size = 4096", []).unwrap();
+    conn2.execute("PRAGMA page_size = 4096", []).unwrap();
+    
+    // Insert more data
+    for i in 1..=100 {
+        let cmd = format!("INSERT INTO command_history (session_id, full_command, shellname, hostname, username) VALUES ({}, 'filler_command', 'bash', 'host1', 'user1')", i+1000);
+        conn1.execute(&cmd, []).unwrap();
+        conn2.execute(&cmd, []).unwrap();
+    }
+    
+    // Delete rows to create free space
+    conn1.execute("DELETE FROM command_history WHERE rowid % 2 = 0", []).unwrap();
+    conn2.execute("DELETE FROM command_history WHERE rowid % 3 = 0", []).unwrap();
+    
+    // Run a selective VACUUM to ensure we have some freelist pages
+    conn1.execute("PRAGMA incremental_vacuum(5)", []).unwrap();
+    conn2.execute("PRAGMA incremental_vacuum(5)", []).unwrap();
+    
+    // Get initial sizes before maintenance
+    let _initial_size1: i64 = conn1
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+        
+    let _initial_size2: i64 = conn2
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+        
+    // Count rows before maintenance
+    let rows_before1: i64 = conn1.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
+    let rows_before2: i64 = conn2.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
+    
+    println!("Database 1: {} rows, Database 2: {} rows", rows_before1, rows_before2);
+    
+    // Run the maintenance command on both databases
+    let maintenance_cmd = format!("maintenance {} {}", 
+        db_path1.to_string_lossy(),
+        db_path2.to_string_lossy()
+    );
+    
+    // Create a new caller just for running the maintenance command
+    let mut pc_maint = PxhCaller::new();
+    pc_maint.call(&maintenance_cmd).assert().success();
+    
+    // Reconnect to check results
+    let conn1_after = Connection::open(&db_path1).unwrap();
+    let conn2_after = Connection::open(&db_path2).unwrap();
+    
+    // Verify database sizes after vacuum
+    let _after_size1: i64 = conn1_after
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+        
+    let _after_size2: i64 = conn2_after
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    
+    // Count rows after maintenance to ensure we didn't lose data
+    let rows_after1: i64 = conn1_after.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
+    let rows_after2: i64 = conn2_after.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
+    
+    println!("After maintenance - Database 1: {} rows, Database 2: {} rows", rows_after1, rows_after2);
+    assert_eq!(rows_before1, rows_after1, "Row count should be the same after maintenance for DB1");
+    assert_eq!(rows_before2, rows_after2, "Row count should be the same after maintenance for DB2");
+    
+    // After running VACUUM, the databases should have no freelist
+    let freelist_count1_after: i64 = conn1_after.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap();
+    let freelist_count2_after: i64 = conn2_after.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap();
+    
+    assert_eq!(freelist_count1_after, 0, "Freelist should be empty in DB1 after VACUUM");
+    assert_eq!(freelist_count2_after, 0, "Freelist should be empty in DB2 after VACUUM");
+    
+    // Check that ANALYZE created statistics in both databases
+    let stat_table_exists1: i64 = conn1_after
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+        
+    let stat_table_exists2: i64 = conn2_after
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    
+    assert!(stat_table_exists1 > 0, "ANALYZE should create the sqlite_stat1 table in DB1");
+    assert!(stat_table_exists2 > 0, "ANALYZE should create the sqlite_stat1 table in DB2");
+    
+    // Verify statistics were created for tables in both databases
+    let stat_entries1: i64 = conn1_after.query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |r| r.get(0)).unwrap_or(0);
+    let stat_entries2: i64 = conn2_after.query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |r| r.get(0)).unwrap_or(0);
+    
+    assert!(stat_entries1 > 0, "sqlite_stat1 should have entries in DB1 after ANALYZE");
+    assert!(stat_entries2 > 0, "sqlite_stat1 should have entries in DB2 after ANALYZE");
+}
