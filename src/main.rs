@@ -46,6 +46,8 @@ enum Commands {
     Seal(SealCommand),
     #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
     ShellConfig(ShellConfigCommand),
+    #[clap(about = "perform ANALYZE and VACUUM to optimize database performance and reclaim space")]
+    Maintenance(MaintenanceCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -171,6 +173,9 @@ struct ShellConfigCommand {
 #[derive(Parser, Debug)]
 struct ExportCommand {}
 
+#[derive(Parser, Debug)]
+struct MaintenanceCommand {}
+
 impl ImportCommand {
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         let invocations = match self.shellname.as_ref() {
@@ -289,6 +294,61 @@ ORDER BY id"#,
             stmt.query_map([], pxh::Invocation::from_row)?.collect();
         let rows = rows?;
         pxh::json_export(&rows)?;
+        Ok(())
+    }
+}
+
+impl MaintenanceCommand {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Helper function to get database size and other stats
+        fn get_db_info(conn: &Connection) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
+            let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+            let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
+            let freelist_count: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
+            Ok((page_count, page_size, freelist_count))
+        }
+
+        // Show database information before maintenance
+        let (page_count, page_size, freelist_count) = get_db_info(&conn)?;
+        let total_size = page_count * page_size;
+        let freelist_size = freelist_count * page_size;
+
+        println!("Database information before maintenance:");
+        println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
+        println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
+        println!("  Page count: {}", page_count);
+        println!("  Page size: {} bytes", page_size);
+        println!("  Freelist count: {}", freelist_count);
+
+        // Show row counts for main tables
+        let command_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))?;
+        println!("  Command history entries: {}", command_count);
+        println!();
+
+        // Run ANALYZE to update statistics
+        println!("Running ANALYZE...");
+        conn.execute("ANALYZE", [])?;
+        println!("ANALYZE completed successfully.");
+
+        // Run VACUUM to reclaim space
+        println!("Running VACUUM...");
+        conn.execute("VACUUM", [])?;
+        println!("VACUUM completed successfully.");
+
+        // Show database information after maintenance
+        let (page_count, page_size, freelist_count) = get_db_info(&conn)?;
+        let total_size = page_count * page_size;
+        let freelist_size = freelist_count * page_size;
+
+        println!("\nDatabase information after maintenance:");
+        println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
+        println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
+        println!("  Page count: {}", page_count);
+        println!("  Page size: {} bytes", page_size);
+        println!("  Freelist count: {}", freelist_count);
+
+        println!("\nDatabase maintenance completed.");
         Ok(())
     }
 }
@@ -703,6 +763,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Sync(cmd) => {
+            cmd.go(make_conn()?)?;
+        }
+        Commands::Maintenance(cmd) => {
             cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {

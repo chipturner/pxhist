@@ -7,6 +7,7 @@ use std::{
 use assert_cmd::Command;
 use bstr::BString;
 use rand::{Rng, distributions::Alphanumeric};
+use rusqlite::Connection;
 use tempfile::TempDir;
 
 fn generate_random_string(length: usize) -> String {
@@ -585,4 +586,143 @@ fn sync_roundtrip() {
     let merged_output = pc_merged.call("show --suppress-headers").output().unwrap();
 
     assert_eq!(count_lines(&merged_output.stdout), 40);
+}
+
+#[test]
+fn test_maintenance() {
+    // Set up a new database with a lot of varied content
+    let mut pc = PxhCaller::new();
+
+    // Generate a lot of commands with varied lengths
+    let num_commands = 2000;
+    let mut rng = rand::thread_rng();
+
+    // Create several unique working directories
+    let working_dirs =
+        ["/home/user", "/var/log", "/etc", "/tmp", "/opt", "/usr", "~/home", "/data"];
+
+    // Generate many commands without any special characters or flags
+    for i in 1..=num_commands {
+        // Create session ID (grouped in batches)
+        let session_id = i / 20 + 1;
+
+        // Choose shell randomly
+        let shell = if i % 3 == 0 { "zsh" } else { "bash" };
+
+        // Vary hostname
+        let hostname = format!("host{}", i % 5 + 1);
+
+        // Vary username
+        let username = format!("user{}", i % 3 + 1);
+
+        // Create commands with no flags/special characters
+        let command = match i % 10 {
+            0 => format!("git commit"),
+            1 => format!("ls"),
+            2 => format!("cd etc"),
+            3 => format!("cd home"),
+            4 => format!("cat file{}", i % 100),
+            5 => format!("uptime"),
+            6 => format!("history"),
+            7 => format!("git pull"),
+            8 => format!("pwd"),
+            _ => format!("command{}", i),
+        };
+
+        // Choose a random working directory
+        let working_dir = working_dirs[rng.gen_range(0..working_dirs.len())];
+
+        // Insert the command with varied metadata - wrap command in double quotes
+        let insert_cmd = format!(
+            "insert --shellname {} --hostname {} --username {} --session-id {} --working-directory {} \"{}\"",
+            shell, hostname, username, session_id, working_dir, command
+        );
+
+        pc.call(insert_cmd).assert().success();
+
+        // Add exit status for some commands
+        if i % 5 != 0 {
+            // Most commands succeed, some fail
+            let exit_status = if i % 17 == 0 { 1 } else { 0 };
+            pc.call(format!(
+                "seal --session-id {} --exit-status {} --end-unix-timestamp {}",
+                session_id,
+                exit_status,
+                1600000000 + i
+            ))
+            .assert()
+            .success();
+        }
+    }
+
+    // Get the database path for SQLite access
+    let db_path = pc.tmpdir.path().join("test");
+
+    // Create a direct database connection to check the database state
+    let conn = Connection::open(&db_path).unwrap();
+
+    // Get initial stats before deletion
+    let initial_size: i64 = conn
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    // Delete a significant number of rows to create free space
+    let sql = "DELETE FROM command_history WHERE rowid % 3 = 0";
+    let deleted = conn.execute(sql, []).unwrap();
+
+    // Ensure we deleted some rows
+    assert!(deleted > 500, "Should have deleted over 500 rows");
+    println!("Deleted {} rows to create free space", deleted);
+
+    // Count rows after deletion
+    let remaining_rows: i64 =
+        conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
+
+    println!("Database has {} remaining rows after deletion", remaining_rows);
+
+    // Verify we still have a significant number of rows remaining
+    assert!(remaining_rows > 1000, "Should still have over 1000 rows for testing");
+
+    // Run the maintenance command via CLI
+    println!("Running maintenance command...");
+    pc.call("maintenance").assert().success();
+
+    // Reconnect to check results
+    let conn_after = Connection::open(&db_path).unwrap();
+
+    // Verify database size after vacuum
+    let after_size: i64 = conn_after
+        .query_row(
+            "SELECT page_count * page_size FROM pragma_page_count(), pragma_page_size()",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+
+    println!("Database size before: {} bytes, after: {} bytes", initial_size, after_size);
+
+    // After running VACUUM, the database should be smaller and have no freelist
+    let freelist_count_after: i64 =
+        conn_after.query_row("PRAGMA freelist_count", [], |r| r.get(0)).unwrap();
+    assert_eq!(freelist_count_after, 0, "Freelist should be empty after VACUUM");
+
+    // Check that ANALYZE created statistics
+    let stat_table_exists: i64 = conn_after
+        .query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'sqlite_stat1'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+
+    assert!(stat_table_exists > 0, "ANALYZE should create the sqlite_stat1 table");
+
+    // Verify statistics were created for our tables
+    let stat_entries: i64 =
+        conn_after.query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |r| r.get(0)).unwrap_or(0);
+
+    println!("Database has {} statistic entries after ANALYZE", stat_entries);
+    assert!(stat_entries > 0, "sqlite_stat1 should have entries after ANALYZE");
 }
