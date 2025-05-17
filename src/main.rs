@@ -659,7 +659,8 @@ impl SyncCommand {
             "bidirectional"
         };
 
-        let remote_db_path = self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh.db"));
+        let remote_db_path =
+            self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
 
         // Intelligently determine remote pxh path if not specified
         let remote_pxh = Self::determine_remote_pxh_path(&self.remote_pxh);
@@ -706,7 +707,7 @@ impl SyncCommand {
         // Read from stdout if we're receiving
         if mode == "receive" || mode == "bidirectional" {
             if let Some(stdout) = child.stdout.as_mut() {
-                self.receive_database_with_context(stdout, conn, Some(host))?;
+                self.receive_database(stdout, conn)?;
             }
         }
 
@@ -825,15 +826,6 @@ FROM other.command_history
         reader: &mut R,
         conn: &mut Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        self.receive_database_with_context(reader, conn, None)
-    }
-
-    fn receive_database_with_context<R: Read>(
-        &self,
-        reader: &mut R,
-        conn: &mut Connection,
-        _context: Option<&str>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
         // Receive database size (8 bytes)
         let mut size_bytes = [0u8; 8];
         reader.read_exact(&mut size_bytes)?;
@@ -852,7 +844,8 @@ FROM other.command_history
 
         // Get current hostname and database path
         let current_hostname = pxh::get_hostname();
-        let current_db_path = conn.path().map(|p| p.to_string()).unwrap_or_else(|| "in-memory".to_string());
+        let current_db_path =
+            conn.path().map(|p| p.to_string()).unwrap_or_else(|| "in-memory".to_string());
 
         eprintln!(
             "{}: Merged into {} considered {} entries, added {} entries",
