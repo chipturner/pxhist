@@ -514,6 +514,67 @@ impl MaintenanceCommand {
 // into the current database, then write an output with our hostname.
 
 impl SyncCommand {
+    /// Parse an SSH command string into command and arguments, handling quotes and spaces.
+    /// Similar to how rsync and other tools parse the -e option.
+    fn parse_ssh_command(ssh_cmd: &str) -> (String, Vec<String>) {
+        // If it's a simple command without spaces, just return it
+        if !ssh_cmd.contains(char::is_whitespace) {
+            return (ssh_cmd.to_string(), vec![]);
+        }
+
+        // Otherwise, we need to parse it properly
+        let mut cmd = String::new();
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut quote_char = '\0';
+        let mut is_first = true;
+        let mut chars = ssh_cmd.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' | '\'' if !in_quotes => {
+                    in_quotes = true;
+                    quote_char = ch;
+                }
+                '"' | '\'' if in_quotes && ch == quote_char => {
+                    in_quotes = false;
+                    quote_char = '\0';
+                }
+                ' ' | '\t' if !in_quotes => {
+                    if !current.is_empty() {
+                        if is_first {
+                            cmd = current.clone();
+                            is_first = false;
+                        } else {
+                            args.push(current.clone());
+                        }
+                        current.clear();
+                    }
+                }
+                '\\' if chars.peek().is_some() => {
+                    // Handle escaped characters
+                    if let Some(next_ch) = chars.next() {
+                        current.push(next_ch);
+                    }
+                }
+                _ => {
+                    current.push(ch);
+                }
+            }
+        }
+
+        // Don't forget the last token
+        if !current.is_empty() {
+            if is_first {
+                cmd = current;
+            } else {
+                args.push(current);
+            }
+        }
+
+        (cmd, args)
+    }
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         // If in server mode, handle sync protocol
         if self.server {
@@ -576,8 +637,14 @@ impl SyncCommand {
     ) -> Result<(), Box<dyn std::error::Error>> {
         println!("Syncing with {}...", host);
 
+        // Parse SSH command and arguments
+        let (ssh_cmd, ssh_args) = Self::parse_ssh_command(&self.ssh_cmd);
+
         // Test SSH connection first
-        let status = std::process::Command::new(&self.ssh_cmd).arg(host).arg("true").status()?;
+        let mut cmd = std::process::Command::new(&ssh_cmd);
+        cmd.args(&ssh_args).arg(host).arg("true").stderr(std::process::Stdio::inherit()); // Map stderr to show SSH errors
+
+        let status = cmd.status()?;
 
         if !status.success() {
             return Err(Box::from(format!("Cannot connect to host: {}", host)));
@@ -601,14 +668,15 @@ impl SyncCommand {
         let remote_command =
             format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
 
-        let mut child = std::process::Command::new(&self.ssh_cmd)
+        let mut cmd = std::process::Command::new(&ssh_cmd);
+        cmd.args(&ssh_args)
             .arg(host)
             .arg(&remote_command)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn SSH command: {}", e))?;
+            .stderr(std::process::Stdio::inherit()); // Map stderr to our stderr
+
+        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {}", e))?;
 
         // Send mode to server
         if let Some(mut stdin) = child.stdin.take() {
@@ -642,11 +710,10 @@ impl SyncCommand {
             }
         }
 
-        let output = child.wait_with_output()?;
+        let status = child.wait()?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(Box::from(format!("Remote sync failed: {}", stderr)));
+        if !status.success() {
+            return Err(Box::from("Remote sync failed"));
         }
 
         println!("Sync completed successfully");
@@ -1092,6 +1159,44 @@ mod tests {
             Some(path) => assert!(!path.is_empty()),
             None => assert!(true), // None is a valid response
         }
+    }
+
+    #[test]
+    fn test_parse_ssh_command() {
+        // Simple command
+        let (cmd, args) = SyncCommand::parse_ssh_command("ssh");
+        assert_eq!(cmd, "ssh");
+        assert!(args.is_empty());
+
+        // Command with args
+        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -p 2222");
+        assert_eq!(cmd, "ssh");
+        assert_eq!(args, vec!["-p", "2222"]);
+
+        // Command with quoted args
+        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -o 'UserKnownHostsFile=/dev/null'");
+        assert_eq!(cmd, "ssh");
+        assert_eq!(args, vec!["-o", "UserKnownHostsFile=/dev/null"]);
+
+        // Command with double quotes
+        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -i \"/path/to/key\"");
+        assert_eq!(cmd, "ssh");
+        assert_eq!(args, vec!["-i", "/path/to/key"]);
+
+        // Complex command
+        let (cmd, args) = SyncCommand::parse_ssh_command(
+            "ssh -p 2222 -o 'StrictHostKeyChecking=no' -i /path/to/key",
+        );
+        assert_eq!(cmd, "ssh");
+        assert_eq!(
+            args,
+            vec!["-p", "2222", "-o", "StrictHostKeyChecking=no", "-i", "/path/to/key"]
+        );
+
+        // Command with escaped quotes
+        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -o \"Option=\\\"value\\\"\"");
+        assert_eq!(cmd, "ssh");
+        assert_eq!(args, vec!["-o", "Option=\"value\""]);
     }
 }
 

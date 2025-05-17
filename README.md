@@ -192,7 +192,10 @@ More advanced usage and flags can be explored via `pxh help`.
     - `pxh sync --remote user@host --receive-only` pulls remote history from local only
     - Use `--remote-db` to specify non-default remote database path
     - Use `--remote-pxh` to specify the path to pxh binary on remote host
-    - Use `--ssh-cmd` to specify custom SSH command (like rsync's -e option)
+    - Use `--ssh-cmd` (or `-e`) to specify custom SSH command with options:
+      - `pxh sync --remote host -e "ssh -p 2222"` (custom port)
+      - `pxh sync --remote host -e "ssh -i /path/to/key"` (custom key)
+      - `pxh sync --remote host -e "ssh -o 'StrictHostKeyChecking=no'"` (custom options)
 
 ## How it Works
 
