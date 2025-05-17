@@ -832,7 +832,7 @@ FROM other.command_history
         &self,
         reader: &mut R,
         conn: &mut Connection,
-        context: Option<&str>,
+        _context: Option<&str>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Receive database size (8 bytes)
         let mut size_bytes = [0u8; 8];
@@ -850,20 +850,13 @@ FROM other.command_history
         // Use the existing merge function to merge directly into the main database
         let (other_count, added_count) = Self::merge_into(conn, temp_file.path().to_path_buf())?;
 
-        // Get current database path and hostname info for the message
-        let db_info = if let Some(ctx) = context {
-            ctx.to_string()
-        } else {
-            format!(
-                "{} ({})",
-                hostname::get().unwrap_or_default().to_string_lossy(),
-                pxh::get_hostname()
-            )
-        };
+        // Get current hostname and database path
+        let current_hostname = pxh::get_hostname();
+        let current_db_path = conn.path().map(|p| p.to_string()).unwrap_or_else(|| "in-memory".to_string());
 
         eprintln!(
-            "Merged from {}: considered {} entries, added {} entries",
-            db_info, other_count, added_count
+            "{}: Merged into {} considered {} entries, added {} entries",
+            current_hostname, current_db_path, other_count, added_count
         );
         Ok(())
     }
