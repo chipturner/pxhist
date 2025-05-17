@@ -509,3 +509,112 @@ pub fn atomically_remove_lines_from_file(
     std::fs::rename(output_filepath, input_filepath)?;
     Ok(())
 }
+
+// Helper functions for command parsing and path resolution
+pub mod helpers {
+    use std::path::{Path, PathBuf};
+
+    /// Parse an SSH command string into command and arguments, handling quotes and spaces.
+    /// Similar to how rsync and other tools parse the -e option.
+    pub fn parse_ssh_command(ssh_cmd: &str) -> (String, Vec<String>) {
+        // If it's a simple command without spaces, just return it
+        if !ssh_cmd.contains(char::is_whitespace) {
+            return (ssh_cmd.to_string(), vec![]);
+        }
+
+        // Otherwise, we need to parse it properly
+        let mut cmd = String::new();
+        let mut args = Vec::new();
+        let mut current = String::new();
+        let mut in_quotes = false;
+        let mut quote_char = '\0';
+        let mut is_first = true;
+        let mut chars = ssh_cmd.chars().peekable();
+
+        while let Some(ch) = chars.next() {
+            match ch {
+                '"' | '\'' if !in_quotes => {
+                    in_quotes = true;
+                    quote_char = ch;
+                }
+                '"' | '\'' if in_quotes && ch == quote_char => {
+                    in_quotes = false;
+                    quote_char = '\0';
+                }
+                ' ' | '\t' if !in_quotes => {
+                    if !current.is_empty() {
+                        if is_first {
+                            cmd = current.clone();
+                            is_first = false;
+                        } else {
+                            args.push(current.clone());
+                        }
+                        current.clear();
+                    }
+                }
+                '\\' if chars.peek().is_some() => {
+                    // Handle escaped characters
+                    if let Some(next_ch) = chars.next() {
+                        current.push(next_ch);
+                    }
+                }
+                _ => {
+                    current.push(ch);
+                }
+            }
+        }
+
+        // Don't forget the last token
+        if !current.is_empty() {
+            if is_first {
+                cmd = current;
+            } else {
+                args.push(current);
+            }
+        }
+
+        (cmd, args)
+    }
+
+    /// Determines the remote pxh path intelligently. If remote_pxh is
+    /// not "pxh", use it as-is.
+    /// Otherwise, try to determine a smart default based on the current executable location.
+    /// Returns the relative path from home if the binary is in the home directory.
+    pub fn determine_remote_pxh_path(configured_path: &str) -> String {
+        if configured_path != "pxh" {
+            return configured_path.to_string();
+        }
+
+        // Try to be smart about the default path
+        get_relative_path_from_home(None, None).unwrap_or_else(|| "pxh".to_string())
+    }
+
+    /// Gets the relative path from home directory if the current executable is within it.
+    /// Returns None if the executable is not in the home directory.
+    /// Takes optional overrides for testing.
+    pub fn get_relative_path_from_home(
+        exe_override: Option<&Path>,
+        home_override: Option<&Path>,
+    ) -> Option<String> {
+        let exe = match exe_override {
+            Some(path) => path.to_path_buf(),
+            None => std::env::current_exe().ok()?,
+        };
+
+        let home = match home_override {
+            Some(path) => path.to_path_buf(),
+            None => home::home_dir()?,
+        };
+
+        exe.strip_prefix(&home).ok().map(|path| path.to_string_lossy().to_string())
+    }
+
+    /// Determine if the executable is being invoked as pxhs (shorthand for pxh show)
+    pub fn determine_is_pxhs(args: &[String]) -> bool {
+        args.first()
+            .and_then(|arg| {
+                PathBuf::from(arg).file_name().map(|name| name.to_string_lossy().contains("pxhs"))
+            })
+            .unwrap_or(false)
+    }
+}

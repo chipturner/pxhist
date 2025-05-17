@@ -514,67 +514,6 @@ impl MaintenanceCommand {
 // into the current database, then write an output with our hostname.
 
 impl SyncCommand {
-    /// Parse an SSH command string into command and arguments, handling quotes and spaces.
-    /// Similar to how rsync and other tools parse the -e option.
-    fn parse_ssh_command(ssh_cmd: &str) -> (String, Vec<String>) {
-        // If it's a simple command without spaces, just return it
-        if !ssh_cmd.contains(char::is_whitespace) {
-            return (ssh_cmd.to_string(), vec![]);
-        }
-
-        // Otherwise, we need to parse it properly
-        let mut cmd = String::new();
-        let mut args = Vec::new();
-        let mut current = String::new();
-        let mut in_quotes = false;
-        let mut quote_char = '\0';
-        let mut is_first = true;
-        let mut chars = ssh_cmd.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            match ch {
-                '"' | '\'' if !in_quotes => {
-                    in_quotes = true;
-                    quote_char = ch;
-                }
-                '"' | '\'' if in_quotes && ch == quote_char => {
-                    in_quotes = false;
-                    quote_char = '\0';
-                }
-                ' ' | '\t' if !in_quotes => {
-                    if !current.is_empty() {
-                        if is_first {
-                            cmd = current.clone();
-                            is_first = false;
-                        } else {
-                            args.push(current.clone());
-                        }
-                        current.clear();
-                    }
-                }
-                '\\' if chars.peek().is_some() => {
-                    // Handle escaped characters
-                    if let Some(next_ch) = chars.next() {
-                        current.push(next_ch);
-                    }
-                }
-                _ => {
-                    current.push(ch);
-                }
-            }
-        }
-
-        // Don't forget the last token
-        if !current.is_empty() {
-            if is_first {
-                cmd = current;
-            } else {
-                args.push(current);
-            }
-        }
-
-        (cmd, args)
-    }
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         // If in server mode, handle sync protocol
         if self.server {
@@ -638,17 +577,7 @@ impl SyncCommand {
         println!("Syncing with {}...", host);
 
         // Parse SSH command and arguments
-        let (ssh_cmd, ssh_args) = Self::parse_ssh_command(&self.ssh_cmd);
-
-        // Test SSH connection first
-        let mut cmd = std::process::Command::new(&ssh_cmd);
-        cmd.args(&ssh_args).arg(host).arg("true").stderr(std::process::Stdio::inherit()); // Map stderr to show SSH errors
-
-        let status = cmd.status()?;
-
-        if !status.success() {
-            return Err(Box::from(format!("Cannot connect to host: {}", host)));
-        }
+        let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
 
         // Determine sync mode
         let mode = if self.send_only {
@@ -663,7 +592,7 @@ impl SyncCommand {
             self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
 
         // Intelligently determine remote pxh path if not specified
-        let remote_pxh = Self::determine_remote_pxh_path(&self.remote_pxh);
+        let remote_pxh = pxh::helpers::determine_remote_pxh_path(&self.remote_pxh);
 
         // Start SSH connection to remote with server mode
         let remote_command =
@@ -852,28 +781,6 @@ FROM other.command_history
             current_hostname, current_db_path, other_count, added_count
         );
         Ok(())
-    }
-
-    // Determines the remote pxh path intelligently.  If remote_pxh is
-    // not "pxh", use it as-is.
-    // Otherwise, try to determine a smart default based on the current executable location.
-    // Returns the relative path from home if the binary is in the home directory.
-    fn determine_remote_pxh_path(configured_path: &str) -> String {
-        if configured_path != "pxh" {
-            return configured_path.to_string();
-        }
-
-        // Try to be smart about the default path
-        Self::get_relative_path_from_home().unwrap_or_else(|| "pxh".to_string())
-    }
-
-    // Gets the relative path from home directory if the current executable is within it.
-    // Returns None if the executable is not in the home directory.
-    fn get_relative_path_from_home() -> Option<String> {
-        let current_exe = std::env::current_exe().ok()?;
-        let home = home::home_dir()?;
-
-        current_exe.strip_prefix(&home).ok().map(|path| path.to_string_lossy().to_string())
     }
 }
 
@@ -1110,105 +1017,6 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
     regexes.iter().all(|regex| regex.is_match(row.command.as_slice()))
 }
 
-// Separate function to facilitate testing
-fn determine_is_pxhs(args: &[String]) -> bool {
-    args.first()
-        .and_then(|arg| {
-            PathBuf::from(arg).file_name().map(|name| name.to_string_lossy().contains("pxhs"))
-        })
-        .unwrap_or(false)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_determine_is_pxhs() {
-        // Test normal pxh invocation
-        assert!(!determine_is_pxhs(&["/usr/bin/pxh".to_string()]));
-        assert!(!determine_is_pxhs(&["/path/to/pxh".to_string()]));
-        assert!(!determine_is_pxhs(&["./pxh".to_string()]));
-
-        // Test pxhs invocation (symlink behavior)
-        assert!(determine_is_pxhs(&["/usr/bin/pxhs".to_string()]));
-        assert!(determine_is_pxhs(&["/path/to/pxhs".to_string()]));
-        assert!(determine_is_pxhs(&["./pxhs".to_string()]));
-
-        // Edge cases
-        assert!(determine_is_pxhs(&["pxhs".to_string()]));
-        assert!(determine_is_pxhs(&["pxhs-something".to_string()]));
-        assert!(!determine_is_pxhs(&["".to_string()]));
-        assert!(!determine_is_pxhs(&[]));
-    }
-
-    #[test]
-    fn test_determine_remote_pxh_path() {
-        // Test explicit path - should return as-is
-        assert_eq!(
-            SyncCommand::determine_remote_pxh_path("/usr/bin/custom-pxh"),
-            "/usr/bin/custom-pxh"
-        );
-        assert_eq!(SyncCommand::determine_remote_pxh_path("custom-pxh"), "custom-pxh");
-
-        // Test default "pxh" - we can't easily test the actual smart path logic without
-        // controlling the environment, but we can test that it returns something
-        let result = SyncCommand::determine_remote_pxh_path("pxh");
-        assert!(!result.is_empty());
-    }
-
-    #[test]
-    fn test_get_relative_path_from_home() {
-        // This is difficult to unit test properly since it depends on the actual
-        // executable location and home directory. We can only test the function exists
-        // and returns the expected type.
-        let result = SyncCommand::get_relative_path_from_home();
-        // It should return either Some(path) or None
-        match result {
-            Some(path) => assert!(!path.is_empty()),
-            None => assert!(true), // None is a valid response
-        }
-    }
-
-    #[test]
-    fn test_parse_ssh_command() {
-        // Simple command
-        let (cmd, args) = SyncCommand::parse_ssh_command("ssh");
-        assert_eq!(cmd, "ssh");
-        assert!(args.is_empty());
-
-        // Command with args
-        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -p 2222");
-        assert_eq!(cmd, "ssh");
-        assert_eq!(args, vec!["-p", "2222"]);
-
-        // Command with quoted args
-        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -o 'UserKnownHostsFile=/dev/null'");
-        assert_eq!(cmd, "ssh");
-        assert_eq!(args, vec!["-o", "UserKnownHostsFile=/dev/null"]);
-
-        // Command with double quotes
-        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -i \"/path/to/key\"");
-        assert_eq!(cmd, "ssh");
-        assert_eq!(args, vec!["-i", "/path/to/key"]);
-
-        // Complex command
-        let (cmd, args) = SyncCommand::parse_ssh_command(
-            "ssh -p 2222 -o 'StrictHostKeyChecking=no' -i /path/to/key",
-        );
-        assert_eq!(cmd, "ssh");
-        assert_eq!(
-            args,
-            vec!["-p", "2222", "-o", "StrictHostKeyChecking=no", "-i", "/path/to/key"]
-        );
-
-        // Command with escaped quotes
-        let (cmd, args) = SyncCommand::parse_ssh_command("ssh -o \"Option=\\\"value\\\"\"");
-        assert_eq!(cmd, "ssh");
-        assert_eq!(args, vec!["-o", "Option=\"value\""]);
-    }
-}
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
@@ -1216,7 +1024,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args_vec = env::args().collect::<Vec<_>>();
 
     // Check if the executable name contains "pxhs" (handles both direct calls and symlinks)
-    let is_pxhs = determine_is_pxhs(&args_vec);
+    let is_pxhs = pxh::helpers::determine_is_pxhs(&args_vec);
 
     let mut args = if is_pxhs {
         // When invoked as pxhs, always transform to "pxh show ..."

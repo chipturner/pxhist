@@ -33,7 +33,7 @@ fn test_ssh_sync_send_only() {
         .arg("--send-only")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("Cannot connect to host"));
+        .stderr(predicates::str::contains("Could not resolve hostname"));
 }
 
 #[test]
@@ -51,7 +51,7 @@ fn test_ssh_sync_receive_only() {
         .arg("--receive-only")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("Cannot connect to host"));
+        .stderr(predicates::str::contains("Could not resolve hostname"));
 }
 
 #[test]
@@ -68,7 +68,7 @@ fn test_ssh_sync_bidirectional() {
         .arg("nonexistent-host")
         .assert()
         .failure()
-        .stderr(predicates::str::contains("Cannot connect to host"));
+        .stderr(predicates::str::contains("Could not resolve hostname"));
 }
 
 #[test]
