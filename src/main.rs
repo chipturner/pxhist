@@ -706,7 +706,7 @@ impl SyncCommand {
         // Read from stdout if we're receiving
         if mode == "receive" || mode == "bidirectional" {
             if let Some(stdout) = child.stdout.as_mut() {
-                self.receive_database(stdout, conn)?;
+                self.receive_database_with_context(stdout, conn, Some(host))?;
             }
         }
 
@@ -825,6 +825,15 @@ FROM other.command_history
         reader: &mut R,
         conn: &mut Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        self.receive_database_with_context(reader, conn, None)
+    }
+
+    fn receive_database_with_context<R: Read>(
+        &self,
+        reader: &mut R,
+        conn: &mut Connection,
+        context: Option<&str>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Receive database size (8 bytes)
         let mut size_bytes = [0u8; 8];
         reader.read_exact(&mut size_bytes)?;
@@ -838,10 +847,24 @@ FROM other.command_history
         let temp_file = tempfile::NamedTempFile::new()?;
         std::fs::write(temp_file.path(), &data)?;
 
-        // Use the existing merge function
+        // Use the existing merge function to merge directly into the main database
         let (other_count, added_count) = Self::merge_into(conn, temp_file.path().to_path_buf())?;
 
-        eprintln!("Merged: considered {} entries, added {} entries", other_count, added_count);
+        // Get current database path and hostname info for the message
+        let db_info = if let Some(ctx) = context {
+            ctx.to_string()
+        } else {
+            format!(
+                "{} ({})",
+                hostname::get().unwrap_or_default().to_string_lossy(),
+                pxh::get_hostname()
+            )
+        };
+
+        eprintln!(
+            "Merged from {}: considered {} entries, added {} entries",
+            db_info, other_count, added_count
+        );
         Ok(())
     }
 
