@@ -123,10 +123,34 @@ $ pxh s git pull
 
 ### Use case: synchronizing across computers
 
-Finally, sharing history across time and space is easy.  Using a
-shared storage system like Dropbox or CIFS is easiest, but a directory
-you `rsync` around can work as well.  On each computer, just run `pxh
-sync $DIR`:
+Finally, sharing history across time and space is easy. You have two main options:
+
+#### Direct SSH synchronization
+
+For the simplest setup, you can sync directly between computers over SSH without requiring any shared storage:
+
+``` bash
+# Bidirectional sync (default)
+$ pxh sync --remote homebase
+Syncing with homebase...
+Sync completed successfully
+
+# Send local history to remote only
+$ pxh sync --remote homebase --send-only
+Syncing with homebase...
+Send completed successfully
+
+# Receive remote history only
+$ pxh sync --remote homebase --receive-only
+Syncing with homebase...
+Received database: considered 314181 entries, added 1502 entries
+```
+
+This works seamlessly with SSH configurations from your `~/.ssh/config`, respects SSH keys and agents, and supports custom SSH commands via the `-e` flag (similar to rsync).
+
+#### Shared directory synchronization
+
+Alternatively, you can use a shared storage system like Dropbox, OneDrive, or CIFS. On each computer, just run `pxh sync $DIR`:
 
 First computer (`nomad`):
 ``` bash
@@ -143,8 +167,7 @@ Syncing from /Users/chip/Dropbox/pxh/nomad.db...done, considered 314236 rows and
 Saved merged database to /Users/chip/Dropbox/pxh/homebase.db
 ```
 
-Note this can also act as a backup method (as can `cp` on the `pxh`
-database file).
+Note both methods can also act as a backup method (as can `cp` on the `pxh` database file).
 
 More advanced usage and flags can be explored via `pxh help`.
 
@@ -159,11 +182,16 @@ More advanced usage and flags can be explored via `pxh help`.
   - zsh: `pxh import --shellname zsh --histfile ~/.zsh_histfile`
   - bash: `pxh import --shellname bash --histfile ~/.bash_history`
   - Optional: pull from another computer: `pxh import --shellname zsh --hostname HOST --username root --histfile <(ssh root@HOST cat /root/.zsh_histfile)`
-- Periodically synchronize with databases from other systems with a
-  simple workflow via shared storage such as NextCloud, Dropbox, CIFS,
-  etc:
-  - `pxh sync ~/Dropbox/pxh/` which merges from all db files in that
-    directory and writes a new file with the merged output
+- Periodically synchronize with databases from other systems with two options:
+  - Via shared storage (NextCloud, Dropbox, CIFS, etc):
+    - `pxh sync ~/Dropbox/pxh/` which merges from all db files in that
+      directory and writes a new file with the merged output
+  - Via SSH connection (no shared storage required):
+    - `pxh sync --remote user@host` bidirectional sync (default)
+    - `pxh sync --remote user@host --send-only` pushes local history to remote only
+    - `pxh sync --remote user@host --receive-only` pulls remote history from local only
+    - Use `--remote-db` to specify non-default remote database path
+    - Use `--ssh-cmd` to specify custom SSH command (like rsync's -e option)
 
 ## How it Works
 

@@ -4,7 +4,7 @@ use std::{
     fs,
     fs::{File, OpenOptions},
     io,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::PathBuf,
     str,
@@ -110,13 +110,39 @@ struct ImportCommand {
 
 #[derive(Parser, Debug)]
 struct SyncCommand {
-    dirname: PathBuf,
+    #[clap(help = "Directory for sync operations (required for directory-based sync)")]
+    dirname: Option<PathBuf>,
     #[clap(
         long,
         help = "Only export the current database; do not read other databases",
         default_value_t = false
     )]
     export_only: bool,
+    #[clap(long, help = "Remote host to sync with via SSH")]
+    remote: Option<String>,
+    #[clap(
+        long,
+        help = "Only send database to remote (no receive)",
+        conflicts_with = "receive_only"
+    )]
+    send_only: bool,
+    #[clap(
+        long,
+        help = "Only receive database from remote (no send)",
+        conflicts_with = "send_only"
+    )]
+    receive_only: bool,
+    #[clap(long, help = "Remote database path")]
+    remote_db: Option<PathBuf>,
+    #[clap(
+        short = 'e',
+        long,
+        default_value = "ssh",
+        help = "SSH command to use for connection (like rsync's -e option)"
+    )]
+    ssh_cmd: String,
+    #[clap(long, help = "Internal: run in server mode")]
+    server: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -487,10 +513,24 @@ impl MaintenanceCommand {
 
 impl SyncCommand {
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.dirname.exists() {
-            fs::create_dir(&self.dirname)?;
+        // If in server mode, handle sync protocol
+        if self.server {
+            return self.handle_server_mode(&mut conn);
         }
-        let mut output_path = self.dirname.clone();
+
+        // Handle SSH-based sync if --remote is specified
+        if let Some(host) = &self.remote {
+            return self.handle_remote_sync(&mut conn, host);
+        }
+
+        // Original directory-based sync behavior requires dirname
+        let dirname =
+            self.dirname.as_ref().ok_or("Directory path is required for directory-based sync")?;
+
+        if !dirname.exists() {
+            fs::create_dir(dirname)?;
+        }
+        let mut output_path = dirname.clone();
         let original_hostname =
             pxh::get_setting(&conn, "original_hostname")?.unwrap_or_else(pxh::get_hostname);
         output_path.push(original_hostname.to_path_lossy());
@@ -503,7 +543,7 @@ impl SyncCommand {
             output_path.to_str().ok_or("Unable to represent output filename as a string")?;
 
         if !self.export_only {
-            let entries = fs::read_dir(&self.dirname)?;
+            let entries = fs::read_dir(dirname)?;
             let db_extension = OsStr::new("db");
             for entry in entries {
                 let path = entry?.path();
@@ -515,7 +555,7 @@ impl SyncCommand {
             }
         }
 
-        let temp_file = NamedTempFile::new_in(self.dirname.as_path())?;
+        let temp_file = NamedTempFile::new_in(dirname.as_path())?;
         conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
         temp_file.persist(output_path_str)?;
         if self.export_only {
@@ -524,6 +564,86 @@ impl SyncCommand {
             println!("Saved merged database to {output_path_str}");
         }
 
+        Ok(())
+    }
+
+    fn handle_remote_sync(
+        &self,
+        conn: &mut Connection,
+        host: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        println!("Syncing with {}...", host);
+
+        // Test SSH connection first
+        let status = std::process::Command::new(&self.ssh_cmd).arg(host).arg("true").status()?;
+
+        if !status.success() {
+            return Err(Box::from(format!("Cannot connect to host: {}", host)));
+        }
+
+        // Determine sync mode
+        let mode = if self.send_only {
+            "send"
+        } else if self.receive_only {
+            "receive"
+        } else {
+            "bidirectional"
+        };
+
+        let remote_db_path = self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh.db"));
+
+        // Start SSH connection to remote with server mode
+        let remote_command = format!("pxh --db {} sync --server", remote_db_path.display());
+
+        let mut child = std::process::Command::new(&self.ssh_cmd)
+            .arg(host)
+            .arg(&remote_command)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn SSH command: {}", e))?;
+
+        // Send mode to server
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin.write_all(mode.as_bytes())?;
+            stdin.write_all(b"\n")?;
+            stdin.flush()?;
+
+            // Execute the appropriate sync operations
+            match mode {
+                "send" => {
+                    self.send_database(&mut stdin, conn)?;
+                    drop(stdin);
+                }
+                "receive" => {
+                    // For receive-only, we need to close stdin
+                    drop(stdin);
+                }
+                "bidirectional" => {
+                    self.send_database(&mut stdin, conn)?;
+                    // Close stdin to signal we're done sending
+                    drop(stdin);
+                }
+                _ => unreachable!(),
+            }
+        }
+
+        // Read from stdout if we're receiving
+        if mode == "receive" || mode == "bidirectional" {
+            if let Some(stdout) = child.stdout.as_mut() {
+                self.receive_database(stdout, conn)?;
+            }
+        }
+
+        let output = child.wait_with_output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(Box::from(format!("Remote sync failed: {}", stderr)));
+        }
+
+        println!("Sync completed successfully");
         Ok(())
     }
 
@@ -571,6 +691,85 @@ FROM other.command_history
         tx.commit()?;
         conn.execute("DETACH DATABASE other", ())?;
         Ok((other_count, after_count - before_count))
+    }
+
+    fn handle_server_mode(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Read mode from stdin
+        let mut mode = String::new();
+        std::io::stdin().read_line(&mut mode)?;
+
+        if mode.is_empty() {
+            return Err(Box::from("No sync mode received"));
+        }
+
+        let mode = mode.trim();
+
+        match mode {
+            "send" => {
+                // Server receives database from client
+                self.receive_database(&mut std::io::stdin(), conn)?;
+            }
+            "receive" => {
+                // Server sends database to client
+                self.send_database(&mut std::io::stdout(), conn)?;
+            }
+            "bidirectional" => {
+                // Server receives then sends
+                self.receive_database(&mut std::io::stdin(), conn)?;
+                self.send_database(&mut std::io::stdout(), conn)?;
+            }
+            _ => return Err(Box::from(format!("Unknown sync mode: {}", mode))),
+        }
+
+        Ok(())
+    }
+
+    fn send_database<W: Write>(
+        &self,
+        writer: &mut W,
+        conn: &mut Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Create a temporary file with the database
+        let temp_file = NamedTempFile::new()?;
+        conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
+
+        // Get file size
+        let metadata = std::fs::metadata(temp_file.path())?;
+        let size = metadata.len();
+
+        // Send size and database
+        writer.write_all(&size.to_le_bytes())?;
+
+        let mut file = File::open(temp_file.path())?;
+        io::copy(&mut file, writer)?;
+        writer.flush()?;
+
+        Ok(())
+    }
+
+    fn receive_database<R: Read>(
+        &self,
+        reader: &mut R,
+        conn: &mut Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Receive database size (8 bytes)
+        let mut size_bytes = [0u8; 8];
+        reader.read_exact(&mut size_bytes)?;
+        let size = u64::from_le_bytes(size_bytes);
+
+        // Receive database data
+        let mut data = vec![0u8; size as usize];
+        reader.read_exact(&mut data)?;
+
+        // Create temporary file for the received database
+        let temp_file = tempfile::NamedTempFile::new()?;
+        std::fs::write(temp_file.path(), &data)?;
+
+        // Use the existing merge function
+        let (other_count, added_count) = Self::merge_into(conn, temp_file.path().to_path_buf())?;
+
+        eprintln!("Merged: considered {} entries, added {} entries", other_count, added_count);
+        Ok(())
     }
 }
 
