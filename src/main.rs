@@ -141,6 +141,8 @@ struct SyncCommand {
         help = "SSH command to use for connection (like rsync's -e option)"
     )]
     ssh_cmd: String,
+    #[clap(long, default_value = "pxh", help = "Path to pxh binary on the remote host")]
+    remote_pxh: String,
     #[clap(long, help = "Internal: run in server mode")]
     server: bool,
 }
@@ -592,8 +594,12 @@ impl SyncCommand {
 
         let remote_db_path = self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh.db"));
 
+        // Intelligently determine remote pxh path if not specified
+        let remote_pxh = Self::determine_remote_pxh_path(&self.remote_pxh);
+
         // Start SSH connection to remote with server mode
-        let remote_command = format!("pxh --db {} sync --server", remote_db_path.display());
+        let remote_command =
+            format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
 
         let mut child = std::process::Command::new(&self.ssh_cmd)
             .arg(host)
@@ -770,6 +776,28 @@ FROM other.command_history
 
         eprintln!("Merged: considered {} entries, added {} entries", other_count, added_count);
         Ok(())
+    }
+
+    // Determines the remote pxh path intelligently.  If remote_pxh is
+    // not "pxh", use it as-is.
+    // Otherwise, try to determine a smart default based on the current executable location.
+    // Returns the relative path from home if the binary is in the home directory.
+    fn determine_remote_pxh_path(configured_path: &str) -> String {
+        if configured_path != "pxh" {
+            return configured_path.to_string();
+        }
+
+        // Try to be smart about the default path
+        Self::get_relative_path_from_home().unwrap_or_else(|| "pxh".to_string())
+    }
+
+    // Gets the relative path from home directory if the current executable is within it.
+    // Returns None if the executable is not in the home directory.
+    fn get_relative_path_from_home() -> Option<String> {
+        let current_exe = std::env::current_exe().ok()?;
+        let home = home::home_dir()?;
+
+        current_exe.strip_prefix(&home).ok().map(|path| path.to_string_lossy().to_string())
     }
 }
 
@@ -1036,6 +1064,34 @@ mod tests {
         assert!(determine_is_pxhs(&["pxhs-something".to_string()]));
         assert!(!determine_is_pxhs(&["".to_string()]));
         assert!(!determine_is_pxhs(&[]));
+    }
+
+    #[test]
+    fn test_determine_remote_pxh_path() {
+        // Test explicit path - should return as-is
+        assert_eq!(
+            SyncCommand::determine_remote_pxh_path("/usr/bin/custom-pxh"),
+            "/usr/bin/custom-pxh"
+        );
+        assert_eq!(SyncCommand::determine_remote_pxh_path("custom-pxh"), "custom-pxh");
+
+        // Test default "pxh" - we can't easily test the actual smart path logic without
+        // controlling the environment, but we can test that it returns something
+        let result = SyncCommand::determine_remote_pxh_path("pxh");
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn test_get_relative_path_from_home() {
+        // This is difficult to unit test properly since it depends on the actual
+        // executable location and home directory. We can only test the function exists
+        // and returns the expected type.
+        let result = SyncCommand::get_relative_path_from_home();
+        // It should return either Some(path) or None
+        match result {
+            Some(path) => assert!(!path.is_empty()),
+            None => assert!(true), // None is a valid response
+        }
     }
 }
 

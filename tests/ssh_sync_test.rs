@@ -13,6 +13,7 @@ fn test_ssh_sync_command_help() {
         .stdout(predicates::str::contains("--send-only"))
         .stdout(predicates::str::contains("--receive-only"))
         .stdout(predicates::str::contains("--remote-db"))
+        .stdout(predicates::str::contains("--remote-pxh"))
         .stdout(predicates::str::contains("--ssh-cmd"))
         .stdout(predicates::str::contains("--server"));
 }
