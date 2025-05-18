@@ -515,6 +515,18 @@ impl MaintenanceCommand {
 
 impl SyncCommand {
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Validate that --send-only and --receive-only are only used with --remote
+        if (self.send_only || self.receive_only) && self.remote.is_none() {
+            return Err(Box::from(
+                "--send-only and --receive-only flags require --remote to be specified",
+            ));
+        }
+
+        // Validate that --remote and directory are not used together
+        if self.remote.is_some() && self.dirname.is_some() {
+            return Err(Box::from("Cannot specify both --remote and a directory path"));
+        }
+
         // If in server mode, handle sync protocol
         if self.server {
             return self.handle_server_mode(&mut conn);

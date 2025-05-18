@@ -96,3 +96,50 @@ fn test_sync_without_path_or_remote() {
         .failure()
         .stderr(predicates::str::contains("Directory path is required for directory-based sync"));
 }
+
+#[test]
+fn test_send_only_without_remote() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+
+    let mut cmd = Command::cargo_bin("pxh").unwrap();
+
+    cmd.arg("--db").arg(&db_path).arg("sync").arg("--send-only").assert().failure().stderr(
+        predicates::str::contains(
+            "--send-only and --receive-only flags require --remote to be specified",
+        ),
+    );
+}
+
+#[test]
+fn test_receive_only_without_remote() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+
+    let mut cmd = Command::cargo_bin("pxh").unwrap();
+
+    cmd.arg("--db").arg(&db_path).arg("sync").arg("--receive-only").assert().failure().stderr(
+        predicates::str::contains(
+            "--send-only and --receive-only flags require --remote to be specified",
+        ),
+    );
+}
+
+#[test]
+fn test_remote_with_directory() {
+    let temp_dir = TempDir::new().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+    let sync_dir = temp_dir.path().join("sync");
+
+    let mut cmd = Command::cargo_bin("pxh").unwrap();
+
+    cmd.arg("--db")
+        .arg(&db_path)
+        .arg("sync")
+        .arg("--remote")
+        .arg("localhost")
+        .arg(&sync_dir)
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("Cannot specify both --remote and a directory path"));
+}
