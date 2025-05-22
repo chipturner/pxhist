@@ -145,6 +145,8 @@ struct SyncCommand {
     remote_pxh: String,
     #[clap(long, help = "Internal: run in server mode")]
     server: bool,
+    #[clap(long, help = "Only sync commands from the last N days", value_name = "DAYS")]
+    since: Option<u32>,
 }
 
 #[derive(Parser, Debug)]
@@ -607,8 +609,11 @@ impl SyncCommand {
         let remote_pxh = pxh::helpers::determine_remote_pxh_path(&self.remote_pxh);
 
         // Start SSH connection to remote with server mode
-        let remote_command =
+        let mut remote_command =
             format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
+        if let Some(days) = self.since {
+            remote_command.push_str(&format!(" --since {}", days));
+        }
 
         let mut cmd = std::process::Command::new(&ssh_cmd);
         cmd.args(&ssh_args)
@@ -672,9 +677,8 @@ impl SyncCommand {
         let before_count: u64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
         tx.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
-        let other_count: u64 = tx
-            .prepare("SELECT COUNT(*) FROM other.command_history")?
-            .query_row((), |r| r.get(0))?;
+
+        // Merge all records from the other database
         tx.execute(
             r#"
 INSERT OR IGNORE INTO main.command_history (
@@ -701,8 +705,16 @@ FROM other.command_history
 "#,
             (),
         )?;
+
+        // Count records after the merge
         let after_count: u64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
+
+        // Count how many records were in the other database
+        let other_count: u64 = tx
+            .prepare("SELECT COUNT(*) FROM other.command_history")?
+            .query_row((), |r| r.get(0))?;
+
         tx.commit()?;
         conn.execute("DETACH DATABASE other", ())?;
         Ok((other_count, after_count - before_count))
@@ -746,7 +758,31 @@ FROM other.command_history
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Create a temporary file with the database
         let temp_file = NamedTempFile::new()?;
+
+        // Use VACUUM INTO to create a complete copy
         conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
+
+        if let Some(days) = self.since {
+            // Open the temp database and delete old records
+            let temp_conn = Connection::open(temp_file.path())?;
+
+            // Calculate timestamp threshold
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let threshold = now - (days as i64 * 86400);
+
+            // Delete records older than the threshold
+            temp_conn.execute(
+                "DELETE FROM command_history WHERE start_unix_timestamp <= ?",
+                [threshold],
+            )?;
+
+            // VACUUM to reclaim space
+            temp_conn.execute("VACUUM", ())?;
+            drop(temp_conn); // Close the connection to flush all changes
+        }
 
         // Get file size
         let metadata = std::fs::metadata(temp_file.path())?;

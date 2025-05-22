@@ -20,7 +20,8 @@
       "Bash(./target/debug/pxh sync:*)",
       "Bash(chmod:*)",
       "Bash(./test_smart_path.sh:*)",
-      "Bash(./test_remote_path.sh)"
+      "Bash(./test_remote_path.sh)",
+      "Bash(rg:*)"
     ],
     "deny": []
   }
