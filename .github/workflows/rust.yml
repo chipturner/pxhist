@@ -10,15 +10,49 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        rust: [stable, beta]
+        exclude:
+          - os: windows-latest
+            rust: beta
+          - os: macos-latest
+            rust: beta
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
         submodules: recursive
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: ${{ matrix.rust }}
+        components: rustfmt, clippy
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+    
+    - name: Check formatting
+      run: cargo fmt --check
+    
+    - name: Run clippy
+      run: cargo clippy -- -D warnings
+    
     - name: Build
       run: cargo build --verbose
+    
     - name: Run tests
       run: cargo test --verbose

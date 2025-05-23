@@ -1,0 +1,40 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: '0 0 * * 1' # Weekly on Monday
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+    
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+    
+    - name: Install cargo-audit
+      run: cargo install cargo-audit
+    
+    - name: Run security audit
+      run: cargo audit
+    
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-audit-
