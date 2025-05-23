@@ -357,18 +357,18 @@ impl MaintenanceCommand {
             let total_size = page_count * page_size;
             let freelist_size = freelist_count * page_size;
 
-            println!("Database '{}' information before maintenance:", db_name);
+            println!("Database '{db_name}' information before maintenance:");
             println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
             println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
-            println!("  Page count: {}", page_count);
-            println!("  Page size: {} bytes", page_size);
-            println!("  Freelist count: {}", freelist_count);
+            println!("  Page count: {page_count}");
+            println!("  Page size: {page_size} bytes");
+            println!("  Freelist count: {freelist_count}");
 
             // Show row counts for main tables
             let command_count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))
                 .unwrap_or_default(); // Handle case where table might not exist
-            println!("  Command history entries: {}", command_count);
+            println!("  Command history entries: {command_count}");
             println!();
 
             // Remove non-standard tables (except those prefixed with KEEP_)
@@ -391,17 +391,17 @@ impl MaintenanceCommand {
 
             for table_name in non_standard_tables {
                 if table_name.starts_with("KEEP_") {
-                    println!("  Keeping user table: {}", table_name);
+                    println!("  Keeping user table: {table_name}");
                     continue;
                 }
 
-                println!("  Dropping non-standard table: {}", table_name);
-                conn.execute(&format!("DROP TABLE IF EXISTS {}", table_name), [])?;
+                println!("  Dropping non-standard table: {table_name}");
+                conn.execute(&format!("DROP TABLE IF EXISTS {table_name}"), [])?;
                 cleanup_count += 1;
             }
 
             if cleanup_count > 0 {
-                println!("Cleaned up {} non-standard tables", cleanup_count);
+                println!("Cleaned up {cleanup_count} non-standard tables");
             } else {
                 println!("No non-standard tables found to clean up");
             }
@@ -430,25 +430,25 @@ impl MaintenanceCommand {
             cleanup_count = 0;
             for index_name in non_standard_indexes {
                 if index_name.starts_with("KEEP_") {
-                    println!("  Keeping user index: {}", index_name);
+                    println!("  Keeping user index: {index_name}");
                     continue;
                 }
 
                 // Try to drop the index, but don't fail if it can't be dropped
                 // (might be a PRIMARY KEY or UNIQUE constraint)
-                match conn.execute(&format!("DROP INDEX IF EXISTS {}", index_name), []) {
+                match conn.execute(&format!("DROP INDEX IF EXISTS {index_name}"), []) {
                     Ok(_) => {
-                        println!("  Dropping non-standard index: {}", index_name);
+                        println!("  Dropping non-standard index: {index_name}");
                         cleanup_count += 1;
                     }
                     Err(e) => {
-                        println!("  Skipping index {}: {}", index_name, e);
+                        println!("  Skipping index {index_name}: {e}");
                     }
                 }
             }
 
             if cleanup_count > 0 {
-                println!("Cleaned up {} non-standard indexes", cleanup_count);
+                println!("Cleaned up {cleanup_count} non-standard indexes");
             } else {
                 println!("No non-standard indexes found to clean up");
             }
@@ -468,14 +468,14 @@ impl MaintenanceCommand {
             let total_size = page_count * page_size;
             let freelist_size = freelist_count * page_size;
 
-            println!("\nDatabase '{}' information after maintenance:", db_name);
+            println!("\nDatabase '{db_name}' information after maintenance:");
             println!("  Total size: {:.2} MB", total_size as f64 / 1024.0 / 1024.0);
             println!("  Free space: {:.2} MB", freelist_size as f64 / 1024.0 / 1024.0);
-            println!("  Page count: {}", page_count);
-            println!("  Page size: {} bytes", page_size);
-            println!("  Freelist count: {}", freelist_count);
+            println!("  Page count: {page_count}");
+            println!("  Page size: {page_size} bytes");
+            println!("  Freelist count: {freelist_count}");
 
-            println!("\nDatabase '{}' maintenance completed.", db_name);
+            println!("\nDatabase '{db_name}' maintenance completed.");
             Ok(())
         }
 
@@ -488,18 +488,18 @@ impl MaintenanceCommand {
         let mut success = true;
         for file_path in &self.files {
             let file_str = file_path.to_string_lossy();
-            println!("\nPerforming maintenance on: {}", file_str);
+            println!("\nPerforming maintenance on: {file_str}");
 
             // Open the database connection for this file
             match Connection::open(file_path) {
                 Ok(conn) => {
                     if let Err(err) = maintain_database(&conn, &file_str) {
-                        println!("Error maintaining database '{}': {}", file_str, err);
+                        println!("Error maintaining database '{file_str}': {err}");
                         success = false;
                     }
                 }
                 Err(err) => {
-                    println!("Error opening database '{}': {}", file_str, err);
+                    println!("Error opening database '{file_str}': {err}");
                     success = false;
                 }
             }
@@ -639,7 +639,7 @@ impl SyncCommand {
         } else {
             // SSH mode
             let host = self.remote.as_ref().ok_or("Remote host required for SSH sync")?;
-            println!("Syncing with {}...", host);
+            println!("Syncing with {host}...");
 
             // Parse SSH command and arguments
             let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
@@ -654,7 +654,7 @@ impl SyncCommand {
             let mut remote_command =
                 format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
             if let Some(days) = self.since {
-                remote_command.push_str(&format!(" --since {}", days));
+                remote_command.push_str(&format!(" --since {days}"));
             }
 
             let mut cmd = std::process::Command::new(&ssh_cmd);
@@ -665,7 +665,7 @@ impl SyncCommand {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::inherit()); // Map stderr to our stderr
 
-            Some(cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {}", e))?)
+            Some(cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {e}"))?)
         };
 
         // Handle stdin/stdout directly or through SSH child process
@@ -803,7 +803,7 @@ FROM other.command_history
                 self.receive_database(&mut std::io::stdin(), conn)?;
                 self.send_database(&mut std::io::stdout(), conn)?;
             }
-            _ => return Err(Box::from(format!("Unknown sync mode: {}", mode))),
+            _ => return Err(Box::from(format!("Unknown sync mode: {mode}"))),
         }
 
         Ok(())
@@ -859,8 +859,7 @@ FROM other.command_history
             conn.path().map(|p| p.to_string()).unwrap_or_else(|| "in-memory".to_string());
 
         eprintln!(
-            "{}: Merged into {} considered {} entries, added {} entries",
-            current_hostname, current_db_path, other_count, added_count
+            "{current_hostname}: Merged into {current_db_path} considered {other_count} entries, added {added_count} entries"
         );
         Ok(())
     }
