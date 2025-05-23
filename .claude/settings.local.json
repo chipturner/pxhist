@@ -27,7 +27,10 @@
       "Bash(git stash:*)",
       "Bash(./target/debug/pxh:*)",
       "Bash(RUST_BACKTRACE=1 cargo test --test sync_since_test test_sync_with_since_filter -- --nocapture)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git config:*)",
+      "Bash(gh auth:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   }

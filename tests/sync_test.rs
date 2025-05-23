@@ -290,8 +290,16 @@ fn test_send_only_sync() -> Result<()> {
     let client_output = client.wait_with_output()?;
     let server_output = server.wait_with_output()?;
 
-    assert!(client_output.status.success(), "Client failed: {}", String::from_utf8_lossy(&client_output.stderr));
-    assert!(server_output.status.success(), "Server failed: {}", String::from_utf8_lossy(&server_output.stderr));
+    assert!(
+        client_output.status.success(),
+        "Client failed: {}",
+        String::from_utf8_lossy(&client_output.stderr)
+    );
+    assert!(
+        server_output.status.success(),
+        "Server failed: {}",
+        String::from_utf8_lossy(&server_output.stderr)
+    );
 
     // Server should have client's commands
     assert_eq!(count_commands(&server_db)?, 2);
@@ -327,8 +335,16 @@ fn test_receive_only_sync() -> Result<()> {
     let client_output = client.wait_with_output()?;
     let server_output = server.wait_with_output()?;
 
-    assert!(client_output.status.success(), "Client failed: {}", String::from_utf8_lossy(&client_output.stderr));
-    assert!(server_output.status.success(), "Server failed: {}", String::from_utf8_lossy(&server_output.stderr));
+    assert!(
+        client_output.status.success(),
+        "Client failed: {}",
+        String::from_utf8_lossy(&client_output.stderr)
+    );
+    assert!(
+        server_output.status.success(),
+        "Server failed: {}",
+        String::from_utf8_lossy(&server_output.stderr)
+    );
 
     // Client should have server's commands
     assert_eq!(count_commands(&client_db)?, 2);
@@ -375,8 +391,16 @@ fn test_sync_with_since_option() -> Result<()> {
     let client_output = client.wait_with_output()?;
     let server_output = server.wait_with_output()?;
 
-    assert!(client_output.status.success(), "Client failed: {}", String::from_utf8_lossy(&client_output.stderr));
-    assert!(server_output.status.success(), "Server failed: {}", String::from_utf8_lossy(&server_output.stderr));
+    assert!(
+        client_output.status.success(),
+        "Client failed: {}",
+        String::from_utf8_lossy(&client_output.stderr)
+    );
+    assert!(
+        server_output.status.success(),
+        "Server failed: {}",
+        String::from_utf8_lossy(&server_output.stderr)
+    );
 
     // Client should have its old command plus recent commands from both
     assert_eq!(count_commands(&client_db)?, 4); // old_client, recent_client, medium_server, recent_server
