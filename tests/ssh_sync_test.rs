@@ -106,7 +106,7 @@ fn test_send_only_without_remote() {
 
     cmd.arg("--db").arg(&db_path).arg("sync").arg("--send-only").assert().failure().stderr(
         predicates::str::contains(
-            "--send-only and --receive-only flags require --remote to be specified",
+            "--send-only and --receive-only flags require --remote or --stdin-stdout to be specified",
         ),
     );
 }
@@ -120,7 +120,7 @@ fn test_receive_only_without_remote() {
 
     cmd.arg("--db").arg(&db_path).arg("sync").arg("--receive-only").assert().failure().stderr(
         predicates::str::contains(
-            "--send-only and --receive-only flags require --remote to be specified",
+            "--send-only and --receive-only flags require --remote or --stdin-stdout to be specified",
         ),
     );
 }

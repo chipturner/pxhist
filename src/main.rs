@@ -147,6 +147,8 @@ struct SyncCommand {
     server: bool,
     #[clap(long, help = "Only sync commands from the last N days", value_name = "DAYS")]
     since: Option<u32>,
+    #[clap(long, help = "Use stdin/stdout for sync instead of SSH (for testing)")]
+    stdin_stdout: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -516,11 +518,46 @@ impl MaintenanceCommand {
 // into the current database, then write an output with our hostname.
 
 impl SyncCommand {
+    /// Create a temporary database file with optional --since filtering
+    fn create_filtered_db_copy(
+        &self,
+        conn: &mut Connection,
+    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+        // Create a temporary file with the database
+        let temp_file = NamedTempFile::new()?;
+
+        // Use VACUUM INTO to create a complete copy
+        conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
+
+        if let Some(days) = self.since {
+            // Open the temp database and delete old records
+            let temp_conn = Connection::open(temp_file.path())?;
+
+            // Calculate timestamp threshold
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64;
+            let threshold = now - (days as i64 * 86400);
+
+            // Delete records older than the threshold
+            temp_conn.execute(
+                "DELETE FROM command_history WHERE start_unix_timestamp <= ?",
+                [threshold],
+            )?;
+
+            // VACUUM to reclaim space
+            temp_conn.execute("VACUUM", ())?;
+            drop(temp_conn); // Close the connection to flush all changes
+        }
+
+        Ok(temp_file)
+    }
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        // Validate that --send-only and --receive-only are only used with --remote
-        if (self.send_only || self.receive_only) && self.remote.is_none() {
+        // Validate that --send-only and --receive-only are only used with remote sync
+        if (self.send_only || self.receive_only) && self.remote.is_none() && !self.stdin_stdout {
             return Err(Box::from(
-                "--send-only and --receive-only flags require --remote to be specified",
+                "--send-only and --receive-only flags require --remote or --stdin-stdout to be specified",
             ));
         }
 
@@ -534,9 +571,9 @@ impl SyncCommand {
             return self.handle_server_mode(&mut conn);
         }
 
-        // Handle SSH-based sync if --remote is specified
-        if let Some(host) = &self.remote {
-            return self.handle_remote_sync(&mut conn, host);
+        // Handle remote sync if specified (either SSH or stdin/stdout)
+        if self.stdin_stdout || self.remote.is_some() {
+            return self.handle_remote_sync(&mut conn);
         }
 
         // Original directory-based sync behavior requires dirname
@@ -565,12 +602,14 @@ impl SyncCommand {
                 let path = entry?.path();
                 if path.extension() == Some(db_extension) && output_path != path {
                     print!("Syncing from {}...", path.to_string_lossy());
-                    let (other_count, after_count) = Self::merge_into(&mut conn, path)?;
+                    let (other_count, after_count) =
+                        Self::merge_database_from_file(&mut conn, path)?;
                     println!("done, considered {other_count} rows and added {after_count}");
                 }
             }
         }
 
+        // Create database copy without filtering (--since only applies to remote sync)
         let temp_file = NamedTempFile::new_in(dirname.as_path())?;
         conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
         temp_file.persist(output_path_str)?;
@@ -583,16 +622,7 @@ impl SyncCommand {
         Ok(())
     }
 
-    fn handle_remote_sync(
-        &self,
-        conn: &mut Connection,
-        host: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("Syncing with {}...", host);
-
-        // Parse SSH command and arguments
-        let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
-
+    fn handle_remote_sync(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
         // Determine sync mode
         let mode = if self.send_only {
             "send"
@@ -602,74 +632,102 @@ impl SyncCommand {
             "bidirectional"
         };
 
-        let remote_db_path =
-            self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
+        let mut child = if self.stdin_stdout {
+            // For stdin/stdout mode (testing), we're already connected
+            // Create a dummy child process that uses stdin/stdout
+            None
+        } else {
+            // SSH mode
+            let host = self.remote.as_ref().ok_or("Remote host required for SSH sync")?;
+            println!("Syncing with {}...", host);
 
-        // Intelligently determine remote pxh path if not specified
-        let remote_pxh = pxh::helpers::determine_remote_pxh_path(&self.remote_pxh);
+            // Parse SSH command and arguments
+            let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
 
-        // Start SSH connection to remote with server mode
-        let mut remote_command =
-            format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
-        if let Some(days) = self.since {
-            remote_command.push_str(&format!(" --since {}", days));
-        }
+            let remote_db_path =
+                self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
 
-        let mut cmd = std::process::Command::new(&ssh_cmd);
-        cmd.args(&ssh_args)
-            .arg(host)
-            .arg(&remote_command)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit()); // Map stderr to our stderr
+            // Intelligently determine remote pxh path if not specified
+            let remote_pxh = pxh::helpers::determine_remote_pxh_path(&self.remote_pxh);
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {}", e))?;
+            // Start SSH connection to remote with server mode
+            let mut remote_command =
+                format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
+            if let Some(days) = self.since {
+                remote_command.push_str(&format!(" --since {}", days));
+            }
+
+            let mut cmd = std::process::Command::new(&ssh_cmd);
+            cmd.args(&ssh_args)
+                .arg(host)
+                .arg(&remote_command)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::inherit()); // Map stderr to our stderr
+
+            Some(cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {}", e))?)
+        };
+
+        // Handle stdin/stdout directly or through SSH child process
+        let (mut stdin_writer, mut stdout_reader) = if self.stdin_stdout {
+            // Use actual stdin/stdout
+            (
+                Box::new(std::io::stdout()) as Box<dyn Write>,
+                Box::new(std::io::stdin()) as Box<dyn Read>,
+            )
+        } else {
+            // Use SSH child process pipes
+            if let Some(ref mut child) = child {
+                let stdin = child.stdin.take().ok_or("Failed to get stdin from SSH process")?;
+                let stdout = child.stdout.take().ok_or("Failed to get stdout from SSH process")?;
+                (Box::new(stdin) as Box<dyn Write>, Box::new(stdout) as Box<dyn Read>)
+            } else {
+                return Err(Box::from("No child process available"));
+            }
+        };
 
         // Send mode to server
-        if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(mode.as_bytes())?;
-            stdin.write_all(b"\n")?;
-            stdin.flush()?;
+        stdin_writer.write_all(mode.as_bytes())?;
+        stdin_writer.write_all(b"\n")?;
+        stdin_writer.flush()?;
 
-            // Execute the appropriate sync operations
-            match mode {
-                "send" => {
-                    self.send_database(&mut stdin, conn)?;
-                    drop(stdin);
-                }
-                "receive" => {
-                    // For receive-only, we need to close stdin
-                    drop(stdin);
-                }
-                "bidirectional" => {
-                    self.send_database(&mut stdin, conn)?;
-                    // Close stdin to signal we're done sending
-                    drop(stdin);
-                }
-                _ => unreachable!(),
+        // Execute the appropriate sync operations
+        match mode {
+            "send" => {
+                self.send_database(&mut stdin_writer, conn)?;
+                drop(stdin_writer);
+            }
+            "receive" => {
+                // For receive-only, we need to close stdin
+                drop(stdin_writer);
+                self.receive_database(&mut stdout_reader, conn)?;
+            }
+            "bidirectional" => {
+                self.send_database(&mut stdin_writer, conn)?;
+                // Close stdin to signal we're done sending
+                drop(stdin_writer);
+                self.receive_database(&mut stdout_reader, conn)?;
+            }
+            _ => unreachable!(),
+        }
+
+        // Wait for child process if using SSH
+        if let Some(mut child) = child {
+            let status = child.wait()?;
+            if !status.success() {
+                return Err(Box::from("Remote sync failed"));
             }
         }
 
-        // Read from stdout if we're receiving
-        if mode == "receive" || mode == "bidirectional" {
-            if let Some(stdout) = child.stdout.as_mut() {
-                self.receive_database(stdout, conn)?;
-            }
+        if !self.stdin_stdout {
+            println!("Sync completed successfully");
         }
 
-        let status = child.wait()?;
-
-        if !status.success() {
-            return Err(Box::from("Remote sync failed"));
-        }
-
-        println!("Sync completed successfully");
         Ok(())
     }
 
-    // Merge history from the file specified in `path` into the current
-    // history database.
-    fn merge_into(
+    // Merge history from the database file at `path` into the current database.
+    fn merge_database_from_file(
         conn: &mut Connection,
         path: PathBuf,
     ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
@@ -756,33 +814,8 @@ FROM other.command_history
         writer: &mut W,
         conn: &mut Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Create a temporary file with the database
-        let temp_file = NamedTempFile::new()?;
-
-        // Use VACUUM INTO to create a complete copy
-        conn.execute("VACUUM INTO ?", (temp_file.path().to_str(),))?;
-
-        if let Some(days) = self.since {
-            // Open the temp database and delete old records
-            let temp_conn = Connection::open(temp_file.path())?;
-
-            // Calculate timestamp threshold
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
-            let threshold = now - (days as i64 * 86400);
-
-            // Delete records older than the threshold
-            temp_conn.execute(
-                "DELETE FROM command_history WHERE start_unix_timestamp <= ?",
-                [threshold],
-            )?;
-
-            // VACUUM to reclaim space
-            temp_conn.execute("VACUUM", ())?;
-            drop(temp_conn); // Close the connection to flush all changes
-        }
+        // Create filtered database copy
+        let temp_file = self.create_filtered_db_copy(conn)?;
 
         // Get file size
         let metadata = std::fs::metadata(temp_file.path())?;
@@ -817,7 +850,8 @@ FROM other.command_history
         std::fs::write(temp_file.path(), &data)?;
 
         // Use the existing merge function to merge directly into the main database
-        let (other_count, added_count) = Self::merge_into(conn, temp_file.path().to_path_buf())?;
+        let (other_count, added_count) =
+            Self::merge_database_from_file(conn, temp_file.path().to_path_buf())?;
 
         // Get current hostname and database path
         let current_hostname = pxh::get_hostname();
