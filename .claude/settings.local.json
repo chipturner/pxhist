@@ -21,7 +21,12 @@
       "Bash(chmod:*)",
       "Bash(./test_smart_path.sh:*)",
       "Bash(./test_remote_path.sh)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "Bash(RUST_BACKTRACE=1 cargo test --test remote_sync_test test_bidirectional_sync_via_stdin_stdout -- --nocapture)",
+      "Bash(git stash push:*)",
+      "Bash(git stash:*)",
+      "Bash(./target/debug/pxh:*)",
+      "Bash(RUST_BACKTRACE=1 cargo test --test sync_since_test test_sync_with_since_filter -- --nocapture)"
     ],
     "deny": []
   }
