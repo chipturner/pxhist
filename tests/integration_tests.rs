@@ -6,12 +6,12 @@ use std::{
 
 use assert_cmd::Command;
 use bstr::BString;
-use rand::{Rng, distributions::Alphanumeric};
+use rand::{distr::Alphanumeric, Rng};
 use rusqlite::Connection;
 use tempfile::TempDir;
 
 fn generate_random_string(length: usize) -> String {
-    rand::thread_rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
+    rand::rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
 }
 
 // Simple struct and helpers for invoking pxh with a given testdb.
@@ -620,7 +620,7 @@ fn test_maintenance() {
 
         // Generate commands with varied metadata but fewer of them
         let num_commands = 3000; // Significantly reduced but still enough for testing
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Working directories
         let working_dirs = ["/home/user", "/var/log", "/etc", "/tmp"];
@@ -648,7 +648,7 @@ fn test_maintenance() {
             };
 
             // Choose a random working directory
-            let working_dir = working_dirs[rng.gen_range(0..working_dirs.len())];
+            let working_dir = working_dirs[rng.random_range(0..working_dirs.len())];
 
             // Direct SQL insert is much faster than command-line
             tx.execute(
