@@ -30,7 +30,12 @@
       "Bash(git add:*)",
       "Bash(git config:*)",
       "Bash(gh auth:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(./coverage.sh)",
+      "Bash(just coverage)",
+      "Bash(just coverage-detailed:*)",
+      "Bash(./coverage-detailed.sh:*)",
+      "Bash(just coverage-clean)"
     ],
     "deny": []
   }

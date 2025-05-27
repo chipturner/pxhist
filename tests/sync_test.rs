@@ -1,4 +1,5 @@
 use std::{
+    env,
     path::Path,
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -11,6 +12,21 @@ use common::pxh_path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+// Helper to create a Command with coverage environment variables
+fn pxh_command() -> Command {
+    let mut cmd = Command::new(pxh_path());
+
+    // Propagate coverage environment variables if they exist
+    if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
+        cmd.env("LLVM_PROFILE_FILE", profile_file);
+    }
+    if let Ok(llvm_cov) = env::var("CARGO_LLVM_COV") {
+        cmd.env("CARGO_LLVM_COV", llvm_cov);
+    }
+
+    cmd
+}
+
 // Helper to create test commands using pxh insert
 // If days_ago is provided, creates command with that age, otherwise uses current time
 fn insert_test_command(db_path: &Path, command: &str, days_ago: Option<u32>) -> Result<()> {
@@ -20,7 +36,7 @@ fn insert_test_command(db_path: &Path, command: &str, days_ago: Option<u32>) -> 
         None => now,
     };
 
-    let output = Command::new(pxh_path())
+    let output = pxh_command()
         .args(&[
             "--db",
             db_path.to_str().unwrap(),
@@ -47,7 +63,7 @@ fn insert_test_command(db_path: &Path, command: &str, days_ago: Option<u32>) -> 
         .into());
     }
 
-    let seal_output = Command::new(pxh_path())
+    let seal_output = pxh_command()
         .args(&[
             "--db",
             db_path.to_str().unwrap(),
@@ -90,7 +106,7 @@ fn spawn_sync_processes(
     client_args: Vec<String>,
     server_args: Vec<String>,
 ) -> Result<(std::process::Child, std::process::Child)> {
-    let mut server = Command::new(pxh_path())
+    let mut server = pxh_command()
         .args(server_args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -103,7 +119,7 @@ fn spawn_sync_processes(
     // Brief delay to ensure server process is initialized before client connects
     std::thread::sleep(std::time::Duration::from_millis(50));
 
-    let client = Command::new(pxh_path())
+    let client = pxh_command()
         .args(client_args)
         .stdin(server_stdout)
         .stdout(server_stdin)
@@ -162,7 +178,7 @@ fn test_directory_sync() -> Result<()> {
     insert_test_command(&db2, "echo from_db2_2", None)?;
 
     // Sync databases from sync_dir
-    let output = Command::new(pxh_path())
+    let output = pxh_command()
         .args(&["--db", output_db.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
         .output()?;
 
@@ -187,7 +203,7 @@ fn test_directory_sync_ignores_since() -> Result<()> {
     insert_test_command(&source_db, "current command 1", Some(0))?;
 
     // Sync with --since (should be ignored for directory sync)
-    let output = Command::new(pxh_path())
+    let output = pxh_command()
         .args(&[
             "--db",
             dest_db.to_str().unwrap(),
@@ -457,8 +473,7 @@ fn test_sync_error_handling() -> Result<()> {
 #[test]
 fn test_ssh_sync_command_parsing() -> Result<()> {
     // Test that SSH sync commands are properly formed
-    let output =
-        Command::new(pxh_path()).args(&["sync", "--remote", "user@host", "--help"]).output()?;
+    let output = pxh_command().args(&["sync", "--remote", "user@host", "--help"]).output()?;
 
     // Should show help without error
     assert!(String::from_utf8(output.stdout)?.contains("Remote host to sync with"));

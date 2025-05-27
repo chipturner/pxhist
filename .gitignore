@@ -12,3 +12,11 @@ Cargo.lock
 perf.data
 perf.data.old
 .aider*
+
+# Code coverage
+/coverage/
+lcov.info
+*.profraw
+*.profdata
+coverage.json
+coverage.xml

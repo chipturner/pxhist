@@ -29,6 +29,15 @@ impl PxhCaller {
         let mut ret = Command::cargo_bin("pxh").unwrap();
         ret.env_clear().env("PXH_DB_PATH", &self.tmpdir.path().join("test"));
         ret.env("PXH_HOSTNAME", &self.hostname);
+
+        // Propagate coverage environment variables if they exist
+        if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
+            ret.env("LLVM_PROFILE_FILE", profile_file);
+        }
+        if let Ok(llvm_cov) = env::var("CARGO_LLVM_COV") {
+            ret.env("CARGO_LLVM_COV", llvm_cov);
+        }
+
         ret.args(args.as_ref().split(' '));
         ret
     }
