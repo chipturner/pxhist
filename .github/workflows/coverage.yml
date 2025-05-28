@@ -16,6 +16,11 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Install LLVM and Clang
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y llvm clang
+    
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
@@ -26,6 +31,8 @@ jobs:
     
     - name: Generate code coverage
       run: |
+        export CC=clang
+        export CXX=clang++
         export LLVM_PROFILE_FILE="pxhist-%p-%m.profraw"
         cargo llvm-cov test --all-features --workspace --include-ffi --lcov --output-path lcov.info
     
