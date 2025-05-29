@@ -242,6 +242,49 @@ pub fn import_bash_history(
     Ok(dedup_invocations(ret))
 }
 
+#[derive(Deserialize)]
+struct FishHistoryEntry {
+    cmd: String,
+    when: i64,
+}
+
+pub fn import_fish_history(
+    histfile: &Path,
+    hostname: Option<BString>,
+    username: Option<BString>,
+) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
+    let f = File::open(histfile)?;
+    let reader = BufReader::new(f);
+    let username = username
+        .or_else(|| users::get_current_username().map(|v| BString::from(v.as_bytes())))
+        .unwrap_or_else(|| BString::from("unknown"));
+    let hostname = hostname.unwrap_or_else(get_hostname);
+    
+    let mut ret = vec![];
+    let session_id = generate_import_session_id(histfile);
+    
+    // Fish history format is YAML with entries like:
+    // - cmd: command here
+    //   when: 1234567890
+    let entries: Vec<FishHistoryEntry> = serde_yaml::from_reader(reader)?;
+    
+    for entry in entries {
+        let invocation = Invocation {
+            command: BString::from(entry.cmd.as_bytes()),
+            shellname: "fish".into(),
+            hostname: Some(BString::from(hostname.as_bytes())),
+            username: Some(BString::from(username.as_bytes())),
+            start_unix_timestamp: Some(entry.when),
+            session_id,
+            ..Default::default()
+        };
+        
+        ret.push(invocation);
+    }
+    
+    Ok(dedup_invocations(ret))
+}
+
 pub fn import_json_history(histfile: &Path) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
     let f = File::open(histfile)?;
     let reader = BufReader::new(f);

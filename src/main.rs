@@ -228,6 +228,11 @@ impl ImportCommand {
                 self.hostname.as_ref().map(|v| v.as_bytes().into()),
                 self.username.as_ref().map(|v| v.as_bytes().into()),
             ),
+            "fish" => pxh::import_fish_history(
+                &self.histfile,
+                self.hostname.as_ref().map(|v| v.as_bytes().into()),
+                self.username.as_ref().map(|v| v.as_bytes().into()),
+            ),
             "json" => pxh::import_json_history(&self.histfile),
             _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", self.shellname))),
         }?;
@@ -251,6 +256,7 @@ impl ShellConfigCommand {
                 contents.push_str(include_str!("shell_configs/pxh.bash"));
                 contents
             }
+            "fish" => String::from(include_str!("shell_configs/pxh.fish")),
             _ => {
                 return Err(Box::from(format!(
                     "Unsupported shell: {} (PRs welcome!)",
@@ -270,25 +276,34 @@ impl InstallCommand {
         let rc_file = match shellname {
             "zsh" => ".zshrc",
             "bash" => ".bashrc",
+            "fish" => ".config/fish/config.fish",
             _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
         };
 
         let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
         pb.push(rc_file);
 
-        // Skip installationif "pxh shell-config" is present in the
-        // current RC file.
-        let file = File::open(&pb)?;
-        let reader = BufReader::new(&file);
-        for line in reader.lines() {
-            let line = line.unwrap();
-            if line.contains("pxh shell-config") {
-                println!("Shell config already present in {}; taking no action.", pb.display());
-                return Ok(());
+        // For fish, ensure the config directory exists
+        if shellname == "fish" {
+            if let Some(parent) = pb.parent() {
+                fs::create_dir_all(parent)?;
             }
         }
 
-        let mut file = OpenOptions::new().append(true).open(&pb)?;
+        // Skip installationif "pxh shell-config" is present in the
+        // current RC file.
+        if let Ok(file) = File::open(&pb) {
+            let reader = BufReader::new(&file);
+            for line in reader.lines() {
+                let line = line.unwrap();
+                if line.contains("pxh shell-config") {
+                    println!("Shell config already present in {}; taking no action.", pb.display());
+                    return Ok(());
+                }
+            }
+        }
+
+        let mut file = OpenOptions::new().append(true).create(true).open(&pb)?;
 
         write!(file, "\n# Install the pxh shell helpers to add interactive history realtime.")?;
         writeln!(
