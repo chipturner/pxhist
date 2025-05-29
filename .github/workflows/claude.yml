@@ -31,7 +31,8 @@ jobs:
 
       - name: Run Claude Code
         id: claude
-        uses: anthropics/claude-code-action@fix-500-error-logging
+        # uses: anthropics/claude-code-action@fix-500-error-logging
+        uses: anthropics/claude-code-action
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
 
