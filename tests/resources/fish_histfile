@@ -1,0 +1,6 @@
+- cmd: echo "hello world"
+  when: 1653535262
+- cmd: ls -la
+  when: 1653535828
+- cmd: cd /tmp && ls
+  when: 1653543049
