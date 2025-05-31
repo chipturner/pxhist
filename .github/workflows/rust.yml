@@ -14,10 +14,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        rust: stable
+        rust: [stable, beta]
         exclude:
           - os: macos-latest
-            rust: stable
+            rust: beta
 
     runs-on: ${{ matrix.os }}
 
