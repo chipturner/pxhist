@@ -1,5 +1,6 @@
-use rexpect::session::spawn_command;
 use std::{env, fs, path::PathBuf, thread, time::Duration};
+
+use rexpect::session::spawn_command;
 use tempfile::TempDir;
 
 mod common;
@@ -42,7 +43,6 @@ fn get_commands(db_path: &PathBuf) -> Result<Vec<String>> {
     if table_exists == 0 {
         return Ok(vec![]);
     }
-
 
     let mut stmt =
         conn.prepare("SELECT full_command FROM command_history ORDER BY start_unix_timestamp")?;
@@ -130,7 +130,6 @@ fn test_bash_interactive_shell() -> Result<()> {
 
     // Give a moment for any final writes
     thread::sleep(Duration::from_millis(500));
-
 
     // Now verify that commands were recorded
     assert!(pxh_db_path.exists(), "pxh database should exist at {:?}", pxh_db_path);
@@ -283,7 +282,7 @@ fn test_bash_command_with_exit_status() -> Result<()> {
     );
 
     let mut session = spawn_command(cmd, Some(30_000))?;
-    
+
     // Wait for shell initialization
     thread::sleep(Duration::from_millis(1000));
 
@@ -369,7 +368,7 @@ fn test_bash_working_directory_tracking() -> Result<()> {
     );
 
     let mut session = spawn_command(cmd, Some(30_000))?;
-    
+
     // Wait for shell initialization
     thread::sleep(Duration::from_millis(1000));
 
@@ -408,7 +407,6 @@ fn test_bash_working_directory_tracking() -> Result<()> {
             Ok((cmd, dir))
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
-
 
     assert!(
         results.iter().any(|(cmd, dir)| cmd.contains("in test1") && dir.ends_with("test1")),
@@ -472,7 +470,7 @@ fn test_multiple_sessions() -> Result<()> {
 
     // Wait for shell initialization
     thread::sleep(Duration::from_millis(1000));
-    
+
     // Run commands in both sessions
     for (i, session) in [&mut session1, &mut session2].iter_mut().enumerate() {
         // Run a unique command in each session
