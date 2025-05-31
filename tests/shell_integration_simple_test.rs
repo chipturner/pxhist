@@ -1,9 +1,7 @@
 use std::{env, fs, process::Command};
 
+use pxh::test_utils::pxh_path;
 use tempfile::TempDir;
-
-mod common;
-use common::pxh_path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 

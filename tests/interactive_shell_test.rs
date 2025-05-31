@@ -1,15 +1,12 @@
-use std::{env, fs, path::PathBuf, thread, time::Duration};
+use std::{fs, thread, time::Duration};
 
+use pxh::test_utils::PxhTestHelper;
 use rexpect::session::spawn_command;
-use tempfile::TempDir;
-
-mod common;
-use common::pxh_path;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 // Helper to count commands in a database
-fn count_commands(db_path: &PathBuf) -> Result<usize> {
+fn count_commands(db_path: &std::path::Path) -> Result<usize> {
     use rusqlite::Connection;
     let conn = Connection::open(db_path)?;
     // First check if the table exists
@@ -29,7 +26,7 @@ fn count_commands(db_path: &PathBuf) -> Result<usize> {
 }
 
 // Helper to get commands from database
-fn get_commands(db_path: &PathBuf) -> Result<Vec<String>> {
+fn get_commands(db_path: &std::path::Path) -> Result<Vec<String>> {
     use rusqlite::Connection;
     let conn = Connection::open(db_path)?;
 
@@ -57,20 +54,17 @@ fn get_commands(db_path: &PathBuf) -> Result<Vec<String>> {
 
 #[test]
 fn test_bash_interactive_shell() -> Result<()> {
-    // Create temporary directory for test
-    let temp_dir = TempDir::new()?;
-    let home_dir = temp_dir.path();
+    // Create test helper
+    let helper = PxhTestHelper::new();
+    let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = home_dir.join(".pxh/pxh.db");
+    let pxh_db_path = helper.db_path();
 
     // Create empty .bashrc
     fs::write(&bashrc_path, "")?;
 
     // First, install pxh for bash
-    let install_output = std::process::Command::new(pxh_path())
-        .env("HOME", home_dir)
-        .args(&["install", "bash"])
-        .output()?;
+    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
 
     assert!(
         install_output.status.success(),
@@ -83,20 +77,7 @@ fn test_bash_interactive_shell() -> Result<()> {
     assert!(bashrc_content.contains("pxh shell-config bash"));
 
     // Now spawn an interactive bash session with proper environment
-    let mut cmd = std::process::Command::new("bash");
-    cmd.arg("-i"); // Force interactive mode
-    cmd.env("HOME", home_dir);
-    cmd.env("PXH_DB_PATH", pxh_db_path.to_str().unwrap());
-    cmd.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            pxh_path().parent().unwrap().display(),
-            env::var("PATH").unwrap_or_default()
-        ),
-    );
-
-    // Use rexpect to spawn with environment
+    let cmd = helper.shell_command("bash");
     let mut session = spawn_command(cmd, Some(30_000))?;
 
     // Wait for shell initialization and rc file loading
@@ -134,7 +115,7 @@ fn test_bash_interactive_shell() -> Result<()> {
     // Now verify that commands were recorded
     assert!(pxh_db_path.exists(), "pxh database should exist at {:?}", pxh_db_path);
 
-    let command_count = count_commands(&pxh_db_path)?;
+    let command_count = count_commands(pxh_db_path)?;
 
     assert!(
         command_count >= 4,
@@ -142,7 +123,7 @@ fn test_bash_interactive_shell() -> Result<()> {
         command_count
     );
 
-    let commands = get_commands(&pxh_db_path)?;
+    let commands = get_commands(pxh_db_path)?;
     assert!(
         commands.iter().any(|c| c.contains("echo 'Hello from interactive bash'")),
         "Should have recorded echo command"
@@ -152,9 +133,8 @@ fn test_bash_interactive_shell() -> Result<()> {
     assert!(commands.iter().any(|c| c == "false"), "Should have recorded false command");
 
     // Also verify using pxh show command
-    let show_output = std::process::Command::new(pxh_path())
-        .env("HOME", home_dir)
-        .args(&["--db", pxh_db_path.to_str().unwrap(), "show", "--limit", "10"])
+    let show_output = helper
+        .command_with_args(&["--db", pxh_db_path.to_str().unwrap(), "show", "--limit", "10"])
         .output()?;
 
     assert!(show_output.status.success(), "Show command should succeed");
@@ -172,20 +152,17 @@ fn test_zsh_interactive_shell() -> Result<()> {
         return Ok(());
     }
 
-    // Create temporary directory for test
-    let temp_dir = TempDir::new()?;
-    let home_dir = temp_dir.path();
+    // Create test helper
+    let helper = PxhTestHelper::new();
+    let home_dir = helper.home_dir();
     let zshrc_path = home_dir.join(".zshrc");
-    let pxh_db_path = home_dir.join(".pxh/pxh.db");
+    let pxh_db_path = helper.db_path();
 
     // Create empty .zshrc
     fs::write(&zshrc_path, "")?;
 
     // Install pxh for zsh
-    let install_output = std::process::Command::new(pxh_path())
-        .env("HOME", home_dir)
-        .args(&["install", "zsh"])
-        .output()?;
+    let install_output = helper.command_with_args(&["install", "zsh"]).output()?;
 
     assert!(
         install_output.status.success(),
@@ -198,19 +175,7 @@ fn test_zsh_interactive_shell() -> Result<()> {
     assert!(zshrc_content.contains("pxh shell-config zsh"));
 
     // Spawn an interactive zsh session with proper environment
-    let mut cmd = std::process::Command::new("zsh");
-    cmd.arg("-i"); // Force interactive mode
-    cmd.env("HOME", home_dir);
-    cmd.env("PXH_DB_PATH", pxh_db_path.to_str().unwrap());
-    cmd.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            pxh_path().parent().unwrap().display(),
-            env::var("PATH").unwrap_or_default()
-        ),
-    );
-
+    let cmd = helper.shell_command("zsh");
     let mut session = spawn_command(cmd, Some(30_000))?;
 
     // Wait for shell initialization and rc file loading
@@ -233,10 +198,10 @@ fn test_zsh_interactive_shell() -> Result<()> {
     // Verify commands were recorded
     assert!(pxh_db_path.exists(), "pxh database should exist");
 
-    let command_count = count_commands(&pxh_db_path)?;
+    let command_count = count_commands(pxh_db_path)?;
     assert!(command_count >= 3, "Expected at least 3 commands, found {}", command_count);
 
-    let commands = get_commands(&pxh_db_path)?;
+    let commands = get_commands(pxh_db_path)?;
     assert!(
         commands.iter().any(|c| c.contains("echo 'Hello from interactive zsh'")),
         "Should have recorded echo command"
@@ -252,35 +217,20 @@ fn test_zsh_interactive_shell() -> Result<()> {
 #[test]
 fn test_bash_command_with_exit_status() -> Result<()> {
     // This test verifies that exit statuses are properly recorded
-    let temp_dir = TempDir::new()?;
-    let home_dir = temp_dir.path();
+    let helper = PxhTestHelper::new();
+    let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = home_dir.join(".pxh/pxh.db");
+    let pxh_db_path = helper.db_path();
 
     fs::write(&bashrc_path, "")?;
 
     // Install pxh
-    let install_output = std::process::Command::new(pxh_path())
-        .env("HOME", home_dir)
-        .args(&["install", "bash"])
-        .output()?;
+    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
 
     assert!(install_output.status.success());
 
     // Spawn bash session with proper environment
-    let mut cmd = std::process::Command::new("bash");
-    cmd.arg("-i"); // Force interactive mode
-    cmd.env("HOME", home_dir);
-    cmd.env("PXH_DB_PATH", pxh_db_path.to_str().unwrap());
-    cmd.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            pxh_path().parent().unwrap().display(),
-            env::var("PATH").unwrap_or_default()
-        ),
-    );
-
+    let cmd = helper.shell_command("bash");
     let mut session = spawn_command(cmd, Some(30_000))?;
 
     // Wait for shell initialization
@@ -300,7 +250,7 @@ fn test_bash_command_with_exit_status() -> Result<()> {
 
     // Check the database for exit statuses
     use rusqlite::Connection;
-    let conn = Connection::open(&pxh_db_path)?;
+    let conn = Connection::open(pxh_db_path)?;
 
     // Query for commands with their exit statuses
     let mut stmt = conn.prepare(
@@ -332,10 +282,10 @@ fn test_bash_command_with_exit_status() -> Result<()> {
 #[test]
 fn test_bash_working_directory_tracking() -> Result<()> {
     // Test that working directories are properly tracked
-    let temp_dir = TempDir::new()?;
-    let home_dir = temp_dir.path();
+    let helper = PxhTestHelper::new();
+    let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = home_dir.join(".pxh/pxh.db");
+    let pxh_db_path = helper.db_path();
 
     fs::write(&bashrc_path, "")?;
 
@@ -346,27 +296,12 @@ fn test_bash_working_directory_tracking() -> Result<()> {
     fs::create_dir(&test_dir2)?;
 
     // Install pxh
-    let install_output = std::process::Command::new(pxh_path())
-        .env("HOME", home_dir)
-        .args(&["install", "bash"])
-        .output()?;
+    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
 
     assert!(install_output.status.success());
 
     // Spawn bash session with proper environment
-    let mut cmd = std::process::Command::new("bash");
-    cmd.arg("-i"); // Force interactive mode
-    cmd.env("HOME", home_dir);
-    cmd.env("PXH_DB_PATH", pxh_db_path.to_str().unwrap());
-    cmd.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            pxh_path().parent().unwrap().display(),
-            env::var("PATH").unwrap_or_default()
-        ),
-    );
-
+    let cmd = helper.shell_command("bash");
     let mut session = spawn_command(cmd, Some(30_000))?;
 
     // Wait for shell initialization
@@ -392,7 +327,7 @@ fn test_bash_working_directory_tracking() -> Result<()> {
 
     // Verify working directories were recorded
     use rusqlite::Connection;
-    let conn = Connection::open(&pxh_db_path)?;
+    let conn = Connection::open(pxh_db_path)?;
 
     let mut stmt = conn.prepare(
         "SELECT full_command, working_directory FROM command_history WHERE full_command LIKE '%echo%' ORDER BY start_unix_timestamp"
@@ -423,47 +358,21 @@ fn test_bash_working_directory_tracking() -> Result<()> {
 #[test]
 fn test_multiple_sessions() -> Result<()> {
     // Test that multiple concurrent sessions each get unique session IDs
-    let temp_dir = TempDir::new()?;
-    let home_dir = temp_dir.path();
+    let helper = PxhTestHelper::new();
+    let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = home_dir.join(".pxh/pxh.db");
+    let pxh_db_path = helper.db_path();
 
     fs::write(&bashrc_path, "")?;
 
     // Install pxh
-    let install_output = std::process::Command::new(pxh_path())
-        .env("HOME", home_dir)
-        .args(&["install", "bash"])
-        .output()?;
+    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
 
     assert!(install_output.status.success());
 
     // Spawn two bash sessions with proper environment
-    let mut cmd1 = std::process::Command::new("bash");
-    cmd1.arg("-i"); // Force interactive mode
-    cmd1.env("HOME", home_dir);
-    cmd1.env("PXH_DB_PATH", pxh_db_path.to_str().unwrap());
-    cmd1.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            pxh_path().parent().unwrap().display(),
-            env::var("PATH").unwrap_or_default()
-        ),
-    );
-
-    let mut cmd2 = std::process::Command::new("bash");
-    cmd2.arg("-i"); // Force interactive mode
-    cmd2.env("HOME", home_dir);
-    cmd2.env("PXH_DB_PATH", pxh_db_path.to_str().unwrap());
-    cmd2.env(
-        "PATH",
-        format!(
-            "{}:{}",
-            pxh_path().parent().unwrap().display(),
-            env::var("PATH").unwrap_or_default()
-        ),
-    );
+    let cmd1 = helper.shell_command("bash");
+    let cmd2 = helper.shell_command("bash");
 
     let mut session1 = spawn_command(cmd1, Some(30_000))?;
     let mut session2 = spawn_command(cmd2, Some(30_000))?;
@@ -487,7 +396,7 @@ fn test_multiple_sessions() -> Result<()> {
 
     // Verify that we have commands from two different sessions
     use rusqlite::Connection;
-    let conn = Connection::open(&pxh_db_path)?;
+    let conn = Connection::open(pxh_db_path)?;
 
     let session_count: usize = conn
         .prepare("SELECT COUNT(DISTINCT session_id) FROM command_history")?
@@ -496,7 +405,7 @@ fn test_multiple_sessions() -> Result<()> {
     assert_eq!(session_count, 2, "Should have exactly 2 different session IDs");
 
     // Verify each session has its command
-    let commands = get_commands(&pxh_db_path)?;
+    let commands = get_commands(pxh_db_path)?;
     assert!(
         commands.iter().any(|c| c.contains("Hello from session 1")),
         "Should have command from session 1"
