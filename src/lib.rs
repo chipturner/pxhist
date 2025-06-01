@@ -756,7 +756,7 @@ pub mod test_utils {
             cmd.env("SHELL", shell);
 
             // For bash to properly load rc files in a minimal environment
-            cmd.env("BASH_ENV", &self.home_dir.join(".bashrc"));
+            cmd.env("BASH_ENV", self.home_dir.join(".bashrc"));
 
             cmd
         }
