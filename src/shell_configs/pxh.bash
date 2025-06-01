@@ -26,8 +26,7 @@ precmd() {
 }
 
 _pxh_random() {
-    # random "enough," right? ... right?
-    printf "%d\n" "0x$(printf "%04x%04x%04x%04x\n" $RANDOM $RANDOM $RANDOM $RANDOM)"
+    od -An -N6 -tu8 < /dev/urandom | tr -d '\n '
 }
 
 _pxh_init() {
