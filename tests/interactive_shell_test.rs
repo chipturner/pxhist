@@ -43,6 +43,9 @@ fn test_bash_interactive_shell() -> Result<()> {
     // First, install pxh for bash
     let install_output = helper.command_with_args(&["install", "bash"]).output()?;
 
+    eprintln!("Install output stdout: {}", String::from_utf8_lossy(&install_output.stdout));
+    eprintln!("Install output stderr: {}", String::from_utf8_lossy(&install_output.stderr));
+
     assert!(
         install_output.status.success(),
         "Install failed: {}",
@@ -51,10 +54,12 @@ fn test_bash_interactive_shell() -> Result<()> {
 
     // Verify bashrc was modified
     let bashrc_content = fs::read_to_string(&bashrc_path)?;
+    eprintln!("Bashrc content after install:\n{}", bashrc_content);
     assert!(bashrc_content.contains("pxh shell-config bash"));
 
     // Now spawn an interactive bash session with proper environment
     let cmd = helper.shell_command("bash");
+    eprintln!("Spawning bash with command: {:?}", cmd);
     let mut session = spawn_command(cmd, Some(30_000))?;
 
     // Wait for shell initialization and rc file loading
@@ -67,6 +72,9 @@ fn test_bash_interactive_shell() -> Result<()> {
     // Check environment variables
     session.send_line("echo PXH_DB_PATH=$PXH_DB_PATH")?;
     session.exp_string(&format!("PXH_DB_PATH={}", pxh_db_path.display()))?;
+
+    // Give shell more time to initialize with preexec/precmd
+    thread::sleep(Duration::from_millis(1000));
 
     // Run some test commands
     session.send_line("echo 'Hello from interactive bash'")?;
@@ -91,6 +99,18 @@ fn test_bash_interactive_shell() -> Result<()> {
 
     // Now verify that commands were recorded
     let command_count = count_commands(&helper)?;
+
+    // Debug: Check if the database exists and has content
+    if command_count == 0 {
+        eprintln!("Debug: No commands found. Checking database path: {:?}", pxh_db_path);
+        eprintln!("Debug: Database exists: {}", pxh_db_path.exists());
+
+        // Try running pxh show directly to see what's happening
+        let show_output = helper.command_with_args(&["show", "--suppress-headers"]).output()?;
+        eprintln!("Debug: pxh show exit status: {}", show_output.status);
+        eprintln!("Debug: pxh show stdout: {}", String::from_utf8_lossy(&show_output.stdout));
+        eprintln!("Debug: pxh show stderr: {}", String::from_utf8_lossy(&show_output.stderr));
+    }
 
     assert!(
         command_count >= 4,

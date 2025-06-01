@@ -644,6 +644,22 @@ pub mod test_utils {
         rand::rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
     }
 
+    fn get_standard_path() -> String {
+        // Use getconf to get the standard PATH
+        Command::new("getconf")
+            .arg("PATH")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() { String::from_utf8(output.stdout).ok() } else { None }
+            })
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| {
+                // Fallback to a reasonable default if getconf fails
+                "/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+            })
+    }
+
     /// Unified test helper for invoking pxh with proper isolation and environment setup
     pub struct PxhTestHelper {
         _tmpdir: TempDir,
@@ -655,7 +671,8 @@ pub mod test_utils {
 
     impl PxhTestHelper {
         pub fn new() -> Self {
-            let tmpdir = TempDir::new().unwrap();
+            let mut tmpdir = TempDir::new().unwrap();
+            tmpdir.disable_cleanup(true);
             let home_dir = tmpdir.path().to_path_buf();
             let db_path = home_dir.join(".pxh/pxh.db");
 
@@ -683,6 +700,11 @@ pub mod test_utils {
             &self.db_path
         }
 
+        /// Get the full PATH including pxh binary directory
+        pub fn get_full_path(&self) -> String {
+            format!("{}:{}", pxh_path().parent().unwrap().display(), get_standard_path())
+        }
+
         /// Create a pxh command with all environment properly set up
         pub fn command(&self) -> Command {
             let mut cmd = Command::new(pxh_path());
@@ -695,14 +717,7 @@ pub mod test_utils {
             cmd.env("PXH_DB_PATH", &self.db_path);
             cmd.env("PXH_HOSTNAME", &self.hostname);
             cmd.env("USER", &self.username);
-            cmd.env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    pxh_path().parent().unwrap().display(),
-                    env::var("PATH").unwrap_or_default()
-                ),
-            );
+            cmd.env("PATH", self.get_full_path());
 
             // Propagate coverage environment variables if they exist
             if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
@@ -726,28 +741,22 @@ pub mod test_utils {
         pub fn shell_command(&self, shell: &str) -> Command {
             let mut cmd = Command::new(shell);
 
-            // Force interactive mode
+            // Force interactive mode - use login shell to ensure rc files are loaded
             cmd.arg("-i");
+            cmd.env_clear();
 
             // Set consistent environment variables
             cmd.env("HOME", &self.home_dir);
             cmd.env("PXH_DB_PATH", &self.db_path);
-            cmd.env(
-                "PATH",
-                format!(
-                    "{}:{}",
-                    pxh_path().parent().unwrap().display(),
-                    env::var("PATH").unwrap_or_default()
-                ),
-            );
-
-            // Clear any existing PXH environment variables to avoid contamination
-            cmd.env_remove("PXH_SESSION_ID");
-            cmd.env_remove("PXH_HOSTNAME");
+            cmd.env("PXH_HOSTNAME", &self.hostname);
+            cmd.env("PATH", self.get_full_path());
 
             // Set a clean environment for testing
             cmd.env("USER", &self.username);
             cmd.env("SHELL", shell);
+
+            // For bash to properly load rc files in a minimal environment
+            cmd.env("BASH_ENV", &self.home_dir.join(".bashrc"));
 
             cmd
         }

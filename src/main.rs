@@ -295,7 +295,7 @@ impl InstallCommand {
             file,
             r#"
 if command -v pxh &> /dev/null; then
-    source <(pxh shell-config {shellname})
+    eval "$(pxh shell-config {shellname})"
 fi"#
         )?;
         println!("Shell config successfully added to {}.", pb.display());

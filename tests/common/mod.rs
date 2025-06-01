@@ -27,14 +27,7 @@ impl PxhCaller {
         cmd.env("PXH_DB_PATH", self.helper.db_path());
         cmd.env("PXH_HOSTNAME", &self.helper.hostname);
         cmd.env("USER", &self.helper.username);
-        cmd.env(
-            "PATH",
-            format!(
-                "{}:{}",
-                pxh_path().parent().unwrap().display(),
-                env::var("PATH").unwrap_or_default()
-            ),
-        );
+        cmd.env("PATH", self.helper.get_full_path());
 
         // Propagate coverage environment variables if they exist
         if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {

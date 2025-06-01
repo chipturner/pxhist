@@ -1,7 +1,7 @@
 preexec() {
     local cmd="$1"
     [ -z "$cmd" ] && return 1
-    local started=$EPOCHSECONDS
+    local started=$(date +%s)
     pxh \
 	--db $PXH_DB_PATH \
 	insert \
@@ -16,7 +16,7 @@ preexec() {
 
 precmd() {
     local retval=$?
-    local ended=$EPOCHSECONDS
+    local ended=$(date +%s)
     pxh \
 	--db $PXH_DB_PATH \
 	seal \
