@@ -659,11 +659,6 @@ pub mod test_utils {
             let home_dir = tmpdir.path().to_path_buf();
             let db_path = home_dir.join(".pxh/pxh.db");
 
-            // Ensure the .pxh directory exists
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
-
             PxhTestHelper {
                 _tmpdir: tmpdir,
                 hostname: generate_random_string(12),
@@ -675,10 +670,6 @@ pub mod test_utils {
 
         pub fn with_custom_db_path(mut self, db_path: impl AsRef<Path>) -> Self {
             self.db_path = self.home_dir.join(db_path);
-            // Ensure the parent directory exists
-            if let Some(parent) = self.db_path.parent() {
-                std::fs::create_dir_all(parent).unwrap();
-            }
             self
         }
 

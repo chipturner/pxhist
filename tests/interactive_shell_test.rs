@@ -5,51 +5,28 @@ use rexpect::session::spawn_command;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-// Helper to count commands in a database
-fn count_commands(db_path: &std::path::Path) -> Result<usize> {
-    use rusqlite::Connection;
-    let conn = Connection::open(db_path)?;
-    // First check if the table exists
-    let table_exists: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='command_history'",
-        [],
-        |row| row.get(0),
-    )?;
+// Helper to count commands in a database using pxh
+fn count_commands(helper: &PxhTestHelper) -> Result<usize> {
+    let output = helper.command_with_args(&["show", "--suppress-headers"]).output()?;
 
-    if table_exists == 0 {
+    if !output.status.success() {
         return Ok(0);
     }
 
-    let count: usize =
-        conn.prepare("SELECT COUNT(*) FROM command_history")?.query_row([], |row| row.get(0))?;
-    Ok(count)
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().count())
 }
 
-// Helper to get commands from database
-fn get_commands(db_path: &std::path::Path) -> Result<Vec<String>> {
-    use rusqlite::Connection;
-    let conn = Connection::open(db_path)?;
+// Helper to get commands from database using pxh export
+fn get_commands(helper: &PxhTestHelper) -> Result<Vec<String>> {
+    let output = helper.command_with_args(&["export"]).output()?;
 
-    // First check if the table exists
-    let table_exists: i32 = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='command_history'",
-        [],
-        |row| row.get(0),
-    )?;
-
-    if table_exists == 0 {
+    if !output.status.success() {
         return Ok(vec![]);
     }
 
-    let mut stmt =
-        conn.prepare("SELECT full_command FROM command_history ORDER BY start_unix_timestamp")?;
-    let commands = stmt
-        .query_map([], |row| {
-            let cmd_bytes: Vec<u8> = row.get(0)?;
-            Ok(String::from_utf8_lossy(&cmd_bytes).to_string())
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(commands)
+    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
+    Ok(invocations.into_iter().map(|inv| inv.command.to_string()).collect())
 }
 
 #[test]
@@ -113,9 +90,7 @@ fn test_bash_interactive_shell() -> Result<()> {
     thread::sleep(Duration::from_millis(500));
 
     // Now verify that commands were recorded
-    assert!(pxh_db_path.exists(), "pxh database should exist at {:?}", pxh_db_path);
-
-    let command_count = count_commands(pxh_db_path)?;
+    let command_count = count_commands(&helper)?;
 
     assert!(
         command_count >= 4,
@@ -123,7 +98,7 @@ fn test_bash_interactive_shell() -> Result<()> {
         command_count
     );
 
-    let commands = get_commands(pxh_db_path)?;
+    let commands = get_commands(&helper)?;
     assert!(
         commands.iter().any(|c| c.contains("echo 'Hello from interactive bash'")),
         "Should have recorded echo command"
@@ -133,9 +108,7 @@ fn test_bash_interactive_shell() -> Result<()> {
     assert!(commands.iter().any(|c| c == "false"), "Should have recorded false command");
 
     // Also verify using pxh show command
-    let show_output = helper
-        .command_with_args(&["--db", pxh_db_path.to_str().unwrap(), "show", "--limit", "10"])
-        .output()?;
+    let show_output = helper.command_with_args(&["show", "--limit", "10"]).output()?;
 
     assert!(show_output.status.success(), "Show command should succeed");
     let history = String::from_utf8_lossy(&show_output.stdout);
@@ -156,7 +129,6 @@ fn test_zsh_interactive_shell() -> Result<()> {
     let helper = PxhTestHelper::new();
     let home_dir = helper.home_dir();
     let zshrc_path = home_dir.join(".zshrc");
-    let pxh_db_path = helper.db_path();
 
     // Create empty .zshrc
     fs::write(&zshrc_path, "")?;
@@ -196,12 +168,10 @@ fn test_zsh_interactive_shell() -> Result<()> {
     session.exp_eof()?;
 
     // Verify commands were recorded
-    assert!(pxh_db_path.exists(), "pxh database should exist");
-
-    let command_count = count_commands(pxh_db_path)?;
+    let command_count = count_commands(&helper)?;
     assert!(command_count >= 3, "Expected at least 3 commands, found {}", command_count);
 
-    let commands = get_commands(pxh_db_path)?;
+    let commands = get_commands(&helper)?;
     assert!(
         commands.iter().any(|c| c.contains("echo 'Hello from interactive zsh'")),
         "Should have recorded echo command"
@@ -220,7 +190,6 @@ fn test_bash_command_with_exit_status() -> Result<()> {
     let helper = PxhTestHelper::new();
     let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = helper.db_path();
 
     fs::write(&bashrc_path, "")?;
 
@@ -248,31 +217,19 @@ fn test_bash_command_with_exit_status() -> Result<()> {
     session.send_line("exit 42")?;
     session.exp_eof()?;
 
-    // Check the database for exit statuses
-    use rusqlite::Connection;
-    let conn = Connection::open(pxh_db_path)?;
+    // Check the database for exit statuses using pxh export
+    let output = helper.command_with_args(&["export"]).output()?;
+    assert!(output.status.success(), "Export should succeed");
 
-    // Query for commands with their exit statuses
-    let mut stmt = conn.prepare(
-        "SELECT full_command, exit_status FROM command_history WHERE exit_status IS NOT NULL ORDER BY start_unix_timestamp"
-    )?;
-
-    let results: Vec<(String, i32)> = stmt
-        .query_map([], |row| {
-            let cmd_bytes: Vec<u8> = row.get(0)?;
-            let cmd = String::from_utf8_lossy(&cmd_bytes).to_string();
-            let status: i32 = row.get(1)?;
-            Ok((cmd, status))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
 
     // Verify exit statuses
     assert!(
-        results.iter().any(|(cmd, status)| cmd == "true" && *status == 0),
+        invocations.iter().any(|inv| inv.command == "true" && inv.exit_status == Some(0)),
         "true command should have exit status 0"
     );
     assert!(
-        results.iter().any(|(cmd, status)| cmd == "false" && *status == 1),
+        invocations.iter().any(|inv| inv.command == "false" && inv.exit_status == Some(1)),
         "false command should have exit status 1"
     );
 
@@ -285,7 +242,6 @@ fn test_bash_working_directory_tracking() -> Result<()> {
     let helper = PxhTestHelper::new();
     let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = helper.db_path();
 
     fs::write(&bashrc_path, "")?;
 
@@ -325,30 +281,28 @@ fn test_bash_working_directory_tracking() -> Result<()> {
     session.send_line("exit")?;
     session.exp_eof()?;
 
-    // Verify working directories were recorded
-    use rusqlite::Connection;
-    let conn = Connection::open(pxh_db_path)?;
+    // Verify working directories were recorded using pxh export
+    let output = helper.command_with_args(&["export"]).output()?;
+    assert!(output.status.success(), "Export should succeed");
 
-    let mut stmt = conn.prepare(
-        "SELECT full_command, working_directory FROM command_history WHERE full_command LIKE '%echo%' ORDER BY start_unix_timestamp"
-    )?;
-
-    let results: Vec<(String, String)> = stmt
-        .query_map([], |row| {
-            let cmd_bytes: Vec<u8> = row.get(0)?;
-            let cmd = String::from_utf8_lossy(&cmd_bytes).to_string();
-            let dir_bytes: Vec<u8> = row.get(1)?;
-            let dir = String::from_utf8_lossy(&dir_bytes).to_string();
-            Ok((cmd, dir))
-        })?
-        .collect::<std::result::Result<Vec<_>, _>>()?;
+    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
 
     assert!(
-        results.iter().any(|(cmd, dir)| cmd.contains("in test1") && dir.ends_with("test1")),
+        invocations.iter().any(|inv| inv.command.to_string().contains("in test1")
+            && inv
+                .working_directory
+                .as_ref()
+                .map(|d| d.to_string().ends_with("test1"))
+                .unwrap_or(false)),
         "Should record test1 directory"
     );
     assert!(
-        results.iter().any(|(cmd, dir)| cmd.contains("in test2") && dir.ends_with("test2")),
+        invocations.iter().any(|inv| inv.command.to_string().contains("in test2")
+            && inv
+                .working_directory
+                .as_ref()
+                .map(|d| d.to_string().ends_with("test2"))
+                .unwrap_or(false)),
         "Should record test2 directory"
     );
 
@@ -361,7 +315,6 @@ fn test_multiple_sessions() -> Result<()> {
     let helper = PxhTestHelper::new();
     let home_dir = helper.home_dir();
     let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = helper.db_path();
 
     fs::write(&bashrc_path, "")?;
 
@@ -394,24 +347,25 @@ fn test_multiple_sessions() -> Result<()> {
     session2.send_line("exit")?;
     session2.exp_eof()?;
 
-    // Verify that we have commands from two different sessions
-    use rusqlite::Connection;
-    let conn = Connection::open(pxh_db_path)?;
+    // Verify that we have commands from two different sessions using pxh export
+    let output = helper.command_with_args(&["export"]).output()?;
+    assert!(output.status.success(), "Export should succeed");
 
-    let session_count: usize = conn
-        .prepare("SELECT COUNT(DISTINCT session_id) FROM command_history")?
-        .query_row([], |row| row.get(0))?;
+    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
 
-    assert_eq!(session_count, 2, "Should have exactly 2 different session IDs");
+    // Count unique session IDs
+    let unique_sessions: std::collections::HashSet<_> =
+        invocations.iter().map(|inv| inv.session_id).collect();
+
+    assert_eq!(unique_sessions.len(), 2, "Should have exactly 2 different session IDs");
 
     // Verify each session has its command
-    let commands = get_commands(pxh_db_path)?;
     assert!(
-        commands.iter().any(|c| c.contains("Hello from session 1")),
+        invocations.iter().any(|inv| inv.command.to_string().contains("Hello from session 1")),
         "Should have command from session 1"
     );
     assert!(
-        commands.iter().any(|c| c.contains("Hello from session 2")),
+        invocations.iter().any(|inv| inv.command.to_string().contains("Hello from session 2")),
         "Should have command from session 2"
     );
 
