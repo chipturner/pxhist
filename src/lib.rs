@@ -618,3 +618,153 @@ pub mod helpers {
             .unwrap_or(false)
     }
 }
+
+/// Test utilities - only intended for use in tests
+#[doc(hidden)]
+pub mod test_utils {
+    use std::{
+        env,
+        path::{Path, PathBuf},
+        process::Command,
+    };
+
+    use rand::{Rng, distr::Alphanumeric};
+    use tempfile::TempDir;
+
+    pub fn pxh_path() -> PathBuf {
+        let mut path = std::env::current_exe().unwrap();
+        path.pop(); // Remove test binary name
+        path.pop(); // Remove 'deps'
+        path.push("pxh");
+        assert!(path.exists(), "pxh binary not found at {:?}", path);
+        path
+    }
+
+    fn generate_random_string(length: usize) -> String {
+        rand::rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
+    }
+
+    fn get_standard_path() -> String {
+        // Use getconf to get the standard PATH
+        Command::new("getconf")
+            .arg("PATH")
+            .output()
+            .ok()
+            .and_then(|output| {
+                if output.status.success() { String::from_utf8(output.stdout).ok() } else { None }
+            })
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| {
+                // Fallback to a reasonable default if getconf fails
+                "/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+            })
+    }
+
+    /// Unified test helper for invoking pxh with proper isolation and environment setup
+    pub struct PxhTestHelper {
+        _tmpdir: TempDir,
+        pub hostname: String,
+        pub username: String,
+        home_dir: PathBuf,
+        db_path: PathBuf,
+    }
+
+    impl PxhTestHelper {
+        pub fn new() -> Self {
+            let mut tmpdir = TempDir::new().unwrap();
+            tmpdir.disable_cleanup(true);
+            let home_dir = tmpdir.path().to_path_buf();
+            let db_path = home_dir.join(".pxh/pxh.db");
+
+            PxhTestHelper {
+                _tmpdir: tmpdir,
+                hostname: generate_random_string(12),
+                username: "testuser".to_string(),
+                home_dir,
+                db_path,
+            }
+        }
+
+        pub fn with_custom_db_path(mut self, db_path: impl AsRef<Path>) -> Self {
+            self.db_path = self.home_dir.join(db_path);
+            self
+        }
+
+        /// Get the temporary directory path
+        pub fn home_dir(&self) -> &Path {
+            &self.home_dir
+        }
+
+        /// Get the database path
+        pub fn db_path(&self) -> &Path {
+            &self.db_path
+        }
+
+        /// Get the full PATH including pxh binary directory
+        pub fn get_full_path(&self) -> String {
+            format!("{}:{}", pxh_path().parent().unwrap().display(), get_standard_path())
+        }
+
+        /// Create a pxh command with all environment properly set up
+        pub fn command(&self) -> Command {
+            let mut cmd = Command::new(pxh_path());
+
+            // Clear environment to ensure isolation
+            cmd.env_clear();
+
+            // Set consistent test environment
+            cmd.env("HOME", &self.home_dir);
+            cmd.env("PXH_DB_PATH", &self.db_path);
+            cmd.env("PXH_HOSTNAME", &self.hostname);
+            cmd.env("USER", &self.username);
+            cmd.env("PATH", self.get_full_path());
+
+            // Propagate coverage environment variables if they exist
+            if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
+                cmd.env("LLVM_PROFILE_FILE", profile_file);
+            }
+            if let Ok(llvm_cov) = env::var("CARGO_LLVM_COV") {
+                cmd.env("CARGO_LLVM_COV", llvm_cov);
+            }
+
+            cmd
+        }
+
+        /// Convenience method to create a command with arguments
+        pub fn command_with_args(&self, args: &[&str]) -> Command {
+            let mut cmd = self.command();
+            cmd.args(args);
+            cmd
+        }
+
+        /// Create a shell command (bash/zsh) with proper environment for interactive testing
+        pub fn shell_command(&self, shell: &str) -> Command {
+            let mut cmd = Command::new(shell);
+
+            // Force interactive mode - use login shell to ensure rc files are loaded
+            cmd.arg("-i");
+            cmd.env_clear();
+
+            // Set consistent environment variables
+            cmd.env("HOME", &self.home_dir);
+            cmd.env("PXH_DB_PATH", &self.db_path);
+            cmd.env("PXH_HOSTNAME", &self.hostname);
+            cmd.env("PATH", self.get_full_path());
+
+            // Set a clean environment for testing
+            cmd.env("USER", &self.username);
+            cmd.env("SHELL", shell);
+
+            // For bash to properly load rc files in a minimal environment
+            cmd.env("BASH_ENV", self.home_dir.join(".bashrc"));
+
+            cmd
+        }
+    }
+
+    impl Default for PxhTestHelper {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+}

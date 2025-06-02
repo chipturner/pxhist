@@ -35,8 +35,13 @@
       "Bash(just coverage)",
       "Bash(just coverage-detailed:*)",
       "Bash(./coverage-detailed.sh:*)",
-      "Bash(just coverage-clean)"
+      "Bash(just coverage-clean)",
+      "Bash(git submodule:*)",
+      "Bash(./target/release/pxh shell-config bash)",
+      "Bash(RUST_BACKTRACE=1 cargo test --test interactive_shell_test test_bash_interactive_shell -- --nocapture)",
+      "Bash(timeout 10 cargo test test_bash_interactive_shell -- --nocapture)"
     ],
     "deny": []
-  }
+  },
+  "enableAllProjectMcpServers": false
 }

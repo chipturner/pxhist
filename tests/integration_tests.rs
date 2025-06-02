@@ -6,42 +6,12 @@ use std::{
 
 use assert_cmd::Command;
 use bstr::BString;
-use rand::{Rng, distr::Alphanumeric};
+use rand::Rng;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-fn generate_random_string(length: usize) -> String {
-    rand::rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
-}
-
-// Simple struct and helpers for invoking pxh with a given testdb.
-struct PxhCaller {
-    tmpdir: TempDir,
-    hostname: String,
-}
-
-impl PxhCaller {
-    fn new() -> Self {
-        PxhCaller { tmpdir: TempDir::new().unwrap(), hostname: generate_random_string(12) }
-    }
-
-    fn call<S: AsRef<str>>(&mut self, args: S) -> Command {
-        let mut ret = Command::cargo_bin("pxh").unwrap();
-        ret.env_clear().env("PXH_DB_PATH", &self.tmpdir.path().join("test"));
-        ret.env("PXH_HOSTNAME", &self.hostname);
-
-        // Propagate coverage environment variables if they exist
-        if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
-            ret.env("LLVM_PROFILE_FILE", profile_file);
-        }
-        if let Ok(llvm_cov) = env::var("CARGO_LLVM_COV") {
-            ret.env("CARGO_LLVM_COV", llvm_cov);
-        }
-
-        ret.args(args.as_ref().split(' '));
-        ret
-    }
-}
+mod common;
+use common::PxhCaller;
 
 fn count_lines(bytes: &[u8]) -> usize {
     bytes.iter().filter(|&ch| *ch == b'\n').count()
@@ -60,7 +30,7 @@ fn trivial_invocation() {
         .assert()
         .success();
 
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
         .assert()
         .success();
@@ -102,7 +72,7 @@ fn show_with_here() {
 
     // Prepare some test data: four commands, three from /dirN and one
     // from wherever the test runs.
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id 1 --working-directory /dir{i} test_command_{i}"
@@ -136,7 +106,7 @@ fn show_with_loosen() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: three commands of the form test.*xyz
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i} xyz"
@@ -165,7 +135,7 @@ fn show_with_session_id() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: four commands spread across three sessions.
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
@@ -200,7 +170,7 @@ fn show_with_limit() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: 100 test commands
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     for i in 1..=100 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
@@ -225,7 +195,7 @@ fn show_with_case_insensitive() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: three commands with mixed case
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} TEST_command_{i}"
@@ -259,7 +229,7 @@ fn show_with_case_insensitive() {
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn insert_seal_roundtrip() {
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     let commands = vec!["df", "sleep 1", "uptime"];
     for command in &commands {
         pc.call(format!(
@@ -314,7 +284,7 @@ fn matches_expected_history(invocations: &[pxh::Invocation]) {
 #[test]
 fn zsh_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     pc.call(format!(
         "import --shellname zsh --histfile {}",
         resources.join("zsh_histfile").to_string_lossy()
@@ -336,7 +306,7 @@ fn zsh_import_roundtrip() {
 #[test]
 fn bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     pc.call(format!(
         "import --shellname bash --histfile {}",
         resources.join("simple_bash_histfile").to_string_lossy()
@@ -358,7 +328,7 @@ fn bash_import_roundtrip() {
 #[test]
 fn timestamped_bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     pc.call(format!(
         "import --shellname bash --histfile {}",
         resources.join("timestamped_bash_histfile").to_string_lossy()
@@ -473,7 +443,7 @@ fn scrub_command() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: 10 test commands
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
     for i in 1..=10 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
@@ -513,7 +483,7 @@ fn symlink_pxhs_behavior() {
     std::os::unix::fs::symlink(&pxh_path, &pxhs_path).unwrap();
 
     // Create a PxhCaller for our test
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
 
     // Insert test data
     pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
@@ -532,8 +502,8 @@ fn symlink_pxhs_behavior() {
 
     // Test 2: pxhs with search term should inject "show" and work like "pxh show"
     let shorthand_output = Command::new(&pxhs_path)
-        .env("PXH_DB_PATH", &pc.tmpdir.path().join("test"))
-        .env("PXH_HOSTNAME", &pc.hostname)
+        .env("PXH_DB_PATH", &pc.tmpdir().join("test"))
+        .env("PXH_HOSTNAME", "testhost")
         .args(["test_command"])
         .output()
         .unwrap();
@@ -547,7 +517,7 @@ fn symlink_pxhs_behavior() {
 
     // Test 3: pxhs with "--help" should work correctly and show help for the show command
     let help_output = Command::new(&pxhs_path)
-        .env("PXH_DB_PATH", &pc.tmpdir.path().join("test"))
+        .env("PXH_DB_PATH", &pc.tmpdir().join("test"))
         .args(["--help"])
         .output()
         .unwrap();
@@ -563,8 +533,8 @@ fn symlink_pxhs_behavior() {
 #[test]
 fn sync_roundtrip() {
     // Prepare some test data: 40 test commands
-    let mut pc_even = PxhCaller::new();
-    let mut pc_odd = PxhCaller::new();
+    let pc_even = PxhCaller::new();
+    let pc_odd = PxhCaller::new();
     for i in 1..=40 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --working-directory d --start-unix-timestamp 1 --session-id {i} test_command_{i}",
@@ -590,7 +560,7 @@ fn sync_roundtrip() {
     // For thoroughness case, let's see we pull in both files (total
     // of 60 entries) and properly dedupe into 40 just like the
     // even_odd case above.
-    let mut pc_merged = PxhCaller::new();
+    let pc_merged = PxhCaller::new();
     pc_merged.call(&sync_cmd).assert().success();
     let merged_output = pc_merged.call("show --suppress-headers").output().unwrap();
 
@@ -600,10 +570,10 @@ fn sync_roundtrip() {
 #[test]
 fn test_maintenance() {
     // Set up a new database with varied content but reduced size for faster testing
-    let mut pc = PxhCaller::new();
+    let pc = PxhCaller::new();
 
     // Get the database path for SQLite access
-    let db_path = pc.tmpdir.path().join("test");
+    let db_path = pc.tmpdir().join("test");
 
     // Direct database access is faster than CLI for setup
     {
@@ -751,11 +721,11 @@ fn test_maintenance() {
 #[test]
 fn test_maintenance_multiple_files() {
     // Create PxhCallers for two test databases
-    let mut pc_maint = PxhCaller::new();
+    let pc_maint = PxhCaller::new();
 
     // Setup two test database files
-    let db_path1 = pc_maint.tmpdir.path().join("test1.db");
-    let db_path2 = pc_maint.tmpdir.path().join("test2.db");
+    let db_path1 = pc_maint.tmpdir().join("test1.db");
+    let db_path2 = pc_maint.tmpdir().join("test2.db");
 
     // Define a helper function to quickly set up a test database
     fn setup_test_db(path: &PathBuf, num_rows: usize, command_prefix: &str) -> (Connection, i64) {
@@ -892,8 +862,8 @@ fn test_maintenance_multiple_files() {
 #[test]
 fn test_maintenance_clean_nonstandard_tables() {
     // Create database directly for faster setup
-    let mut pc = PxhCaller::new();
-    let db_path = pc.tmpdir.path().join("test");
+    let pc = PxhCaller::new();
+    let db_path = pc.tmpdir().join("test");
 
     // Direct database setup is much faster than using CLI commands
     let mut conn = Connection::open(&db_path).unwrap();
