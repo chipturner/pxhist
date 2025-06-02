@@ -671,8 +671,7 @@ pub mod test_utils {
 
     impl PxhTestHelper {
         pub fn new() -> Self {
-            let mut tmpdir = TempDir::new().unwrap();
-            tmpdir.disable_cleanup(true);
+            let tmpdir = TempDir::new().unwrap();
             let home_dir = tmpdir.path().to_path_buf();
             let db_path = home_dir.join(".pxh/pxh.db");
 
