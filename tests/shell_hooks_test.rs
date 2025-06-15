@@ -221,9 +221,8 @@ fn test_zsh_shell_config_simulation() -> Result<()> {
     );
 
     // Verify the command was recorded correctly
-    let show_output = pxh_command()
-        .args(["--db", db_path.to_str().unwrap(), "show", "--limit", "5"])
-        .output()?;
+    let show_output =
+        pxh_command().args(["--db", db_path.to_str().unwrap(), "show", "--limit", "5"]).output()?;
 
     assert!(show_output.status.success());
     let history = String::from_utf8_lossy(&show_output.stdout);

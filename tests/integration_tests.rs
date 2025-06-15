@@ -264,11 +264,13 @@ fn insert_seal_roundtrip() {
 // Verify a given invocation list matches what we expect.  The data is
 // a bit of a torture test of non-utf8 data, spaces, etc.
 fn matches_expected_history(invocations: &[pxh::Invocation]) {
-    let expected = [BString::from(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
+    let expected = [
+        BString::from(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
         BString::from("fd zsh".to_string()),
         BString::from(
             [101, 99, 104, 111, 32, 0xf0, 0xce, 0xb1, 0xce, 0xa5, 0xef, 0xbd, 0xa9].to_vec(),
-        )];
+        ),
+    ];
 
     assert_eq!(invocations.len(), expected.len());
 
