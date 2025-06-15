@@ -35,7 +35,7 @@ fn insert_test_command(db_path: &Path, command: &str, days_ago: Option<u32>) -> 
     };
 
     let output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -62,7 +62,7 @@ fn insert_test_command(db_path: &Path, command: &str, days_ago: Option<u32>) -> 
     }
 
     let seal_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -177,7 +177,7 @@ fn test_directory_sync() -> Result<()> {
 
     // Sync databases from sync_dir
     let output = pxh_command()
-        .args(&["--db", output_db.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .args(["--db", output_db.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
         .output()?;
 
     assert!(output.status.success());
@@ -202,7 +202,7 @@ fn test_directory_sync_ignores_since() -> Result<()> {
 
     // Sync with --since (should be ignored for directory sync)
     let output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             dest_db.to_str().unwrap(),
             "sync",
@@ -471,7 +471,7 @@ fn test_sync_error_handling() -> Result<()> {
 #[test]
 fn test_ssh_sync_command_parsing() -> Result<()> {
     // Test that SSH sync commands are properly formed
-    let output = pxh_command().args(&["sync", "--remote", "user@host", "--help"]).output()?;
+    let output = pxh_command().args(["sync", "--remote", "user@host", "--help"]).output()?;
 
     // Should show help without error
     assert!(String::from_utf8(output.stdout)?.contains("Remote host to sync with"));

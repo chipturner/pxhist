@@ -42,7 +42,7 @@ fn test_bash_shell_config_simulation() -> Result<()> {
     let start_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     let insert_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -73,7 +73,7 @@ fn test_bash_shell_config_simulation() -> Result<()> {
     let exit_status = 0;
 
     let seal_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -96,7 +96,7 @@ fn test_bash_shell_config_simulation() -> Result<()> {
     let start_time2 = end_time + 1;
 
     let insert_output2 = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -119,7 +119,7 @@ fn test_bash_shell_config_simulation() -> Result<()> {
     assert!(insert_output2.status.success());
 
     let seal_output2 = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -136,7 +136,7 @@ fn test_bash_shell_config_simulation() -> Result<()> {
 
     // Verify history
     let show_output = pxh_command()
-        .args(&["--db", db_path.to_str().unwrap(), "show", "--limit", "10"])
+        .args(["--db", db_path.to_str().unwrap(), "show", "--limit", "10"])
         .output()?;
 
     assert!(show_output.status.success());
@@ -170,7 +170,7 @@ fn test_zsh_shell_config_simulation() -> Result<()> {
     let start_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     let insert_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -201,7 +201,7 @@ fn test_zsh_shell_config_simulation() -> Result<()> {
     let exit_status = 0;
 
     let seal_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -222,7 +222,7 @@ fn test_zsh_shell_config_simulation() -> Result<()> {
 
     // Verify the command was recorded correctly
     let show_output = pxh_command()
-        .args(&["--db", db_path.to_str().unwrap(), "show", "--limit", "5"])
+        .args(["--db", db_path.to_str().unwrap(), "show", "--limit", "5"])
         .output()?;
 
     assert!(show_output.status.success());
@@ -247,7 +247,7 @@ fn test_shell_config_environment_variables() -> Result<()> {
     // Test with custom PXH_DB_PATH
     let insert_output = pxh_command()
         .env("PXH_DB_PATH", &custom_db_path)
-        .args(&[
+        .args([
             "--db",
             custom_db_path.to_str().unwrap(),
             "insert",
@@ -274,7 +274,7 @@ fn test_shell_config_environment_variables() -> Result<()> {
 
     // Seal the command
     let seal_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             custom_db_path.to_str().unwrap(),
             "seal",
@@ -291,7 +291,7 @@ fn test_shell_config_environment_variables() -> Result<()> {
 
     // Verify we can read from custom location
     let show_output =
-        pxh_command().args(&["--db", custom_db_path.to_str().unwrap(), "show"]).output()?;
+        pxh_command().args(["--db", custom_db_path.to_str().unwrap(), "show"]).output()?;
 
     assert!(show_output.status.success());
     let history = String::from_utf8_lossy(&show_output.stdout);
@@ -311,7 +311,7 @@ fn test_concurrent_sessions() -> Result<()> {
     let start_time1 = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
     let insert1 = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -336,7 +336,7 @@ fn test_concurrent_sessions() -> Result<()> {
     let start_time2 = start_time1 + 1;
 
     let insert2 = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -358,7 +358,7 @@ fn test_concurrent_sessions() -> Result<()> {
 
     // Seal both sessions
     let seal1 = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -374,7 +374,7 @@ fn test_concurrent_sessions() -> Result<()> {
     assert!(seal1.status.success());
 
     let seal2 = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -391,7 +391,7 @@ fn test_concurrent_sessions() -> Result<()> {
 
     // Verify both commands were recorded
     let show_all = pxh_command()
-        .args(&["--db", db_path.to_str().unwrap(), "show", "--limit", "10"])
+        .args(["--db", db_path.to_str().unwrap(), "show", "--limit", "10"])
         .output()?;
 
     assert!(show_all.status.success());

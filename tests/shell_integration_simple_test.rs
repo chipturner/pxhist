@@ -30,7 +30,7 @@ fn test_install_creates_correct_rc_files() -> Result<()> {
     let bashrc_path = home_dir.join(".bashrc");
     fs::write(&bashrc_path, "# existing bashrc content\n")?;
 
-    let output = pxh_command().env("HOME", home_dir).args(&["install", "bash"]).output()?;
+    let output = pxh_command().env("HOME", home_dir).args(["install", "bash"]).output()?;
 
     assert!(
         output.status.success(),
@@ -50,7 +50,7 @@ fn test_install_creates_correct_rc_files() -> Result<()> {
     let zshrc_path = home_dir.join(".zshrc");
     fs::write(&zshrc_path, "# existing zshrc content\n")?;
 
-    let output = pxh_command().env("HOME", home_dir).args(&["install", "zsh"]).output()?;
+    let output = pxh_command().env("HOME", home_dir).args(["install", "zsh"]).output()?;
 
     assert!(
         output.status.success(),
@@ -78,13 +78,13 @@ fn test_install_is_idempotent() -> Result<()> {
     fs::write(&bashrc_path, "")?;
 
     // First install
-    let output1 = pxh_command().env("HOME", home_dir).args(&["install", "bash"]).output()?;
+    let output1 = pxh_command().env("HOME", home_dir).args(["install", "bash"]).output()?;
 
     assert!(output1.status.success());
     let bashrc_after_first = fs::read_to_string(&bashrc_path)?;
 
     // Second install
-    let output2 = pxh_command().env("HOME", home_dir).args(&["install", "bash"]).output()?;
+    let output2 = pxh_command().env("HOME", home_dir).args(["install", "bash"]).output()?;
 
     assert!(output2.status.success());
     let stdout2 = String::from_utf8_lossy(&output2.stdout);
@@ -108,7 +108,7 @@ fn test_shell_config_output() -> Result<()> {
     // Test that shell-config command produces valid shell code
 
     // Test bash config
-    let bash_output = pxh_command().args(&["shell-config", "bash"]).output()?;
+    let bash_output = pxh_command().args(["shell-config", "bash"]).output()?;
 
     assert!(bash_output.status.success(), "shell-config bash failed");
     let bash_config = String::from_utf8_lossy(&bash_output.stdout);
@@ -121,7 +121,7 @@ fn test_shell_config_output() -> Result<()> {
     assert!(bash_config.contains("PXH_DB_PATH"), "Should set database path");
 
     // Test zsh config
-    let zsh_output = pxh_command().args(&["shell-config", "zsh"]).output()?;
+    let zsh_output = pxh_command().args(["shell-config", "zsh"]).output()?;
 
     assert!(zsh_output.status.success(), "shell-config zsh failed");
     let zsh_config = String::from_utf8_lossy(&zsh_output.stdout);
@@ -148,7 +148,7 @@ fn test_manual_command_recording() -> Result<()> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
 
     let insert_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "insert",
@@ -176,7 +176,7 @@ fn test_manual_command_recording() -> Result<()> {
 
     // Seal the command
     let seal_output = pxh_command()
-        .args(&[
+        .args([
             "--db",
             db_path.to_str().unwrap(),
             "seal",
@@ -197,7 +197,7 @@ fn test_manual_command_recording() -> Result<()> {
 
     // Verify the command was recorded
     let show_output = pxh_command()
-        .args(&["--db", db_path.to_str().unwrap(), "show", "--limit", "10"])
+        .args(["--db", db_path.to_str().unwrap(), "show", "--limit", "10"])
         .output()?;
 
     assert!(show_output.status.success(), "Show failed");
@@ -219,7 +219,7 @@ fn test_install_rejects_invalid_shell() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let home_dir = temp_dir.path();
 
-    let output = pxh_command().env("HOME", home_dir).args(&["install", "fish"]).output()?;
+    let output = pxh_command().env("HOME", home_dir).args(["install", "fish"]).output()?;
 
     assert!(!output.status.success(), "Should reject unsupported shell");
     let stderr = String::from_utf8_lossy(&output.stderr);

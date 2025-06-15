@@ -264,13 +264,11 @@ fn insert_seal_roundtrip() {
 // Verify a given invocation list matches what we expect.  The data is
 // a bit of a torture test of non-utf8 data, spaces, etc.
 fn matches_expected_history(invocations: &[pxh::Invocation]) {
-    let expected = vec![
-        BString::from(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
+    let expected = [BString::from(r#"echo $'this "is" \'a\' \\n test\n\nboo'"#.to_string()),
         BString::from("fd zsh".to_string()),
         BString::from(
             [101, 99, 104, 111, 32, 0xf0, 0xce, 0xb1, 0xce, 0xa5, 0xef, 0xbd, 0xa9].to_vec(),
-        ),
-    ];
+        )];
 
     assert_eq!(invocations.len(), expected.len());
 
@@ -407,7 +405,7 @@ fn shell_config_command() {
         .unwrap();
 
     assert!(output.status.success());
-    assert!(output.stdout.len() > 0);
+    assert!(!output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stdout).contains("_pxh_addhistory"));
     assert!(String::from_utf8_lossy(&output.stdout).contains("add-zsh-hook"));
 
@@ -420,7 +418,7 @@ fn shell_config_command() {
         .unwrap();
 
     assert!(output.status.success());
-    assert!(output.stdout.len() > 0);
+    assert!(!output.stdout.is_empty());
     assert!(String::from_utf8_lossy(&output.stdout).contains("preexec()"));
     assert!(String::from_utf8_lossy(&output.stdout).contains("bash-preexec.sh"));
 
@@ -502,7 +500,7 @@ fn symlink_pxhs_behavior() {
 
     // Test 2: pxhs with search term should inject "show" and work like "pxh show"
     let shorthand_output = Command::new(&pxhs_path)
-        .env("PXH_DB_PATH", &pc.tmpdir().join("test"))
+        .env("PXH_DB_PATH", pc.tmpdir().join("test"))
         .env("PXH_HOSTNAME", "testhost")
         .args(["test_command"])
         .output()
@@ -517,7 +515,7 @@ fn symlink_pxhs_behavior() {
 
     // Test 3: pxhs with "--help" should work correctly and show help for the show command
     let help_output = Command::new(&pxhs_path)
-        .env("PXH_DB_PATH", &pc.tmpdir().join("test"))
+        .env("PXH_DB_PATH", pc.tmpdir().join("test"))
         .args(["--help"])
         .output()
         .unwrap();

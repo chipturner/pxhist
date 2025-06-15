@@ -9,7 +9,7 @@ use pxh::helpers;
 use tempfile::NamedTempFile;
 
 fn verify_file_matches(path: &PathBuf, expected_contents: &str) {
-    let fh = File::open(&path).unwrap();
+    let fh = File::open(path).unwrap();
 
     let reader = BufReader::new(fh);
     let file_lines: Vec<_> = reader.lines().collect::<Result<Vec<_>, _>>().unwrap();
