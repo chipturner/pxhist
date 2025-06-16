@@ -165,7 +165,7 @@
 <a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = Vec::new();
 <a href=#166 id=166 data-nosnippet>166</a>    <span class="kw">let _ </span>= f.read_to_end(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
 <a href=#167 id=167 data-nosnippet>167</a>    <span class="kw">let </span>username = username
-<a href=#168 id=168 data-nosnippet>168</a>        .or_else(|| users::get_current_username().map(|v| BString::from(v.into_vec())))
+<a href=#168 id=168 data-nosnippet>168</a>        .or_else(|| uzers::get_current_username().map(|v| BString::from(v.into_vec())))
 <a href=#169 id=169 data-nosnippet>169</a>        .unwrap_or_else(|| BString::from(<span class="string">"unknown"</span>));
 <a href=#170 id=170 data-nosnippet>170</a>    <span class="kw">let </span>hostname = hostname.unwrap_or_else(get_hostname);
 <a href=#171 id=171 data-nosnippet>171</a>    <span class="kw">let </span>buf_iter = buf.split(|<span class="kw-2">&amp;</span>ch| ch == <span class="string">b'\n'</span>);
@@ -210,7 +210,7 @@
 <a href=#210 id=210 data-nosnippet>210</a>    <span class="kw">let </span><span class="kw-2">mut </span>buf = Vec::new();
 <a href=#211 id=211 data-nosnippet>211</a>    <span class="kw">let _ </span>= f.read_to_end(<span class="kw-2">&amp;mut </span>buf)<span class="question-mark">?</span>;
 <a href=#212 id=212 data-nosnippet>212</a>    <span class="kw">let </span>username = username
-<a href=#213 id=213 data-nosnippet>213</a>        .or_else(|| users::get_current_username().map(|v| BString::from(v.as_bytes())))
+<a href=#213 id=213 data-nosnippet>213</a>        .or_else(|| uzers::get_current_username().map(|v| BString::from(v.as_bytes())))
 <a href=#214 id=214 data-nosnippet>214</a>        .unwrap_or_else(|| BString::from(<span class="string">"unknown"</span>));
 <a href=#215 id=215 data-nosnippet>215</a>    <span class="kw">let </span>hostname = hostname.unwrap_or_else(get_hostname);
 <a href=#216 id=216 data-nosnippet>216</a>    <span class="kw">let </span>buf_iter = buf.split(|<span class="kw-2">&amp;</span>ch| ch == <span class="string">b'\n'</span>).filter(|l| !l.is_empty());
