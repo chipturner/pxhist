@@ -251,6 +251,7 @@ impl ShellConfigCommand {
                 contents.push_str(include_str!("shell_configs/pxh.bash"));
                 contents
             }
+            "fish" => String::from(include_str!("shell_configs/pxh.fish")),
             _ => {
                 return Err(Box::from(format!(
                     "Unsupported shell: {} (PRs welcome!)",
@@ -270,6 +271,7 @@ impl InstallCommand {
         let rc_file = match shellname {
             "zsh" => ".zshrc",
             "bash" => ".bashrc",
+            "fish" => ".config/fish/config.fish",
             _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
         };
 
