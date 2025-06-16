@@ -165,7 +165,7 @@ pub fn import_zsh_history(
     let mut buf = Vec::new();
     let _ = f.read_to_end(&mut buf)?;
     let username = username
-        .or_else(|| users::get_current_username().map(|v| BString::from(v.into_vec())))
+        .or_else(|| uzers::get_current_username().map(|v| BString::from(v.into_vec())))
         .unwrap_or_else(|| BString::from("unknown"));
     let hostname = hostname.unwrap_or_else(get_hostname);
     let buf_iter = buf.split(|&ch| ch == b'\n');
@@ -210,7 +210,7 @@ pub fn import_bash_history(
     let mut buf = Vec::new();
     let _ = f.read_to_end(&mut buf)?;
     let username = username
-        .or_else(|| users::get_current_username().map(|v| BString::from(v.as_bytes())))
+        .or_else(|| uzers::get_current_username().map(|v| BString::from(v.as_bytes())))
         .unwrap_or_else(|| BString::from("unknown"));
     let hostname = hostname.unwrap_or_else(get_hostname);
     let buf_iter = buf.split(|&ch| ch == b'\n').filter(|l| !l.is_empty());
