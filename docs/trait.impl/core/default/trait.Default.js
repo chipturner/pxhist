@@ -1,5 +1,5 @@
 (function() {
-    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.87.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/struct.Invocation.html\" title=\"struct pxh::Invocation\">Invocation</a>"]]]]);
+    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/struct.Invocation.html\" title=\"struct pxh::Invocation\">Invocation</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
