@@ -11,8 +11,9 @@ use std::{
 };
 
 use bstr::{BString, ByteSlice};
+use chrono::prelude::{Local, TimeZone};
 use clap::{Parser, Subcommand};
-use regex::bytes::Regex;
+use regex::bytes::{Regex, RegexSetBuilder};
 use rusqlite::{Connection, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
 
@@ -50,6 +51,8 @@ enum Commands {
         about = "perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space"
     )]
     Maintenance(MaintenanceCommand),
+    #[clap(about = "scan history for potential secrets and sensitive data")]
+    Scan(ScanCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -213,6 +216,18 @@ struct MaintenanceCommand {
         help = "Path(s) to SQLite database files to maintain (if not specified, maintains the current database)"
     )]
     files: Vec<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+struct ScanCommand {
+    #[clap(short, long, default_value = "critical", help = "Confidence level: critical, high, low, or all")]
+    confidence: String,
+    #[clap(short, long, help = "Output as JSON")]
+    json: bool,
+    #[clap(short, long, help = "Verbose output with pattern details")]
+    verbose: bool,
+    #[clap(short, long, default_value_t = 50, help = "Max results (0 for unlimited)")]
+    limit: usize,
 }
 
 impl ImportCommand {
@@ -511,6 +526,114 @@ impl MaintenanceCommand {
         } else {
             Err("One or more database maintenance operations failed".into())
         }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct ScanMatch {
+    command: String,
+    pattern: String,
+    timestamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    working_directory: Option<String>,
+}
+
+impl ScanCommand {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        use pxh::secrets_patterns::{PATTERNS_CRITICAL, PATTERNS_HIGH, PATTERNS_LOW};
+
+        let patterns: Vec<(&str, &str)> = match self.confidence.as_str() {
+            "critical" => PATTERNS_CRITICAL.to_vec(),
+            "high" => PATTERNS_HIGH.to_vec(),
+            "low" => PATTERNS_LOW.to_vec(),
+            "all" => {
+                let mut all = PATTERNS_HIGH.to_vec();
+                all.extend(PATTERNS_LOW);
+                all
+            }
+            _ => {
+                return Err(format!(
+                    "Invalid confidence level: '{}'. Use 'critical', 'high', 'low', or 'all'",
+                    self.confidence
+                )
+                .into());
+            }
+        };
+
+        if patterns.is_empty() {
+            println!("No patterns available. Ensure secrets-patterns-db submodule is initialized.");
+            return Ok(());
+        }
+
+        let regex_patterns: Vec<&str> = patterns.iter().map(|(_, regex)| *regex).collect();
+        let regex_set = RegexSetBuilder::new(&regex_patterns)
+            .size_limit(50 * 1024 * 1024) // 50MB limit for the compiled regex
+            .build()?;
+
+        let mut stmt = conn.prepare(
+            "SELECT full_command, start_unix_timestamp, working_directory FROM command_history",
+        )?;
+
+        let mut matches: Vec<ScanMatch> = Vec::new();
+        let limit = if self.limit == 0 { usize::MAX } else { self.limit };
+
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            if matches.len() >= limit {
+                break;
+            }
+
+            let command: Vec<u8> = row.get(0)?;
+            let timestamp: Option<i64> = row.get(1)?;
+            let working_directory: Option<Vec<u8>> = row.get(2)?;
+
+            let matched_indices: Vec<usize> = regex_set.matches(&command).into_iter().collect();
+            for idx in matched_indices {
+                if matches.len() >= limit {
+                    break;
+                }
+                matches.push(ScanMatch {
+                    command: String::from_utf8_lossy(&command).to_string(),
+                    pattern: patterns[idx].0.to_string(),
+                    timestamp,
+                    working_directory: working_directory
+                        .as_ref()
+                        .map(|wd| String::from_utf8_lossy(wd).to_string()),
+                });
+            }
+        }
+
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(&matches)?);
+        } else if matches.is_empty() {
+            println!("No potential secrets found.");
+        } else {
+            println!("Found {} potential secret(s):\n", matches.len());
+            for m in &matches {
+                let time_str = m.timestamp.map_or_else(
+                    || "n/a".to_string(),
+                    |ts| {
+                        Local
+                            .timestamp_opt(ts, 0)
+                            .single()
+                            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                            .unwrap_or_else(|| "n/a".to_string())
+                    },
+                );
+                if self.verbose {
+                    println!("  [{time_str}] {}", m.pattern);
+                    if let Some(ref wd) = m.working_directory {
+                        println!("  Directory: {wd}");
+                    }
+                    println!("  {}\n", m.command);
+                } else {
+                    println!("  [{time_str}] {}", m.pattern);
+                    println!("  {}\n", m.command);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -1153,6 +1276,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Maintenance(cmd) => {
+            cmd.go(make_conn()?)?;
+        }
+        Commands::Scan(cmd) => {
             cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {

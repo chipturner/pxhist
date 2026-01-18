@@ -1,3 +1,6 @@
 [submodule "src/shell_configs/bash-preexec"]
 	path = src/shell_configs/bash-preexec
 	url = https://github.com/rcaloras/bash-preexec.git
+[submodule "secrets-patterns-db"]
+	path = secrets-patterns-db
+	url = https://github.com/mazen160/secrets-patterns-db.git

@@ -42,7 +42,12 @@
       "Bash(timeout 10 cargo test test_bash_interactive_shell -- --nocapture)",
       "Bash(just check:*)",
       "Bash(just cargo-upgrade:*)",
-      "WebFetch(domain:docs.rs)"
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(/home/chip/opensource-hacking/pxhist/target/debug/pxh:*)",
+      "Bash(./target/release/pxh scan:*)"
     ],
     "deny": []
   },

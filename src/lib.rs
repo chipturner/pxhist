@@ -24,6 +24,8 @@ use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+pub mod secrets_patterns;
+
 pub fn get_setting(
     conn: &Connection,
     key: &str,
