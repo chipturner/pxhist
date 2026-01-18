@@ -252,6 +252,8 @@ begin and end.
 ### Core Features
 - P1: Add more complex filtering to `show` to select history entries
   restricted to the host, user, etc.
+- P1: integrate secret filtering, potentially also blocking the shell
+  from writing the secret to its history?
 - P3: stats subcommand to show some interesting data
 
 ### Extensions
@@ -265,8 +267,11 @@ begin and end.
   (e.g. backfill from mysql history periodically)
 
 ### Misc
+- P1: better document design decisions around sync (simplicity, no
+  networking)
 - P2: better code documentation, particularly around helper classes
 - P2: document architecture and implementation details
-- P3: some way to expunge things like passwords accidentally in
-  history files w/o resorting to sqlite?  also prevent re-importing
-  somehow?
+- P3: make `scrub` subcommand offer some kind of `gitleaks`
+  integration, either invoking it or otherwise cleanly interacting
+  with it to find a list of secrets to expunge rather than requiring
+  they be on the cli
