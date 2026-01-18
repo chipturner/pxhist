@@ -219,13 +219,13 @@ pub fn import_bash_history(
     let session_id = generate_import_session_id(histfile);
     let mut last_ts = None;
     for line in buf_iter {
-        if line[0] == b'#' {
-            if let Ok(ts) = str::parse::<i64>(str::from_utf8(&line[1..]).unwrap_or("0")) {
-                if ts > 0 {
-                    last_ts = Some(ts);
-                }
-                continue;
+        if line[0] == b'#'
+            && let Ok(ts) = str::parse::<i64>(str::from_utf8(&line[1..]).unwrap_or("0"))
+        {
+            if ts > 0 {
+                last_ts = Some(ts);
             }
+            continue;
         }
         let invocation = Invocation {
             command: BString::from(line),

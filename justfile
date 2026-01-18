@@ -3,6 +3,10 @@ set shell := ["zsh", "-uc"]
 default:
 	just --list
 
+check:
+	cargo clippy -- -D warnings
+	cargo test
+
 rustfmt:
 	rustfmt --config edition=2024 --config imports_granularity=Crate --config group_imports=StdExternalCrate {tests,src}/**/*.rs
 
