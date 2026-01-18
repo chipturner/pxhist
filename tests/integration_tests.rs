@@ -19,9 +19,9 @@ fn count_lines(bytes: &[u8]) -> usize {
 
 #[test]
 fn trivial_invocation() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd
         .env_clear()
         .env("PXH_DB_PATH", ":memory:")
@@ -59,9 +59,9 @@ fn trivial_invocation() {
 
 #[test]
 fn show_with_here() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd
         .env_clear()
         .env("PXH_DB_PATH", ":memory:")
@@ -100,9 +100,9 @@ fn show_with_here() {
 
 #[test]
 fn show_with_loosen() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: three commands of the form test.*xyz
@@ -129,9 +129,9 @@ fn show_with_loosen() {
 
 #[test]
 fn show_with_session_id() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: four commands spread across three sessions.
@@ -164,9 +164,9 @@ fn show_with_session_id() {
 
 #[test]
 fn show_with_limit() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: 100 test commands
@@ -189,9 +189,9 @@ fn show_with_limit() {
 
 #[test]
 fn show_with_case_insensitive() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: three commands with mixed case
@@ -359,8 +359,7 @@ fn install_command() {
     File::create(&bashrc).unwrap();
 
     // Test zsh installation
-    let output = Command::cargo_bin("pxh")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("pxh"))
         .env_clear()
         .env("HOME", home)
         .args(["install", "zsh"])
@@ -372,8 +371,7 @@ fn install_command() {
     assert!(zshrc_content.contains("pxh shell-config zsh"));
 
     // Test bash installation
-    let output = Command::cargo_bin("pxh")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("pxh"))
         .env_clear()
         .env("HOME", home)
         .args(["install", "bash"])
@@ -385,8 +383,7 @@ fn install_command() {
     assert!(bashrc_content.contains("pxh shell-config bash"));
 
     // Test invalid shell
-    let output = Command::cargo_bin("pxh")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("pxh"))
         .env_clear()
         .env("HOME", home)
         .args(["install", "invalid"])
@@ -399,8 +396,7 @@ fn install_command() {
 #[test]
 fn shell_config_command() {
     // Test zsh config output
-    let output = Command::cargo_bin("pxh")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("pxh"))
         .env_clear()
         .args(["shell-config", "zsh"])
         .output()
@@ -412,8 +408,7 @@ fn shell_config_command() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("add-zsh-hook"));
 
     // Test bash config output
-    let output = Command::cargo_bin("pxh")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("pxh"))
         .env_clear()
         .args(["shell-config", "bash"])
         .output()
@@ -425,8 +420,7 @@ fn shell_config_command() {
     assert!(String::from_utf8_lossy(&output.stdout).contains("bash-preexec.sh"));
 
     // Test invalid shell
-    let output = Command::cargo_bin("pxh")
-        .unwrap()
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("pxh"))
         .env_clear()
         .args(["shell-config", "invalid"])
         .output()
@@ -437,9 +431,9 @@ fn shell_config_command() {
 
 #[test]
 fn scrub_command() {
-    let mut naked_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
-    let mut show_cmd = Command::cargo_bin("pxh").unwrap();
+    let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: 10 test commands
@@ -474,13 +468,13 @@ fn scrub_command() {
 fn symlink_pxhs_behavior() {
     // Create a temporary directory for our symlinks
     let tempdir = TempDir::new().unwrap();
-    let pxh_path = tempdir.path().join("pxh");
+    let pxh_symlink_path = tempdir.path().join("pxh");
     let pxhs_path = tempdir.path().join("pxhs");
 
     // Get the actual binary path and create symlinks
-    let bin_path = Command::cargo_bin("pxh").unwrap().get_program().to_string_lossy().to_string();
-    std::os::unix::fs::symlink(&bin_path, &pxh_path).unwrap();
-    std::os::unix::fs::symlink(&pxh_path, &pxhs_path).unwrap();
+    let bin_path = assert_cmd::cargo::cargo_bin!("pxh");
+    std::os::unix::fs::symlink(&bin_path, &pxh_symlink_path).unwrap();
+    std::os::unix::fs::symlink(&pxh_symlink_path, &pxhs_path).unwrap();
 
     // Create a PxhCaller for our test
     let pc = PxhCaller::new();
