@@ -1,5 +1,5 @@
 (function() {
-    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/fmt/trait.Debug.html\" title=\"trait core::fmt::Debug\">Debug</a> for <a class=\"enum\" href=\"pxh/enum.PrettyExportString.html\" title=\"enum pxh::PrettyExportString\">PrettyExportString</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/fmt/trait.Debug.html\" title=\"trait core::fmt::Debug\">Debug</a> for <a class=\"struct\" href=\"pxh/struct.Invocation.html\" title=\"struct pxh::Invocation\">Invocation</a>"]]]]);
+    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.92.0/core/fmt/trait.Debug.html\" title=\"trait core::fmt::Debug\">Debug</a> for <a class=\"enum\" href=\"pxh/enum.PrettyExportString.html\" title=\"enum pxh::PrettyExportString\">PrettyExportString</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.92.0/core/fmt/trait.Debug.html\" title=\"trait core::fmt::Debug\">Debug</a> for <a class=\"struct\" href=\"pxh/struct.Invocation.html\" title=\"struct pxh::Invocation\">Invocation</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {

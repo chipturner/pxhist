@@ -1,5 +1,5 @@
 (function() {
-    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/marker/trait.StructuralPartialEq.html\" title=\"trait core::marker::StructuralPartialEq\">StructuralPartialEq</a> for <a class=\"enum\" href=\"pxh/enum.PrettyExportString.html\" title=\"enum pxh::PrettyExportString\">PrettyExportString</a>"]]]]);
+    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.92.0/core/marker/trait.StructuralPartialEq.html\" title=\"trait core::marker::StructuralPartialEq\">StructuralPartialEq</a> for <a class=\"enum\" href=\"pxh/enum.PrettyExportString.html\" title=\"enum pxh::PrettyExportString\">PrettyExportString</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
