@@ -730,9 +730,9 @@ impl SyncCommand {
     fn merge_database_from_file(
         conn: &mut Connection,
         path: PathBuf,
-    ) -> Result<(u64, u64), Box<dyn std::error::Error>> {
+    ) -> Result<(i64, i64), Box<dyn std::error::Error>> {
         let tx = conn.transaction()?;
-        let before_count: u64 =
+        let before_count: i64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
         tx.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
 
@@ -765,11 +765,11 @@ FROM other.command_history
         )?;
 
         // Count records after the merge
-        let after_count: u64 =
+        let after_count: i64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
 
         // Count how many records were in the other database
-        let other_count: u64 = tx
+        let other_count: i64 = tx
             .prepare("SELECT COUNT(*) FROM other.command_history")?
             .query_row((), |r| r.get(0))?;
 
@@ -1063,7 +1063,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ? AND session_id = ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (pattern, session_id, self.display_limit()),
+                (pattern, session_id, self.display_limit() as i64),
             )?;
         } else if self.here {
             conn.execute(
@@ -1075,7 +1075,7 @@ SELECT rowid, start_unix_timestamp, id
    AND full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (working_directory.to_string_lossy(), pattern, self.display_limit()),
+                (working_directory.to_string_lossy(), pattern, self.display_limit() as i64),
             )?;
         } else {
             conn.execute(
@@ -1086,7 +1086,7 @@ SELECT rowid, start_unix_timestamp, id
  WHERE full_command REGEXP ?
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#,
-                (pattern, self.display_limit()),
+                (pattern, self.display_limit() as i64),
             )?;
         }
 

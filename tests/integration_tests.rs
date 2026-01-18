@@ -752,7 +752,7 @@ fn test_maintenance_multiple_files() {
         // Batch insert commands
         for i in 1..=num_rows {
             // Insert with minimal varied data for testing
-            let session_id = i / 10 + 1;
+            let session_id = (i / 10 + 1) as i64;
             let shellname = if i % 2 == 0 { "zsh" } else { "bash" };
             let hostname = format!("host{}", i % 2 + 1);
             let username = format!("user{}", i % 2 + 1);

@@ -87,10 +87,10 @@ fn insert_test_command(db_path: &Path, command: &str, days_ago: Option<u32>) -> 
 }
 
 // Helper to count commands in a database
-fn count_commands(db_path: &Path) -> Result<usize> {
+fn count_commands(db_path: &Path) -> Result<i64> {
     use rusqlite::Connection;
     let conn = Connection::open(db_path)?;
-    let count: usize =
+    let count: i64 =
         conn.prepare("SELECT COUNT(*) FROM command_history")?.query_row([], |row| row.get(0))?;
     Ok(count)
 }
