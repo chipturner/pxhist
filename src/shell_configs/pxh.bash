@@ -1,6 +1,7 @@
 preexec() {
     local cmd="$1"
     [ -z "$cmd" ] && return 1
+    [[ "$cmd" =~ ^[[:space:]] ]] && return 1
     local started=$(date +%s)
     pxh \
 	--db $PXH_DB_PATH \

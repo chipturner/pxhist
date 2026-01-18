@@ -1,6 +1,7 @@
 _pxh_addhistory() {
     local cmd="${1[0, -2]}"
     [ -z "$cmd" ] && return 1
+    [[ "$cmd" =~ ^[[:space:]] ]] && return 1
     local started=$EPOCHSECONDS
     pxh \
 	--db $PXH_DB_PATH \
