@@ -47,7 +47,9 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "WebFetch(domain:api.github.com)",
       "Bash(/home/chip/opensource-hacking/pxhist/target/debug/pxh:*)",
-      "Bash(./target/release/pxh scan:*)"
+      "Bash(./target/release/pxh scan:*)",
+      "Bash(git -C /home/chip/opensource-hacking/pxhist log -1 --format='%s' HEAD)",
+      "Bash(xxd:*)"
     ],
     "deny": []
   },

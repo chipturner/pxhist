@@ -421,7 +421,9 @@ fn scrub_interactive_histfile_requires_contraband() {
     let output = pc.call(&cmd).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Interactive mode with --histfile requires specifying the string to scrub"));
+    assert!(
+        stderr.contains("Interactive mode with --histfile requires specifying the string to scrub")
+    );
 }
 
 #[test]

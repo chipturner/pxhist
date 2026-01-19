@@ -165,11 +165,7 @@ struct SyncCommand {
 struct ScrubCommand {
     #[clap(long, help = "Scrub from this histfile instead of (or in addition to) the database")]
     histfile: Option<PathBuf>,
-    #[clap(
-        short = 'n',
-        long,
-        help = "Dry-run mode (only display the rows, don't actually scrub)"
-    )]
+    #[clap(short = 'n', long, help = "Dry-run mode (only display the rows, don't actually scrub)")]
     dry_run: bool,
     #[clap(
         long,
@@ -674,9 +670,7 @@ fn build_secret_patterns(confidence: &str) -> Result<SecretPatterns, Box<dyn std
     };
 
     let regex_patterns: Vec<&str> = patterns.iter().map(|(_, regex)| *regex).collect();
-    let regex_set = RegexSetBuilder::new(&regex_patterns)
-        .size_limit(size_limit)
-        .build()?;
+    let regex_set = RegexSetBuilder::new(&regex_patterns).size_limit(size_limit).build()?;
 
     Ok((patterns, regex_set))
 }
@@ -705,7 +699,9 @@ fn detect_shell_format(content: &[u8]) -> String {
             return "bash".to_string();
         }
     }
-    eprintln!("Warning: Could not detect shell format, defaulting to bash. Use --shellname to specify.");
+    eprintln!(
+        "Warning: Could not detect shell format, defaulting to bash. Use --shellname to specify."
+    );
     "bash".to_string()
 }
 
@@ -844,11 +840,7 @@ fn parse_histfile_line(
 
             Some((line.to_vec(), timestamp, lines_to_remove))
         }
-        _ => Some((
-            line.to_vec(),
-            None,
-            String::from_utf8_lossy(line).to_string(),
-        )),
+        _ => Some((line.to_vec(), None, String::from_utf8_lossy(line).to_string())),
     }
 }
 
@@ -1302,11 +1294,7 @@ impl PrintableCommand for ScrubCommand {
 
 impl ScrubCommand {
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        if self.scan {
-            self.go_scan_mode(&conn)
-        } else {
-            self.go_interactive_mode(conn)
-        }
+        if self.scan { self.go_scan_mode(&conn) } else { self.go_interactive_mode(conn) }
     }
 
     fn go_scan_mode(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -1321,8 +1309,7 @@ impl ScrubCommand {
 
         if let Some(ref histfile) = self.histfile {
             let content = fs::read(histfile)?;
-            let shellname =
-                self.shellname.clone().unwrap_or_else(|| detect_shell_format(&content));
+            let shellname = self.shellname.clone().unwrap_or_else(|| detect_shell_format(&content));
             scan_histfile(&content, &shellname, &regex_set, &patterns, &mut matches, usize::MAX)?;
         } else {
             scan_database(conn, &regex_set, &patterns, &mut matches, usize::MAX)?;
@@ -1360,7 +1347,7 @@ impl ScrubCommand {
     fn go_interactive_mode(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         if self.histfile.is_some() && self.contraband.is_none() {
             return Err(
-                "Interactive mode with --histfile requires specifying the string to scrub".into(),
+                "Interactive mode with --histfile requires specifying the string to scrub".into()
             );
         }
 
