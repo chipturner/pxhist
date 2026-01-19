@@ -449,15 +449,15 @@ fn scrub_command() {
     let output = pc.call("show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 10);
 
-    // Scrub `test_command_10`
-    let _output = pc.call("scrub test_command_10").output().unwrap();
+    // Scrub `test_command_10` (use --yes to skip confirmation prompt)
+    let _output = pc.call("scrub --yes test_command_10").output().unwrap();
 
     // Verify we have 9 rows now.
     let output = pc.call("show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 9);
 
     // Scrub the rest
-    let _output = pc.call("scrub test_command_").output().unwrap();
+    let _output = pc.call("scrub --yes test_command_").output().unwrap();
 
     // Verify we have none.
     let output = pc.call("show --suppress-headers").output().unwrap();

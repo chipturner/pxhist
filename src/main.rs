@@ -6,16 +6,23 @@ use std::{
     io,
     io::{BufRead, BufReader, Read, Write},
     os::unix::ffi::{OsStrExt, OsStringExt},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str,
 };
 
 use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use clap::{Parser, Subcommand};
-use regex::bytes::{Regex, RegexSetBuilder};
+use regex::bytes::Regex;
 use rusqlite::{Connection, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
+
+// Type alias for secret pattern matching results
+type SecretPatterns = (Vec<(&'static str, &'static str)>, regex::bytes::RegexSet);
+
+// Regex compilation size limits for secret pattern matching
+const REGEX_SIZE_LIMIT_DEFAULT: usize = 50 * 1024 * 1024; // 50MB
+const REGEX_SIZE_LIMIT_ALL: usize = 100 * 1024 * 1024; // 100MB for combined patterns
 
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -156,17 +163,36 @@ struct SyncCommand {
 
 #[derive(Parser, Debug)]
 struct ScrubCommand {
-    #[clap(long, help = "If specified, also remove lines from this file; typically $HISTFILE")]
+    #[clap(long, help = "Scrub from this histfile instead of (or in addition to) the database")]
     histfile: Option<PathBuf>,
     #[clap(
         short = 'n',
         long,
-        help = "Dry-run mode (only display the rows, don't actually scrub)",
-        default_value_t = false
+        help = "Dry-run mode (only display the rows, don't actually scrub)"
     )]
     dry_run: bool,
     #[clap(
-        help = "The string to scrub.  Avoid this parameter and prefer being prompted for the value to be provided interactively."
+        long,
+        help = "Use secret detection to find entries to scrub (instead of interactive prompt)"
+    )]
+    scan: bool,
+    #[clap(
+        short,
+        long,
+        default_value = "critical",
+        help = "Confidence level for --scan: critical, high, low, or all"
+    )]
+    confidence: String,
+    #[clap(
+        long,
+        requires = "histfile",
+        help = "Shell format for histfile (bash or zsh); auto-detected if not specified"
+    )]
+    shellname: Option<String>,
+    #[clap(short = 'y', long, help = "Skip confirmation prompt")]
+    yes: bool,
+    #[clap(
+        help = "The string to scrub (for interactive mode). Prefer being prompted interactively."
     )]
     contraband: Option<String>,
 }
@@ -220,7 +246,12 @@ struct MaintenanceCommand {
 
 #[derive(Parser, Debug)]
 struct ScanCommand {
-    #[clap(short, long, default_value = "critical", help = "Confidence level: critical, high, low, or all")]
+    #[clap(
+        short,
+        long,
+        default_value = "critical",
+        help = "Confidence level: critical, high, low, or all"
+    )]
     confidence: String,
     #[clap(short, long, help = "Output as JSON")]
     json: bool,
@@ -228,6 +259,14 @@ struct ScanCommand {
     verbose: bool,
     #[clap(short, long, default_value_t = 50, help = "Max results (0 for unlimited)")]
     limit: usize,
+    #[clap(long, help = "Scan this histfile instead of the database")]
+    histfile: Option<PathBuf>,
+    #[clap(
+        long,
+        requires = "histfile",
+        help = "Shell format for histfile (bash or zsh); auto-detected if not specified"
+    )]
+    shellname: Option<String>,
 }
 
 impl ImportCommand {
@@ -536,105 +575,315 @@ struct ScanMatch {
     timestamp: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     working_directory: Option<String>,
+    #[serde(skip)]
+    rowid: i64,
+    #[serde(skip)]
+    original_line: Option<String>,
 }
 
 impl ScanCommand {
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        use pxh::secrets_patterns::{PATTERNS_CRITICAL, PATTERNS_HIGH, PATTERNS_LOW};
+        let matches = self.run_scan(&conn)?;
 
-        let patterns: Vec<(&str, &str)> = match self.confidence.as_str() {
-            "critical" => PATTERNS_CRITICAL.to_vec(),
-            "high" => PATTERNS_HIGH.to_vec(),
-            "low" => PATTERNS_LOW.to_vec(),
-            "all" => {
-                let mut all = PATTERNS_HIGH.to_vec();
-                all.extend(PATTERNS_LOW);
-                all
-            }
-            _ => {
-                return Err(format!(
-                    "Invalid confidence level: '{}'. Use 'critical', 'high', 'low', or 'all'",
-                    self.confidence
-                )
-                .into());
-            }
-        };
-
-        if patterns.is_empty() {
-            println!("No patterns available. Ensure secrets-patterns-db submodule is initialized.");
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(&matches)?);
             return Ok(());
         }
 
-        let regex_patterns: Vec<&str> = patterns.iter().map(|(_, regex)| *regex).collect();
-        let regex_set = RegexSetBuilder::new(&regex_patterns)
-            .size_limit(50 * 1024 * 1024) // 50MB limit for the compiled regex
-            .build()?;
+        if matches.is_empty() {
+            println!("No potential secrets found.");
+            return Ok(());
+        }
 
-        let mut stmt = conn.prepare(
-            "SELECT full_command, start_unix_timestamp, working_directory FROM command_history",
-        )?;
+        println!("Found {} potential secret(s):\n", matches.len());
+        Self::display_matches(&matches, self.verbose);
+
+        Ok(())
+    }
+
+    fn run_scan(&self, conn: &Connection) -> Result<Vec<ScanMatch>, Box<dyn std::error::Error>> {
+        let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
+
+        if patterns.is_empty() {
+            return Ok(vec![]);
+        }
 
         let mut matches: Vec<ScanMatch> = Vec::new();
         let limit = if self.limit == 0 { usize::MAX } else { self.limit };
 
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
+        if let Some(ref histfile) = self.histfile {
+            let content = fs::read(histfile)?;
+            let shellname = self.shellname.clone().unwrap_or_else(|| detect_shell_format(&content));
+            scan_histfile(&content, &shellname, &regex_set, &patterns, &mut matches, limit)?;
+        } else {
+            scan_database(conn, &regex_set, &patterns, &mut matches, limit)?;
+        }
+
+        Ok(matches)
+    }
+
+    fn display_matches(matches: &[ScanMatch], verbose: bool) {
+        for m in matches {
+            let time_str = m.timestamp.map_or_else(
+                || "n/a".to_string(),
+                |ts| {
+                    Local
+                        .timestamp_opt(ts, 0)
+                        .single()
+                        .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
+                        .unwrap_or_else(|| "n/a".to_string())
+                },
+            );
+            if verbose {
+                println!("  [{time_str}] {}", m.pattern);
+                if let Some(ref wd) = m.working_directory {
+                    println!("  Directory: {wd}");
+                }
+                println!("  {}\n", m.command);
+            } else {
+                println!("  [{time_str}] {}", m.pattern);
+                println!("  {}\n", m.command);
+            }
+        }
+    }
+}
+
+// Shared scanning utilities
+
+fn build_secret_patterns(confidence: &str) -> Result<SecretPatterns, Box<dyn std::error::Error>> {
+    use pxh::secrets_patterns::{PATTERNS_CRITICAL, PATTERNS_HIGH, PATTERNS_LOW};
+    use regex::bytes::RegexSetBuilder;
+
+    let (patterns, size_limit): (Vec<(&str, &str)>, usize) = match confidence {
+        "critical" => (PATTERNS_CRITICAL.to_vec(), REGEX_SIZE_LIMIT_DEFAULT),
+        "high" => (PATTERNS_HIGH.to_vec(), REGEX_SIZE_LIMIT_DEFAULT),
+        "low" => (PATTERNS_LOW.to_vec(), REGEX_SIZE_LIMIT_DEFAULT),
+        "all" => {
+            let mut all = PATTERNS_CRITICAL.to_vec();
+            all.extend(PATTERNS_HIGH);
+            all.extend(PATTERNS_LOW);
+            (all, REGEX_SIZE_LIMIT_ALL)
+        }
+        _ => {
+            return Err(format!(
+                "Invalid confidence level: '{}'. Use 'critical', 'high', 'low', or 'all'",
+                confidence
+            )
+            .into());
+        }
+    };
+
+    let regex_patterns: Vec<&str> = patterns.iter().map(|(_, regex)| *regex).collect();
+    let regex_set = RegexSetBuilder::new(&regex_patterns)
+        .size_limit(size_limit)
+        .build()?;
+
+    Ok((patterns, regex_set))
+}
+
+fn is_bash_timestamp_line(line: &[u8]) -> bool {
+    line.starts_with(b"#") && line.len() > 1 && line[1..].iter().all(|&b| b.is_ascii_digit())
+}
+
+fn prompt_for_confirmation() -> Result<bool, Box<dyn std::error::Error>> {
+    print!("Proceed with scrubbing? [y/N] ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim().eq_ignore_ascii_case("y"))
+}
+
+fn detect_shell_format(content: &[u8]) -> String {
+    for line in content.split(|&b| b == b'\n').take(10) {
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with(b": ") && line.contains(&b';') {
+            return "zsh".to_string();
+        }
+        if is_bash_timestamp_line(line) {
+            return "bash".to_string();
+        }
+    }
+    eprintln!("Warning: Could not detect shell format, defaulting to bash. Use --shellname to specify.");
+    "bash".to_string()
+}
+
+fn scan_database(
+    conn: &Connection,
+    regex_set: &regex::bytes::RegexSet,
+    patterns: &[(&str, &str)],
+    matches: &mut Vec<ScanMatch>,
+    limit: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut stmt = conn.prepare(
+        "SELECT rowid, full_command, start_unix_timestamp, working_directory FROM command_history",
+    )?;
+
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        if matches.len() >= limit {
+            break;
+        }
+
+        let rowid: i64 = row.get(0)?;
+        let command: Vec<u8> = row.get(1)?;
+        let timestamp: Option<i64> = row.get(2)?;
+        let working_directory: Option<Vec<u8>> = row.get(3)?;
+
+        let matched_indices: Vec<usize> = regex_set.matches(&command).into_iter().collect();
+        for idx in matched_indices {
             if matches.len() >= limit {
                 break;
             }
-
-            let command: Vec<u8> = row.get(0)?;
-            let timestamp: Option<i64> = row.get(1)?;
-            let working_directory: Option<Vec<u8>> = row.get(2)?;
-
-            let matched_indices: Vec<usize> = regex_set.matches(&command).into_iter().collect();
-            for idx in matched_indices {
-                if matches.len() >= limit {
-                    break;
-                }
-                matches.push(ScanMatch {
-                    command: String::from_utf8_lossy(&command).to_string(),
-                    pattern: patterns[idx].0.to_string(),
-                    timestamp,
-                    working_directory: working_directory
-                        .as_ref()
-                        .map(|wd| String::from_utf8_lossy(wd).to_string()),
-                });
-            }
+            matches.push(ScanMatch {
+                command: String::from_utf8_lossy(&command).to_string(),
+                pattern: patterns[idx].0.to_string(),
+                timestamp,
+                working_directory: working_directory
+                    .as_ref()
+                    .map(|wd| String::from_utf8_lossy(wd).to_string()),
+                rowid,
+                original_line: None,
+            });
         }
-
-        if self.json {
-            println!("{}", serde_json::to_string_pretty(&matches)?);
-        } else if matches.is_empty() {
-            println!("No potential secrets found.");
-        } else {
-            println!("Found {} potential secret(s):\n", matches.len());
-            for m in &matches {
-                let time_str = m.timestamp.map_or_else(
-                    || "n/a".to_string(),
-                    |ts| {
-                        Local
-                            .timestamp_opt(ts, 0)
-                            .single()
-                            .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-                            .unwrap_or_else(|| "n/a".to_string())
-                    },
-                );
-                if self.verbose {
-                    println!("  [{time_str}] {}", m.pattern);
-                    if let Some(ref wd) = m.working_directory {
-                        println!("  Directory: {wd}");
-                    }
-                    println!("  {}\n", m.command);
-                } else {
-                    println!("  [{time_str}] {}", m.pattern);
-                    println!("  {}\n", m.command);
-                }
-            }
-        }
-
-        Ok(())
     }
+    Ok(())
+}
+
+fn scan_histfile(
+    content: &[u8],
+    shellname: &str,
+    regex_set: &regex::bytes::RegexSet,
+    patterns: &[(&str, &str)],
+    matches: &mut Vec<ScanMatch>,
+    limit: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let lines: Vec<&[u8]> = content.split(|&b| b == b'\n').collect();
+    let mut prev_timestamp_line: Option<&[u8]> = None;
+
+    for line in &lines {
+        if matches.len() >= limit {
+            break;
+        }
+        if line.is_empty() {
+            prev_timestamp_line = None;
+            continue;
+        }
+
+        let parsed = parse_histfile_line(line, shellname, prev_timestamp_line);
+
+        if shellname == "bash" && is_bash_timestamp_line(line) {
+            prev_timestamp_line = Some(line);
+            continue;
+        }
+        prev_timestamp_line = None;
+
+        let Some((command, timestamp, lines_to_remove)) = parsed else {
+            continue;
+        };
+
+        if command.is_empty() {
+            continue;
+        }
+
+        let matched_indices: Vec<usize> = regex_set.matches(&command).into_iter().collect();
+        for idx in matched_indices {
+            if matches.len() >= limit {
+                break;
+            }
+            matches.push(ScanMatch {
+                command: String::from_utf8_lossy(&command).to_string(),
+                pattern: patterns[idx].0.to_string(),
+                timestamp,
+                working_directory: None,
+                rowid: 0,
+                original_line: Some(lines_to_remove.clone()),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn parse_histfile_line(
+    line: &[u8],
+    shellname: &str,
+    prev_timestamp_line: Option<&[u8]>,
+) -> Option<(Vec<u8>, Option<i64>, String)> {
+    match shellname {
+        "zsh" => {
+            let semi_pos = line.iter().position(|&b| b == b';')?;
+            let fields = &line[..semi_pos];
+            let parts: Vec<&[u8]> = fields.splitn(3, |&b| b == b':').collect();
+            if parts.len() < 3 {
+                return None;
+            }
+
+            let command = line[semi_pos + 1..].to_vec();
+            let timestamp = parts.get(1).and_then(|ts| {
+                let ts_str = String::from_utf8_lossy(ts);
+                ts_str.trim().parse::<i64>().ok()
+            });
+
+            Some((command, timestamp, String::from_utf8_lossy(line).to_string()))
+        }
+        "bash" => {
+            if is_bash_timestamp_line(line) {
+                return None;
+            }
+
+            let mut lines_to_remove = String::new();
+            let timestamp = if let Some(ts_line) = prev_timestamp_line {
+                lines_to_remove.push_str(&String::from_utf8_lossy(ts_line));
+                lines_to_remove.push('\n');
+                String::from_utf8_lossy(&ts_line[1..]).trim().parse::<i64>().ok()
+            } else {
+                None
+            };
+            lines_to_remove.push_str(&String::from_utf8_lossy(line));
+
+            Some((line.to_vec(), timestamp, lines_to_remove))
+        }
+        _ => Some((
+            line.to_vec(),
+            None,
+            String::from_utf8_lossy(line).to_string(),
+        )),
+    }
+}
+
+fn scrub_from_database(
+    conn: &Connection,
+    matches: &[ScanMatch],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut rowids_to_delete: Vec<i64> = matches.iter().map(|m| m.rowid).collect();
+    rowids_to_delete.sort();
+    rowids_to_delete.dedup();
+
+    for rowid in &rowids_to_delete {
+        conn.execute("DELETE FROM command_history WHERE rowid = ?", [rowid])?;
+    }
+
+    Ok(rowids_to_delete.len())
+}
+
+fn scrub_from_histfile(
+    histfile: &Path,
+    matches: &[ScanMatch],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let mut lines_to_remove: Vec<String> = matches
+        .iter()
+        .filter_map(|m| m.original_line.clone())
+        .flat_map(|s| s.lines().map(String::from).collect::<Vec<_>>())
+        .collect();
+    lines_to_remove.sort();
+    lines_to_remove.dedup();
+
+    let entry_count = matches.iter().filter(|m| m.original_line.is_some()).count();
+    let lines_refs: Vec<&str> = lines_to_remove.iter().map(|s| s.as_str()).collect();
+    pxh::atomically_remove_matching_lines_from_file(histfile, &lines_refs)?;
+
+    Ok(entry_count)
 }
 
 // Merge all (hopefully) pxh files ending in .db in the specified path
@@ -1052,11 +1301,69 @@ impl PrintableCommand for ScrubCommand {
 }
 
 impl ScrubCommand {
-    fn go(
-        &self,
-        mut conn: Connection,
-        histfile: &Option<PathBuf>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        if self.scan {
+            self.go_scan_mode(&conn)
+        } else {
+            self.go_interactive_mode(conn)
+        }
+    }
+
+    fn go_scan_mode(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
+
+        if patterns.is_empty() {
+            println!("No patterns available.");
+            return Ok(());
+        }
+
+        let mut matches: Vec<ScanMatch> = Vec::new();
+
+        if let Some(ref histfile) = self.histfile {
+            let content = fs::read(histfile)?;
+            let shellname =
+                self.shellname.clone().unwrap_or_else(|| detect_shell_format(&content));
+            scan_histfile(&content, &shellname, &regex_set, &patterns, &mut matches, usize::MAX)?;
+        } else {
+            scan_database(conn, &regex_set, &patterns, &mut matches, usize::MAX)?;
+        }
+
+        if matches.is_empty() {
+            println!("No potential secrets found. Nothing to scrub.");
+            return Ok(());
+        }
+
+        println!("Found {} potential secret(s) to scrub:\n", matches.len());
+        ScanCommand::display_matches(&matches, false);
+
+        if self.dry_run {
+            println!("Dry-run mode: no changes made.");
+            return Ok(());
+        }
+
+        if !self.yes && !prompt_for_confirmation()? {
+            println!("Aborted.");
+            return Ok(());
+        }
+
+        if let Some(ref histfile) = self.histfile {
+            let count = scrub_from_histfile(histfile, &matches)?;
+            println!("Scrubbed {} entries from {}.", count, histfile.display());
+        } else {
+            let count = scrub_from_database(conn, &matches)?;
+            println!("Scrubbed {} entries from database.", count);
+        }
+
+        Ok(())
+    }
+
+    fn go_interactive_mode(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        if self.histfile.is_some() && self.contraband.is_none() {
+            return Err(
+                "Interactive mode with --histfile requires specifying the string to scrub".into(),
+            );
+        }
+
         let contraband = match &self.contraband {
             Some(value) => {
                 println!(
@@ -1074,7 +1381,7 @@ impl ScrubCommand {
         };
 
         if contraband.is_empty() {
-            println!(); // from the input prompt in case the user hit ctrl-D
+            println!(); // newline after input prompt in case user hit ctrl-D
             return Err(String::from("String to scrub must be non-empty; aborting.").into());
         }
 
@@ -1091,22 +1398,28 @@ ORDER BY start_unix_timestamp DESC, id DESC"#,
         println!("Entries to scrub from pxh database...\n");
         self.present_results(&conn)?;
 
+        if self.dry_run {
+            println!("\nDry-run, no entries scrubbed.");
+            return Ok(());
+        }
+
+        if !self.yes && !prompt_for_confirmation()? {
+            println!("Aborted.");
+            return Ok(());
+        }
+
         let tx = conn.transaction()?;
         tx.execute(
             "DELETE FROM command_history WHERE rowid IN (SELECT ch_rowid FROM memdb.show_results)",
             (),
         )?;
-        if self.dry_run {
-            tx.rollback()?;
-            println!("\nDry-run, no entries scrubbed.");
+        tx.commit()?;
+
+        if let Some(ref histfile) = self.histfile {
+            pxh::atomically_remove_lines_from_file(histfile, &contraband)?;
+            println!("\nEntries scrubbed from database and {}.", histfile.display());
         } else {
-            tx.commit()?;
-            if let Some(histfile) = histfile {
-                pxh::atomically_remove_lines_from_file(histfile, &contraband)?;
-                println!("\nEntries scrubbed from database and {}.", &histfile.display());
-            } else {
-                println!("\nEntries scrubbed from database.");
-            }
+            println!("\nEntries scrubbed from database.");
         }
         Ok(())
     }
@@ -1267,7 +1580,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Scrub(cmd) => {
-            cmd.go(make_conn()?, &cmd.histfile)?;
+            cmd.go(make_conn()?)?;
         }
         Commands::Seal(cmd) => {
             cmd.go(make_conn()?)?;

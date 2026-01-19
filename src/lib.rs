@@ -513,6 +513,39 @@ pub fn atomically_remove_lines_from_file(
     Ok(())
 }
 
+/// Rewrite a file removing lines that exactly match any of the contraband items.
+/// Unlike `atomically_remove_lines_from_file`, this matches complete lines (after trimming).
+pub fn atomically_remove_matching_lines_from_file(
+    input_filepath: &Path,
+    contraband_items: &[&str],
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::collections::HashSet;
+
+    let contraband_set: HashSet<&str> = contraband_items.iter().copied().collect();
+
+    let input_file = File::open(input_filepath)?;
+    let mut input_reader = BufReader::new(input_file);
+
+    let mut output_filepath = input_filepath.as_os_str().to_owned();
+    output_filepath.push(".new");
+    let output_filepath = PathBuf::from(output_filepath);
+    let output_file = File::create(&output_filepath)?;
+    let mut output_writer = BufWriter::new(output_file);
+
+    input_reader.for_byte_line_with_terminator(|line| {
+        let line_str = line.to_str_lossy();
+        let trimmed = line_str.trim();
+        if !contraband_set.contains(trimmed) {
+            output_writer.write_all(line)?;
+        }
+        Ok(true)
+    })?;
+
+    output_writer.flush()?;
+    std::fs::rename(output_filepath, input_filepath)?;
+    Ok(())
+}
+
 // Helper functions for command parsing and path resolution
 pub mod helpers {
     use std::path::{Path, PathBuf};

@@ -157,3 +157,63 @@ fn test_path_resolution_across_home_dirs() {
     let result4 = helpers::get_relative_path_from_home(Some(&same_path), Some(&same_path));
     assert_eq!(result4, Some("".to_string()));
 }
+
+#[test]
+fn atomic_matching_line_remove() {
+    // Basic removal of exact matching lines
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line2"]).unwrap();
+    verify_file_matches(&path, "line1\nline3");
+
+    // Multiple lines to remove
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3\nline4\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line2", "line4"]).unwrap();
+    verify_file_matches(&path, "line1\nline3");
+
+    // Lines with whitespace - should match after trimming
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\n  line2  \nline3\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line2"]).unwrap();
+    verify_file_matches(&path, "line1\nline3");
+
+    // No matching lines - file unchanged
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line9"]).unwrap();
+    verify_file_matches(&path, "line1\nline2\nline3");
+
+    // Empty contraband list - file unchanged
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &[]).unwrap();
+    verify_file_matches(&path, "line1\nline2");
+
+    // Partial match should NOT remove (unlike atomically_remove_lines_from_file)
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line"]).unwrap();
+    verify_file_matches(&path, "line1\nline2\nline3");
+
+    // File without trailing newline
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line2"]).unwrap();
+    verify_file_matches(&path, "line1\nline3");
+
+    // Remove all lines
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\n").unwrap();
+    let (_, path) = tmpfile.keep().unwrap();
+    pxh::atomically_remove_matching_lines_from_file(&path, &["line1", "line2"]).unwrap();
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(contents.is_empty());
+}
