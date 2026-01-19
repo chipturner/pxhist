@@ -1,4 +1,28 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo test)",
+      "Bash(cargo test:*)",
+      "Bash(cargo:*)",
+      "Bash(just fmt)",
+      "Bash(just check:*)",
+      "Bash(just coverage)",
+      "Bash(just coverage-detailed:*)",
+      "Bash(just coverage-clean)",
+      "Bash(just cargo-upgrade:*)",
+      "Bash(./target/debug/pxh:*)",
+      "Bash(./target/release/pxh:*)",
+      "Bash(./coverage.sh)",
+      "Bash(./coverage-detailed.sh:*)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:api.github.com)"
+    ],
+    "deny": []
+  },
   "hooks": {
     "PostToolUse": [
       {

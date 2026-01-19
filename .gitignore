@@ -12,6 +12,7 @@ Cargo.lock
 perf.data
 perf.data.old
 .aider*
+.claude/settings.local.json
 
 # Code coverage
 /coverage/
