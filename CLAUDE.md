@@ -12,7 +12,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Run single test: `cargo test test_name`
 - Run integration tests: `cargo test --test integration_tests`
 - Run specific test file: `cargo test --test sync_test`
-- Format code: `just rustfmt`
+- Format code: `just fmt`
 - Lint: `cargo clippy`
 - Upgrade dependencies: `just cargo-upgrade`
 - Coverage: `just coverage` or `just coverage-detailed`
@@ -53,7 +53,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 
 ## Code Style Guidelines
 - **Imports**: Group by Std, External, Crate using `imports_granularity=Crate` and `group_imports=StdExternalCrate`
-- **Formatting**: rustfmt with `edition=2024` (via `just rustfmt`), `use_small_heuristics=max` in rustfmt.toml
+- **Formatting**: rustfmt with `edition=2024` (via `just fmt`), `use_small_heuristics=max` in rustfmt.toml
 - **Naming**:
   - `snake_case` for variables, functions, methods
   - `CamelCase` for types, structs, enums

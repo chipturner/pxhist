@@ -7,7 +7,7 @@ check:
 	cargo clippy -- -D warnings
 	cargo test
 
-rustfmt:
+fmt:
 	rustfmt --config edition=2024 --config imports_granularity=Crate --config group_imports=StdExternalCrate {tests,src}/**/*.rs
 
 cargo-upgrade *args:

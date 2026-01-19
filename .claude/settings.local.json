@@ -10,7 +10,7 @@
       "Bash(cp:*)",
       "Bash(git log:*)",
       "Bash(grep:*)",
-      "Bash(just rustfmt)",
+      "Bash(just fmt)",
       "Bash(mkdir:*)",
       "Bash(wc:*)",
       "Bash(rm:*)",
