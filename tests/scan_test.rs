@@ -157,28 +157,6 @@ fn scan_confidence_critical() {
 }
 
 #[test]
-fn scan_limit() {
-    let pc = PxhCaller::new();
-
-    // Insert multiple commands with secrets
-    for i in 1..=5 {
-        let cmd = format!(
-            "insert --shellname bash --hostname h --username u --session-id {i} export AWS_KEY{i}=AKIA{}EXAMPLE",
-            "0".repeat(12)
-        );
-        pc.call(&cmd).assert().success();
-    }
-
-    // Scan with limit of 2
-    let output = pc.call("scan --limit 2").output().unwrap();
-    assert!(output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // Note: Each command may match multiple patterns, so we check the count in the output
-    // The actual output says "Found N potential secret(s)"
-    assert!(stdout.contains("Found"));
-}
-
-#[test]
 fn scan_verbose() {
     let pc = PxhCaller::new();
 

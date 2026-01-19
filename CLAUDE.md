@@ -17,6 +17,9 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Upgrade dependencies: `just cargo-upgrade`
 - Coverage: `just coverage` or `just coverage-detailed`
 
+## Workflow
+- After running tests and reaching a stopping point, run `cargo build --release` in the background
+
 ## Architecture Overview
 
 ### Core Components

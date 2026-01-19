@@ -1,5 +1,6 @@
 use std::{
     env,
+    io::{Read, Write},
     path::Path,
     process::{Command, Stdio},
     time::{SystemTime, UNIX_EPOCH},
@@ -475,6 +476,553 @@ fn test_ssh_sync_command_parsing() -> Result<()> {
 
     // Should show help without error
     assert!(String::from_utf8(output.stdout)?.contains("Remote host to sync with"));
+
+    Ok(())
+}
+
+// =============================================================================
+// Scrub directory mode tests
+// =============================================================================
+
+#[test]
+fn test_scrub_dir_mode_scan() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db1 = temp_dir.path().join("db1.db");
+    let db2 = temp_dir.path().join("db2.db");
+
+    // Insert a command that looks like it contains a secret
+    // Using a pattern that matches the AWS API Key pattern: AKIA[0-9A-Z]{16}
+    insert_test_command(&db1, "aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE", None)?;
+    insert_test_command(&db1, "echo normal command", None)?;
+
+    insert_test_command(&db2, "export AWS_SECRET_ACCESS_KEY=AKIAIOSFODNN7EXAMPLE2", None)?;
+    insert_test_command(&db2, "ls -la", None)?;
+
+    // Run scrub --scan --dir with dry-run first
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(), // Need a db arg but won't be used
+            "scrub",
+            "--scan",
+            "--dir",
+            temp_dir.path().to_str().unwrap(),
+            "--dry-run",
+        ])
+        .output()?;
+
+    assert!(output.status.success(), "scrub --dir failed: {:?}", output);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("database files"), "Should report found database files");
+
+    // Verify commands still exist (dry-run)
+    assert_eq!(count_commands(&db1)?, 2);
+    assert_eq!(count_commands(&db2)?, 2);
+
+    Ok(())
+}
+
+#[test]
+fn test_scrub_dir_mode_with_contraband_pattern() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db1 = temp_dir.path().join("db1.db");
+    let db2 = temp_dir.path().join("db2.db");
+
+    // Insert commands containing "TOPSECRET"
+    insert_test_command(&db1, "echo TOPSECRET_VALUE=abc123", None)?;
+    insert_test_command(&db1, "echo normal command", None)?;
+
+    insert_test_command(&db2, "export MY_TOPSECRET=password", None)?;
+    insert_test_command(&db2, "ls -la", None)?;
+
+    // Verify initial counts
+    assert_eq!(count_commands(&db1)?, 2);
+    assert_eq!(count_commands(&db2)?, 2);
+
+    // Run scrub with explicit contraband pattern
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(),
+            "scrub",
+            "--dir",
+            temp_dir.path().to_str().unwrap(),
+            "-y",        // Skip confirmation
+            "TOPSECRET", // The contraband pattern to match
+        ])
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "scrub --dir failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the TOPSECRET commands were removed
+    assert_eq!(count_commands(&db1)?, 1, "db1 should have 1 command after scrub");
+    assert_eq!(count_commands(&db2)?, 1, "db2 should have 1 command after scrub");
+
+    // Verify the normal commands remain
+    let conn1 = rusqlite::Connection::open(&db1)?;
+    let has_normal1: bool = conn1.query_row(
+        "SELECT EXISTS(SELECT 1 FROM command_history WHERE full_command LIKE '%normal command%')",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(has_normal1, "Normal command should still exist in db1");
+
+    let conn2 = rusqlite::Connection::open(&db2)?;
+    let has_normal2: bool = conn2.query_row(
+        "SELECT EXISTS(SELECT 1 FROM command_history WHERE full_command LIKE '%ls -la%')",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(has_normal2, "Normal command should still exist in db2");
+
+    Ok(())
+}
+
+// =============================================================================
+// Sync secret filtering tests
+// =============================================================================
+
+#[test]
+fn test_sync_filters_secrets_by_default() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let client_db = temp_dir.path().join("client.db");
+    let server_db = temp_dir.path().join("server.db");
+
+    // Client has normal commands
+    insert_test_command(&client_db, "echo normal", None)?;
+
+    // Server has a command that looks like it contains a secret
+    // (AWS key pattern: AKIA + 16 alphanumeric chars)
+    insert_test_command(
+        &server_db,
+        "aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE",
+        None,
+    )?;
+    insert_test_command(&server_db, "echo safe_command", None)?;
+
+    // Run bidirectional sync (client receives from server with secret filtering)
+    let server_args = vec![
+        "--db".to_string(),
+        server_db.to_str().unwrap().to_string(),
+        "sync".to_string(),
+        "--server".to_string(),
+    ];
+
+    let client_args = vec![
+        "--db".to_string(),
+        client_db.to_str().unwrap().to_string(),
+        "sync".to_string(),
+        "--stdin-stdout".to_string(),
+    ];
+
+    let (client, server) = spawn_sync_processes(client_args, server_args)?;
+
+    let client_output = client.wait_with_output()?;
+    let server_output = server.wait_with_output()?;
+
+    assert!(
+        client_output.status.success(),
+        "Client failed: {}",
+        String::from_utf8_lossy(&client_output.stderr)
+    );
+    assert!(
+        server_output.status.success(),
+        "Server failed: {}",
+        String::from_utf8_lossy(&server_output.stderr)
+    );
+
+    // Verify the client got the filtered message in stderr
+    let client_stderr = String::from_utf8_lossy(&client_output.stderr);
+
+    // Client should have exactly 2 commands (its original + safe_command)
+    // if the AWS pattern matched and was filtered
+    let client_count = count_commands(&client_db)?;
+
+    // Check if filtering occurred - either by count or by stderr message
+    let filtering_occurred = client_count == 2 || client_stderr.contains("filtered");
+    assert!(
+        filtering_occurred,
+        "Secret filtering should have occurred. Client has {} commands, stderr: {}",
+        client_count, client_stderr
+    );
+
+    // Verify the AWS key command is NOT in the client database
+    let conn = rusqlite::Connection::open(&client_db)?;
+    let has_secret: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM command_history WHERE full_command LIKE '%AKIAIOSFODNN7%')",
+        [],
+        |r| r.get(0),
+    )?;
+    assert!(!has_secret, "AWS key command should NOT be in client database after sync");
+
+    Ok(())
+}
+
+#[test]
+fn test_sync_no_secret_filter_flag() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let client_db = temp_dir.path().join("client.db");
+    let server_db = temp_dir.path().join("server.db");
+
+    // Client starts empty
+    insert_test_command(&client_db, "echo init", None)?;
+
+    // Server has a command with something that might be a secret
+    insert_test_command(&server_db, "export TOKEN=ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", None)?;
+    insert_test_command(&server_db, "echo normal", None)?;
+
+    // Run sync with --no-secret-filter
+    let server_args = vec![
+        "--db".to_string(),
+        server_db.to_str().unwrap().to_string(),
+        "sync".to_string(),
+        "--server".to_string(),
+    ];
+
+    let client_args = vec![
+        "--db".to_string(),
+        client_db.to_str().unwrap().to_string(),
+        "sync".to_string(),
+        "--stdin-stdout".to_string(),
+        "--no-secret-filter".to_string(),
+    ];
+
+    let (client, server) = spawn_sync_processes(client_args, server_args)?;
+
+    let client_output = client.wait_with_output()?;
+    let server_output = server.wait_with_output()?;
+
+    assert!(
+        client_output.status.success(),
+        "Client failed: {}",
+        String::from_utf8_lossy(&client_output.stderr)
+    );
+    assert!(
+        server_output.status.success(),
+        "Server failed: {}",
+        String::from_utf8_lossy(&server_output.stderr)
+    );
+
+    // With --no-secret-filter, client should get ALL server commands
+    let client_count = count_commands(&client_db)?;
+    assert_eq!(client_count, 3, "Client should have all 3 commands (no filtering)");
+
+    Ok(())
+}
+
+// =============================================================================
+// Remote scrub tests (via v2 protocol)
+// =============================================================================
+
+#[test]
+fn test_remote_scrub_via_v2_protocol() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let server_db = temp_dir.path().join("server.db");
+
+    // Insert commands on server, including one with a "secret"
+    insert_test_command(&server_db, "export AWS_KEY=AKIAIOSFODNN7EXAMPLE", None)?;
+    insert_test_command(&server_db, "echo normal", None)?;
+
+    let initial_count = count_commands(&server_db)?;
+    assert_eq!(initial_count, 2);
+
+    // Spawn server in server mode
+    let mut server = pxh_command()
+        .args(["--db", server_db.to_str().unwrap(), "sync", "--server"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stdin = server.stdin.take().unwrap();
+    let mut stdout = server.stdout.take().unwrap();
+
+    // Send scrub-v2 protocol with scan option
+    stdin.write_all(b"scrub-v2\n")?;
+    stdin.write_all(b"{\"scrub_scan\":true}\n")?;
+    stdin.flush()?;
+    drop(stdin);
+
+    // Read response
+    let mut response = String::new();
+    stdout.read_to_string(&mut response)?;
+
+    let status = server.wait()?;
+    assert!(status.success(), "Server scrub should succeed");
+
+    // Check if scrub was reported
+    // (may or may not have found secrets depending on pattern matching)
+    assert!(
+        response.contains("entries")
+            || response.contains("scrub")
+            || response.contains("No entries"),
+        "Response should mention scrub result: {}",
+        response
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_scrub_help_shows_new_options() -> Result<()> {
+    let output = pxh_command().args(["scrub", "--help"]).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("--dir"), "Help should mention --dir option");
+    assert!(stdout.contains("--remote"), "Help should mention --remote option");
+
+    Ok(())
+}
+
+#[test]
+fn test_sync_help_shows_no_secret_filter() -> Result<()> {
+    let output = pxh_command().args(["sync", "--help"]).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("--no-secret-filter"), "Help should mention --no-secret-filter option");
+
+    Ok(())
+}
+
+#[test]
+fn test_remote_scrub_with_explicit_pattern() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let server_db = temp_dir.path().join("server.db");
+
+    // Insert commands on server
+    insert_test_command(&server_db, "export MYSECRETKEY=value123", None)?;
+    insert_test_command(&server_db, "echo normal", None)?;
+
+    let initial_count = count_commands(&server_db)?;
+    assert_eq!(initial_count, 2);
+
+    // Spawn server in server mode
+    let mut server = pxh_command()
+        .args(["--db", server_db.to_str().unwrap(), "sync", "--server"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let mut stdin = server.stdin.take().unwrap();
+    let mut stdout = server.stdout.take().unwrap();
+
+    // Send scrub-v2 protocol with explicit pattern
+    stdin.write_all(b"scrub-v2\n")?;
+    stdin.write_all(b"{\"scrub\":\"MYSECRETKEY\"}\n")?;
+    stdin.flush()?;
+    drop(stdin);
+
+    // Read response
+    let mut response = String::new();
+    stdout.read_to_string(&mut response)?;
+
+    let status = server.wait()?;
+    assert!(status.success(), "Server scrub should succeed");
+
+    // Check response
+    assert!(
+        response.contains("Scrubbed 1 entries") || response.contains("1 entries"),
+        "Response should indicate 1 entry scrubbed: {}",
+        response
+    );
+
+    // Verify the command was actually removed
+    let final_count = count_commands(&server_db)?;
+    assert_eq!(final_count, 1, "Server should have 1 command after scrub");
+
+    Ok(())
+}
+
+#[test]
+fn test_scan_dir_mode() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db1 = temp_dir.path().join("db1.db");
+    let db2 = temp_dir.path().join("db2.db");
+
+    // Insert a command with AWS key pattern
+    insert_test_command(&db1, "aws configure set aws_access_key_id AKIAIOSFODNN7EXAMPLE", None)?;
+    insert_test_command(&db1, "echo normal command", None)?;
+
+    insert_test_command(&db2, "echo safe command", None)?;
+    insert_test_command(&db2, "ls -la", None)?;
+
+    // Run scan --dir
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(),
+            "scan",
+            "--dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .output()?;
+
+    assert!(
+        output.status.success(),
+        "scan --dir failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Should report scanning database files
+    assert!(stdout.contains("database files"), "Should report scanning database files");
+
+    // Should find at least one potential secret (the AWS key)
+    assert!(
+        stdout.contains("AKIA") || stdout.contains("AWS") || stdout.contains("potential secret"),
+        "Should find AWS key pattern in output: {}",
+        stdout
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_scan_help_shows_dir_option() -> Result<()> {
+    let output = pxh_command().args(["scan", "--help"]).output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(stdout.contains("--dir"), "Help should mention --dir option");
+
+    Ok(())
+}
+
+#[test]
+fn test_scrub_dir_requires_scan_or_pattern() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+
+    // Create an empty database in the directory
+    let db = temp_dir.path().join("test.db");
+    insert_test_command(&db, "echo test", None)?;
+
+    // Try to run scrub --dir without --scan or contraband pattern
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(),
+            "scrub",
+            "--dir",
+            temp_dir.path().to_str().unwrap(),
+        ])
+        .output()?;
+
+    // Should fail with an error about requiring --scan or pattern
+    assert!(!output.status.success(), "scrub --dir without --scan or pattern should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--scan") || stderr.contains("contraband") || stderr.contains("pattern"),
+        "Error should mention requiring --scan or pattern: {}",
+        stderr
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_scrub_remote_requires_scan_or_pattern() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+
+    // Try to run scrub --remote without --scan or contraband pattern
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(),
+            "scrub",
+            "--remote",
+            "fake-host",
+        ])
+        .output()?;
+
+    // Should fail with an error about requiring --scan or pattern
+    assert!(!output.status.success(), "scrub --remote without --scan or pattern should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--scan") || stderr.contains("contraband") || stderr.contains("pattern"),
+        "Error should mention requiring --scan or pattern: {}",
+        stderr
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_v2_protocol_malformed_json_fails() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("server.db");
+
+    // Create a database with some data
+    insert_test_command(&db_path, "echo hello", None)?;
+
+    // Start server mode
+    let mut server = pxh_command()
+        .args(["--db", db_path.to_str().unwrap(), "sync", "--server"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdin = server.stdin.as_mut().unwrap();
+
+    // Send v2 mode with malformed JSON
+    writeln!(stdin, "receive-v2")?;
+    writeln!(stdin, "{{invalid json")?;
+    stdin.flush()?;
+
+    // Server should fail with parse error
+    let output = server.wait_with_output()?;
+    assert!(!output.status.success(), "Server should fail on malformed v2 JSON");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Failed to parse v2 protocol options"),
+        "Error should mention parsing failure: {}",
+        stderr
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_directory_sync_filters_secrets() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+
+    // Create source database with a secret
+    let source_db = temp_dir.path().join("source.db");
+    insert_test_command(&source_db, "export AWS_KEY=AKIAIOSFODNN7EXAMPLE", None)?;
+    insert_test_command(&source_db, "echo normal command", None)?;
+
+    // Create target database
+    let target_db = temp_dir.path().join("target.db");
+    insert_test_command(&target_db, "echo existing", None)?;
+
+    // Sync from directory (should filter secrets by default)
+    let output = pxh_command()
+        .args(["--db", target_db.to_str().unwrap(), "sync", temp_dir.path().to_str().unwrap()])
+        .output()?;
+
+    assert!(output.status.success(), "Sync should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // The output should mention filtering
+    assert!(
+        stdout.contains("filtered") || count_commands(&target_db)? == 2,
+        "Secret should be filtered during directory sync. Output: {}",
+        stdout
+    );
+
+    // Verify the target has the normal command but not the secret
+    let target_count = count_commands(&target_db)?;
+    assert!(
+        target_count == 2, // existing + normal command (not the secret)
+        "Expected 2 commands in target (existing + normal), got {}",
+        target_count
+    );
 
     Ok(())
 }

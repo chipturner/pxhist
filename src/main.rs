@@ -20,6 +20,26 @@ use tempfile::NamedTempFile;
 // Type alias for secret pattern matching results
 type SecretPatterns = (Vec<(&'static str, &'static str)>, regex::bytes::RegexSet);
 
+/// Options passed in the v2 sync protocol
+#[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
+struct SyncOptions {
+    /// Pattern to scrub on remote (for remote scrub mode)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scrub: Option<String>,
+    /// Use secret detection for scrub
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scrub_scan: Option<bool>,
+    /// Confidence level for secret detection
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scrub_confidence: Option<String>,
+    /// Dry-run mode for scrub
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scrub_dry_run: Option<bool>,
+    /// Disable secret filtering during sync import
+    #[serde(skip_serializing_if = "Option::is_none")]
+    no_secret_filter: Option<bool>,
+}
+
 // Regex compilation size limits for secret pattern matching
 const REGEX_SIZE_LIMIT_DEFAULT: usize = 50 * 1024 * 1024; // 50MB
 const REGEX_SIZE_LIMIT_ALL: usize = 100 * 1024 * 1024; // 100MB for combined patterns
@@ -159,12 +179,38 @@ struct SyncCommand {
     since: Option<u32>,
     #[clap(long, help = "Use stdin/stdout for sync instead of SSH (for testing)")]
     stdin_stdout: bool,
+    #[clap(long, help = "Disable automatic filtering of potential secrets during sync import")]
+    no_secret_filter: bool,
 }
 
 #[derive(Parser, Debug)]
 struct ScrubCommand {
     #[clap(long, help = "Scrub from this histfile instead of (or in addition to) the database")]
     histfile: Option<PathBuf>,
+    #[clap(
+        long,
+        conflicts_with = "histfile",
+        help = "Scrub from all .db files in this directory (e.g., sync folder)"
+    )]
+    dir: Option<PathBuf>,
+    #[clap(
+        long,
+        conflicts_with_all = ["histfile", "dir"],
+        help = "Scrub from remote host via SSH sync protocol"
+    )]
+    remote: Option<String>,
+    #[clap(
+        short = 'e',
+        long,
+        default_value = "ssh",
+        requires = "remote",
+        help = "SSH command to use for connection (like rsync's -e option)"
+    )]
+    ssh_cmd: String,
+    #[clap(long, requires = "remote", help = "Path to pxh binary on the remote host")]
+    remote_pxh: Option<String>,
+    #[clap(long, requires = "remote", help = "Remote database path")]
+    remote_db: Option<PathBuf>,
     #[clap(short = 'n', long, help = "Dry-run mode (only display the rows, don't actually scrub)")]
     dry_run: bool,
     #[clap(
@@ -253,10 +299,14 @@ struct ScanCommand {
     json: bool,
     #[clap(short, long, help = "Verbose output with pattern details")]
     verbose: bool,
-    #[clap(short, long, default_value_t = 50, help = "Max results (0 for unlimited)")]
-    limit: usize,
     #[clap(long, help = "Scan this histfile instead of the database")]
     histfile: Option<PathBuf>,
+    #[clap(
+        long,
+        conflicts_with = "histfile",
+        help = "Scan all .db files in this directory (e.g., sync folder)"
+    )]
+    dir: Option<PathBuf>,
     #[clap(
         long,
         requires = "histfile",
@@ -564,7 +614,7 @@ impl MaintenanceCommand {
     }
 }
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 struct ScanMatch {
     command: String,
     pattern: String,
@@ -579,6 +629,11 @@ struct ScanMatch {
 
 impl ScanCommand {
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Handle directory mode
+        if let Some(ref dir) = self.dir {
+            return self.go_dir_mode(dir);
+        }
+
         let matches = self.run_scan(&conn)?;
 
         if self.json {
@@ -597,6 +652,109 @@ impl ScanCommand {
         Ok(())
     }
 
+    fn go_dir_mode(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        if !dir.exists() {
+            return Err(format!("Directory does not exist: {}", dir.display()).into());
+        }
+
+        let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
+        if patterns.is_empty() {
+            println!("No patterns available for confidence level '{}'.", self.confidence);
+            return Ok(());
+        }
+
+        let db_extension = OsStr::new("db");
+        let mut entries: Vec<_> = Vec::new();
+        let mut skipped_entries = 0usize;
+        for entry_result in fs::read_dir(dir)? {
+            match entry_result {
+                Ok(entry) => {
+                    if entry.path().extension() == Some(db_extension) {
+                        entries.push(entry);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to read directory entry: {e}");
+                    skipped_entries += 1;
+                }
+            }
+        }
+
+        if entries.is_empty() {
+            println!("No .db files found in {}", dir.display());
+            return Ok(());
+        }
+
+        println!("Scanning {} database files in {}\n", entries.len(), dir.display());
+
+        let mut all_matches: Vec<ScanMatch> = Vec::new();
+        let mut files_with_matches = 0usize;
+        let mut skipped_files = 0usize;
+        let num_files = entries.len();
+
+        for entry in &entries {
+            let path = entry.path();
+            let conn = match Connection::open(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Warning: Failed to open {}: {e}", path.display());
+                    skipped_files += 1;
+                    continue;
+                }
+            };
+
+            // Initialize schema if needed
+            let schema = include_str!("base_schema.sql");
+            if let Err(e) = conn.execute_batch(schema) {
+                eprintln!("Warning: Failed to initialize schema for {}: {e}", path.display());
+                skipped_files += 1;
+                continue;
+            }
+
+            let mut matches: Vec<ScanMatch> = Vec::new();
+            scan_database(&conn, &regex_set, &patterns, &mut matches, usize::MAX)?;
+
+            if !matches.is_empty() {
+                println!("{}:", path.display());
+                if self.json {
+                    // In JSON mode, collect all matches
+                    all_matches.extend(matches.iter().cloned());
+                } else {
+                    Self::display_matches(&matches, self.verbose);
+                }
+                files_with_matches += 1;
+            }
+        }
+
+        // Print summary
+        if self.json {
+            println!("{}", serde_json::to_string_pretty(&all_matches)?);
+        } else if files_with_matches == 0 && skipped_files == 0 {
+            println!("No potential secrets found.");
+        } else {
+            println!(
+                "\nSummary: Found potential secrets in {} of {} database(s).",
+                files_with_matches, num_files
+            );
+        }
+
+        // Report skipped files and return error if any were skipped
+        let total_skipped = skipped_entries + skipped_files;
+        if total_skipped > 0 {
+            eprintln!(
+                "WARNING: {} file(s) could not be processed. Results may be incomplete.",
+                total_skipped
+            );
+            return Err(format!(
+                "Scan incomplete: {} file(s) could not be processed",
+                total_skipped
+            )
+            .into());
+        }
+
+        Ok(())
+    }
+
     fn run_scan(&self, conn: &Connection) -> Result<Vec<ScanMatch>, Box<dyn std::error::Error>> {
         let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
 
@@ -605,14 +763,13 @@ impl ScanCommand {
         }
 
         let mut matches: Vec<ScanMatch> = Vec::new();
-        let limit = if self.limit == 0 { usize::MAX } else { self.limit };
 
         if let Some(ref histfile) = self.histfile {
             let content = fs::read(histfile)?;
             let shellname = self.shellname.clone().unwrap_or_else(|| detect_shell_format(&content));
-            scan_histfile(&content, &shellname, &regex_set, &patterns, &mut matches, limit)?;
+            scan_histfile(&content, &shellname, &regex_set, &patterns, &mut matches, usize::MAX)?;
         } else {
-            scan_database(conn, &regex_set, &patterns, &mut matches, limit)?;
+            scan_database(conn, &regex_set, &patterns, &mut matches, usize::MAX)?;
         }
 
         Ok(matches)
@@ -962,13 +1119,20 @@ impl SyncCommand {
         if !self.export_only {
             let entries = fs::read_dir(dirname)?;
             let db_extension = OsStr::new("db");
+            let filter_secrets = !self.no_secret_filter;
             for entry in entries {
                 let path = entry?.path();
                 if path.extension() == Some(db_extension) && output_path != path {
                     print!("Syncing from {}...", path.to_string_lossy());
-                    let (other_count, after_count) =
-                        Self::merge_database_from_file(&mut conn, path)?;
-                    println!("done, considered {other_count} rows and added {after_count}");
+                    let (other_count, added_count, filtered_count) =
+                        Self::merge_database_from_file_filtered(&mut conn, path, filter_secrets)?;
+                    if filtered_count > 0 {
+                        println!(
+                            "done, considered {other_count} rows, added {added_count}, filtered {filtered_count}"
+                        );
+                    } else {
+                        println!("done, considered {other_count} rows and added {added_count}");
+                    }
                 }
             }
         }
@@ -1090,43 +1254,96 @@ impl SyncCommand {
         Ok(())
     }
 
-    // Merge history from the database file at `path` into the current database.
-    fn merge_database_from_file(
+    /// Merge history from a database file with optional secret filtering.
+    /// Returns (records_considered, records_added, records_filtered).
+    fn merge_database_from_file_filtered(
         conn: &mut Connection,
         path: PathBuf,
-    ) -> Result<(i64, i64), Box<dyn std::error::Error>> {
+        filter_secrets: bool,
+    ) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
         let tx = conn.transaction()?;
         let before_count: i64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
         tx.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
 
-        // Merge all records from the other database
-        tx.execute(
-            r#"
+        let mut filtered_count: i64 = 0;
+
+        if filter_secrets {
+            // Build secret patterns for filtering (use "critical" confidence by default)
+            let (patterns, regex_set) = build_secret_patterns("critical")?;
+
+            if patterns.is_empty() {
+                // No patterns, just do regular merge
+                tx.execute(
+                    r#"
 INSERT OR IGNORE INTO main.command_history (
-    session_id,
-    full_command,
-    shellname,
-    hostname,
-    username,
-    working_directory,
-    exit_status,
-    start_unix_timestamp,
-    end_unix_timestamp
+    session_id, full_command, shellname, hostname, username,
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
 )
-SELECT session_id,
-    full_command,
-    shellname,
-    hostname,
-    username,
-    working_directory,
-    exit_status,
-    start_unix_timestamp,
-    end_unix_timestamp
+SELECT session_id, full_command, shellname, hostname, username,
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
 FROM other.command_history
 "#,
-            (),
-        )?;
+                    (),
+                )?;
+            } else {
+                // Fetch records from other database and filter
+                let mut stmt = tx.prepare(
+                    r#"
+SELECT session_id, full_command, shellname, hostname, username,
+       working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+FROM other.command_history
+"#,
+                )?;
+
+                let mut rows = stmt.query([])?;
+                while let Some(row) = rows.next()? {
+                    let full_command: Vec<u8> = row.get(1)?;
+
+                    // Check if command matches any secret pattern
+                    if regex_set.is_match(&full_command) {
+                        filtered_count += 1;
+                        continue;
+                    }
+
+                    // Insert the record if it doesn't match any secret pattern
+                    tx.execute(
+                        r#"
+INSERT OR IGNORE INTO main.command_history (
+    session_id, full_command, shellname, hostname, username,
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+"#,
+                        (
+                            row.get::<_, i64>(0)?,
+                            &full_command,
+                            row.get::<_, String>(2)?,
+                            row.get::<_, Option<Vec<u8>>>(3)?,
+                            row.get::<_, Option<Vec<u8>>>(4)?,
+                            row.get::<_, Option<Vec<u8>>>(5)?,
+                            row.get::<_, Option<i64>>(6)?,
+                            row.get::<_, Option<i64>>(7)?,
+                            row.get::<_, Option<i64>>(8)?,
+                        ),
+                    )?;
+                }
+            }
+        } else {
+            // No filtering, just do regular merge
+            tx.execute(
+                r#"
+INSERT OR IGNORE INTO main.command_history (
+    session_id, full_command, shellname, hostname, username,
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+)
+SELECT session_id, full_command, shellname, hostname, username,
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+FROM other.command_history
+"#,
+                (),
+            )?;
+        }
 
         // Count records after the merge
         let after_count: i64 =
@@ -1139,7 +1356,7 @@ FROM other.command_history
 
         tx.commit()?;
         conn.execute("DETACH DATABASE other", ())?;
-        Ok((other_count, after_count - before_count))
+        Ok((other_count, after_count - before_count, filtered_count))
     }
 
     fn handle_server_mode(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -1153,10 +1370,22 @@ FROM other.command_history
 
         let mode = mode.trim();
 
-        match mode {
+        // Check for v2 protocol modes
+        let (base_mode, options) = if mode.ends_with("-v2") {
+            // v2 protocol: read options JSON from next line
+            let mut options_json = String::new();
+            std::io::stdin().read_line(&mut options_json)?;
+            let options: SyncOptions = serde_json::from_str(options_json.trim())
+                .map_err(|e| format!("Failed to parse v2 protocol options: {e}. Client and server may have incompatible versions."))?;
+            (mode.strip_suffix("-v2").unwrap(), options)
+        } else {
+            (mode, SyncOptions::default())
+        };
+
+        match base_mode {
             "send" => {
                 // Server receives database from client
-                self.receive_database(&mut std::io::stdin(), conn)?;
+                self.receive_database_with_options(&mut std::io::stdin(), conn, &options)?;
             }
             "receive" => {
                 // Server sends database to client
@@ -1164,13 +1393,69 @@ FROM other.command_history
             }
             "bidirectional" => {
                 // Server receives then sends
-                self.receive_database(&mut std::io::stdin(), conn)?;
+                self.receive_database_with_options(&mut std::io::stdin(), conn, &options)?;
                 self.send_database(&mut std::io::stdout(), conn)?;
+            }
+            "scrub" => {
+                // Remote scrub: execute scrub and return result
+                let result = self.execute_remote_scrub(conn, &options)?;
+                println!("{result}");
             }
             _ => return Err(Box::from(format!("Unknown sync mode: {mode}"))),
         }
 
         Ok(())
+    }
+
+    /// Execute scrub operation as requested by remote client
+    fn execute_remote_scrub(
+        &self,
+        conn: &Connection,
+        options: &SyncOptions,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let dry_run = options.scrub_dry_run.unwrap_or(false);
+        let confidence = options.scrub_confidence.as_deref().unwrap_or("critical");
+
+        let mut matches: Vec<ScanMatch> = Vec::new();
+
+        if options.scrub_scan.unwrap_or(false) {
+            // Use secret detection
+            let (patterns, regex_set) = build_secret_patterns(confidence)?;
+            if !patterns.is_empty() {
+                scan_database(conn, &regex_set, &patterns, &mut matches, usize::MAX)?;
+            }
+        } else if let Some(ref pattern) = options.scrub {
+            // Use explicit pattern
+            let mut stmt = conn.prepare(
+                "SELECT rowid, full_command, start_unix_timestamp, working_directory FROM command_history WHERE INSTR(full_command, ?) > 0",
+            )?;
+            let mut rows = stmt.query([pattern.as_bytes()])?;
+            while let Some(row) = rows.next()? {
+                matches.push(ScanMatch {
+                    rowid: row.get(0)?,
+                    command: String::from_utf8_lossy(&row.get::<_, Vec<u8>>(1)?).to_string(),
+                    pattern: "manual".to_string(),
+                    timestamp: row.get(2)?,
+                    working_directory: row
+                        .get::<_, Option<Vec<u8>>>(3)?
+                        .map(|v| String::from_utf8_lossy(&v).to_string()),
+                    original_line: None,
+                });
+            }
+        } else {
+            return Err("Remote scrub requires --scan or a pattern".into());
+        }
+
+        if matches.is_empty() {
+            return Ok("No entries matched for scrubbing.".to_string());
+        }
+
+        if dry_run {
+            return Ok(format!("Dry-run: {} entries would be scrubbed.", matches.len()));
+        }
+
+        let count = scrub_from_database(conn, &matches)?;
+        Ok(format!("Scrubbed {} entries from remote database.", count))
     }
 
     fn send_database<W: Write>(
@@ -1200,6 +1485,17 @@ FROM other.command_history
         reader: &mut R,
         conn: &mut Connection,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let options =
+            SyncOptions { no_secret_filter: Some(self.no_secret_filter), ..Default::default() };
+        self.receive_database_with_options(reader, conn, &options)
+    }
+
+    fn receive_database_with_options<R: Read>(
+        &self,
+        reader: &mut R,
+        conn: &mut Connection,
+        options: &SyncOptions,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Receive database size (8 bytes)
         let mut size_bytes = [0u8; 8];
         reader.read_exact(&mut size_bytes)?;
@@ -1213,18 +1509,28 @@ FROM other.command_history
         let temp_file = tempfile::NamedTempFile::new()?;
         std::fs::write(temp_file.path(), &data)?;
 
-        // Use the existing merge function to merge directly into the main database
-        let (other_count, added_count) =
-            Self::merge_database_from_file(conn, temp_file.path().to_path_buf())?;
+        // Determine if we should filter secrets
+        let filter_secrets = !options.no_secret_filter.unwrap_or(false);
+
+        // Use the merge function with optional secret filtering
+        let (other_count, added_count, filtered_count) = Self::merge_database_from_file_filtered(
+            conn,
+            temp_file.path().to_path_buf(),
+            filter_secrets,
+        )?;
 
         // Get current hostname and database path
         let current_hostname = pxh::get_hostname();
         let current_db_path =
             conn.path().map(|p| p.to_string()).unwrap_or_else(|| "in-memory".to_string());
 
-        eprintln!(
+        let mut msg = format!(
             "{current_hostname}: Merged into {current_db_path} considered {other_count} entries, added {added_count} entries"
         );
+        if filtered_count > 0 {
+            msg.push_str(&format!(", filtered {filtered_count} potential secrets"));
+        }
+        eprintln!("{msg}");
         Ok(())
     }
 }
@@ -1294,7 +1600,258 @@ impl PrintableCommand for ScrubCommand {
 
 impl ScrubCommand {
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Handle directory mode
+        if let Some(ref dir) = self.dir {
+            return self.go_dir_mode(dir);
+        }
+
+        // Handle remote mode
+        if let Some(ref remote) = self.remote {
+            return self.go_remote_mode(remote);
+        }
+
+        // Default: local database mode
         if self.scan { self.go_scan_mode(&conn) } else { self.go_interactive_mode(conn) }
+    }
+
+    fn go_dir_mode(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        if !dir.exists() {
+            return Err(format!("Directory does not exist: {}", dir.display()).into());
+        }
+
+        // Build patterns once before the loop for efficiency
+        let (patterns, regex_set) = if self.scan {
+            let result = build_secret_patterns(&self.confidence)?;
+            if result.0.is_empty() {
+                println!("No patterns available for confidence level '{}'.", self.confidence);
+                return Ok(());
+            }
+            result
+        } else if self.contraband.is_none() {
+            return Err("Directory mode requires --scan or a contraband pattern".into());
+        } else {
+            (vec![], regex::bytes::RegexSet::empty())
+        };
+
+        let db_extension = OsStr::new("db");
+        let mut entries: Vec<_> = Vec::new();
+        let mut skipped_entries = 0usize;
+        for entry_result in fs::read_dir(dir)? {
+            match entry_result {
+                Ok(entry) => {
+                    if entry.path().extension() == Some(db_extension) {
+                        entries.push(entry);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: Failed to read directory entry: {e}");
+                    skipped_entries += 1;
+                }
+            }
+        }
+
+        if entries.is_empty() {
+            println!("No .db files found in {}", dir.display());
+            return Ok(());
+        }
+
+        println!("Found {} database files in {}", entries.len(), dir.display());
+
+        // First pass: count total matches for confirmation
+        let mut total_matches = 0;
+        let mut skipped_files = 0usize;
+        let mut file_match_counts: Vec<(PathBuf, Vec<ScanMatch>)> = Vec::new();
+
+        for entry in &entries {
+            let path = entry.path();
+            print!("Scanning {}...", path.display());
+
+            let conn = match Connection::open(&path) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!(" failed to open: {e}");
+                    skipped_files += 1;
+                    continue;
+                }
+            };
+
+            // Initialize schema if needed
+            let schema = include_str!("base_schema.sql");
+            if let Err(e) = conn.execute_batch(schema) {
+                eprintln!(" schema error: {e}");
+                skipped_files += 1;
+                continue;
+            }
+
+            let mut matches: Vec<ScanMatch> = Vec::new();
+            if self.scan {
+                scan_database(&conn, &regex_set, &patterns, &mut matches, usize::MAX)?;
+            } else if let Some(ref contraband) = self.contraband {
+                let mut stmt = conn.prepare(
+                    "SELECT rowid, full_command, start_unix_timestamp, working_directory FROM command_history WHERE INSTR(full_command, ?) > 0"
+                )?;
+                let mut rows = stmt.query([contraband.as_bytes()])?;
+                while let Some(row) = rows.next()? {
+                    matches.push(ScanMatch {
+                        rowid: row.get(0)?,
+                        command: String::from_utf8_lossy(&row.get::<_, Vec<u8>>(1)?).to_string(),
+                        pattern: "manual".to_string(),
+                        timestamp: row.get(2)?,
+                        working_directory: row
+                            .get::<_, Option<Vec<u8>>>(3)?
+                            .map(|v| String::from_utf8_lossy(&v).to_string()),
+                        original_line: None,
+                    });
+                }
+            }
+
+            println!(" {} entries", matches.len());
+            total_matches += matches.len();
+            if !matches.is_empty() {
+                file_match_counts.push((path, matches));
+            }
+        }
+
+        // Report skipped files before proceeding
+        let total_skipped = skipped_entries + skipped_files;
+        if total_skipped > 0 {
+            eprintln!(
+                "WARNING: {} file(s) could not be processed. Results may be incomplete.",
+                total_skipped
+            );
+        }
+
+        if total_matches == 0 {
+            println!("\nNo entries found to scrub.");
+            if total_skipped > 0 {
+                return Err(format!(
+                    "Scrub incomplete: {} file(s) could not be processed",
+                    total_skipped
+                )
+                .into());
+            }
+            return Ok(());
+        }
+
+        println!("\nFound {} entries across {} file(s).", total_matches, file_match_counts.len());
+
+        if self.dry_run {
+            println!("Dry-run mode: no changes made.");
+            if total_skipped > 0 {
+                return Err(format!(
+                    "Scrub incomplete: {} file(s) could not be processed",
+                    total_skipped
+                )
+                .into());
+            }
+            return Ok(());
+        }
+
+        // Confirmation prompt (unless --yes is specified)
+        if !self.yes {
+            print!("Proceed with scrubbing? [y/N] ");
+            io::stdout().flush()?;
+            let mut input = String::new();
+            io::stdin().read_line(&mut input)?;
+            if !input.trim().eq_ignore_ascii_case("y") {
+                println!("Aborted.");
+                return Ok(());
+            }
+        }
+
+        // Second pass: actually scrub
+        let mut total_scrubbed = 0;
+        let mut files_modified = 0;
+
+        for (path, matches) in file_match_counts {
+            let conn = Connection::open(&path)?;
+            let count = scrub_from_database(&conn, &matches)?;
+            total_scrubbed += count;
+            files_modified += 1;
+        }
+
+        println!("Scrubbed {} entries from {} file(s).", total_scrubbed, files_modified);
+
+        if total_skipped > 0 {
+            return Err(format!(
+                "Scrub incomplete: {} file(s) could not be processed",
+                total_skipped
+            )
+            .into());
+        }
+
+        Ok(())
+    }
+
+    fn go_remote_mode(&self, remote: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Validate inputs early - fail fast before establishing SSH connection
+        if !self.scan && self.contraband.is_none() {
+            return Err("Remote scrub requires --scan or a contraband pattern".into());
+        }
+
+        // Build the scrub options to send via the v2 protocol
+        let scrub_pattern = if self.scan {
+            None // Will use secret detection on remote
+        } else {
+            self.contraband.clone()
+        };
+
+        let remote_pxh = self.remote_pxh.as_deref().unwrap_or("pxh");
+        let remote_pxh = pxh::helpers::determine_remote_pxh_path(remote_pxh);
+
+        let remote_db_path =
+            self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
+
+        // Parse SSH command
+        let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
+
+        // Build remote command - v2 protocol for scrub
+        let remote_command =
+            format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
+
+        let mut cmd = std::process::Command::new(&ssh_cmd);
+        cmd.args(&ssh_args)
+            .arg(remote)
+            .arg(&remote_command)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit());
+
+        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {e}"))?;
+
+        let mut stdin_writer = child.stdin.take().ok_or("Failed to get stdin from SSH process")?;
+        let mut stdout_reader =
+            child.stdout.take().ok_or("Failed to get stdout from SSH process")?;
+
+        // Send scrub-v2 mode with options
+        let options = SyncOptions {
+            scrub: scrub_pattern,
+            scrub_scan: if self.scan { Some(true) } else { None },
+            scrub_confidence: if self.scan { Some(self.confidence.clone()) } else { None },
+            scrub_dry_run: if self.dry_run { Some(true) } else { None },
+            no_secret_filter: None,
+        };
+
+        stdin_writer.write_all(b"scrub-v2\n")?;
+        let options_json = serde_json::to_string(&options)?;
+        stdin_writer.write_all(options_json.as_bytes())?;
+        stdin_writer.write_all(b"\n")?;
+        stdin_writer.flush()?;
+
+        // Close stdin to signal we're done
+        drop(stdin_writer);
+
+        // Read response from remote
+        let mut response = String::new();
+        stdout_reader.read_to_string(&mut response)?;
+
+        let status = child.wait()?;
+        if !status.success() {
+            return Err(format!("Remote scrub failed: {}", response).into());
+        }
+
+        println!("{}", response.trim());
+        Ok(())
     }
 
     fn go_scan_mode(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
