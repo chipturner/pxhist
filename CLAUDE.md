@@ -52,8 +52,8 @@ Two sync modes:
 The sync implementation uses `create_filtered_db_copy()` to handle `--since` filtering and `merge_database_from_file()` for deduplication via `INSERT OR IGNORE`.
 
 ## Code Style Guidelines
-- **Imports**: Group by Std, External, Crate using `imports_granularity=Crate` and `group_imports=StdExternalCrate`
-- **Formatting**: rustfmt with `edition=2024` (via `just fmt`), `use_small_heuristics=max` in rustfmt.toml
+- **Imports**: Group by Std, External, Crate
+- **Formatting**: `cargo fmt` (via `just fmt`), config in rustfmt.toml
 - **Naming**:
   - `snake_case` for variables, functions, methods
   - `CamelCase` for types, structs, enums
