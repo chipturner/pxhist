@@ -4,15 +4,15 @@ use serde::Deserialize;
 
 const CRITICAL_PATTERN_NAMES: &[&str] = &[
     // AWS - actual key formats
-    "AWS API Key",              // AKIA[0-9A-Z]{16}
-    "AWS Access Key ID Value",  // (AKIA|ASIA|...)[A-Z0-9]{16}
-    "AWS MWS key",              // amzn.mws.uuid format
-    "AWS AppSync GraphQL Key",  // da2-[a-z0-9]{26}
+    "AWS API Key",             // AKIA[0-9A-Z]{16}
+    "AWS Access Key ID Value", // (AKIA|ASIA|...)[A-Z0-9]{16}
+    "AWS MWS key",             // amzn.mws.uuid format
+    "AWS AppSync GraphQL Key", // da2-[a-z0-9]{26}
     // GitHub - token prefixes
-    "Github App Token",            // (ghu|ghs)_[0-9a-zA-Z]{36}
-    "Github OAuth Access Token",   // gho_[0-9a-zA-Z]{36}
+    "Github App Token",             // (ghu|ghs)_[0-9a-zA-Z]{36}
+    "Github OAuth Access Token",    // gho_[0-9a-zA-Z]{36}
     "Github Personal Access Token", // ghp_[0-9a-zA-Z]{36}
-    "Github Refresh Token",        // ghr_[0-9a-zA-Z]{76}
+    "Github Refresh Token",         // ghr_[0-9a-zA-Z]{76}
     // Slack
     "Slack Token",   // xox[baprs]-
     "Slack Webhook", // hooks.slack.com/services/
