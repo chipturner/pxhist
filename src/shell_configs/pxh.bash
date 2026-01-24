@@ -30,12 +30,24 @@ _pxh_random() {
     od -An -N6 -tu8 < /dev/urandom | tr -d '\n '
 }
 
+_pxh_recall() {
+    local selected
+    selected=$(pxh --db "$PXH_DB_PATH" recall 2>/dev/null)
+    if [[ -n "$selected" ]]; then
+        READLINE_LINE="$selected"
+        READLINE_POINT=${#selected}
+    fi
+}
+
 _pxh_init() {
     PXH_SESSION_ID=$(_pxh_random)
     PXH_HOSTNAME=$(hostname -s)
     export PXH_DB_PATH=${PXH_DB_PATH:-$HOME/.pxh/pxh.db}
 
     [ ! -d $(dirname $PXH_DB_PATH) ] && mkdir -p -m 0700 $(dirname $PXH_DB_PATH)
+
+    # Bind Ctrl-R to pxh recall
+    bind -x '"\C-r": _pxh_recall'
 }
 
 _pxh_init

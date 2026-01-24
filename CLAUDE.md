@@ -13,12 +13,13 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Run integration tests: `cargo test --test integration_tests`
 - Run specific test file: `cargo test --test sync_test`
 - Format code: `just fmt`
-- Lint: `cargo clippy`
+- Lint: `cargo clippy -- -D warnings`
 - Upgrade dependencies: `just cargo-upgrade`
 - Coverage: `just coverage` or `just coverage-detailed`
 
 ## Workflow
-- After running tests and reaching a stopping point, run `cargo build --release` in the background
+- After tests pass, run `cargo clippy -- -D warnings` to catch any warnings
+- After validation and reaching a stopping point, run `cargo build --release` in the background
 
 ## Architecture Overview
 
@@ -98,6 +99,13 @@ Located in `pxh::test_utils` (src/lib.rs) and `tests/common/mod.rs`:
 
 ### Testing Sync
 Use stdin/stdout mode with `--stdin-stdout` flag for testing sync without SSH overhead. The `spawn_sync_processes()` helper creates bidirectionally connected pxh processes.
+
+### Testing TUI Components
+For testing interactive TUI components (like `pxh recall`), use tmux to capture and validate screen output.
+
+**Important:** When interacting with tmux panes, ALWAYS use `tmux-cli send` instead of plain `tmux send-keys`. Plain tmux commands are unreliable because they send text and Enter simultaneously without any delay, causing race conditions where the Enter key is lost before the target application can process the text input.
+
+Use the `tmux-cli` skill for TUI validation workflows.
 
 ## Key Implementation Details
 

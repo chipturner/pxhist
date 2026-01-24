@@ -58,6 +58,8 @@ struct PxhArgs {
 enum Commands {
     #[clap(visible_alias = "s", about = "search for and display history entries")]
     Show(ShowCommand),
+    #[clap(visible_alias = "r", about = "interactive history search (Ctrl-R replacement)")]
+    Recall(pxh::recall::RecallCommand),
     #[clap(about = "install pxh helpers by modifying your shell rc file")]
     Install(InstallCommand),
     #[clap(about = "import history entries from your existing shell history or from an export")]
@@ -2136,6 +2138,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Scan(cmd) => {
+            cmd.go(make_conn()?)?;
+        }
+        Commands::Recall(cmd) => {
             cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {

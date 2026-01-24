@@ -31,6 +31,16 @@ _pxh_random() {
     print $(( int(rand48() * 1 << 48) ))
 }
 
+_pxh_recall_widget() {
+    local selected
+    selected=$(pxh --db "$PXH_DB_PATH" recall 2>&1)
+    if [[ -n "$selected" ]]; then
+        BUFFER="$selected"
+        CURSOR=${#BUFFER}
+        zle reset-prompt
+    fi
+}
+
 _pxh_init() {
     PXH_SESSION_ID=$(_pxh_random)
     PXH_HOSTNAME=$(hostname -s)
@@ -42,6 +52,10 @@ _pxh_init() {
     autoload -Uz add-zsh-hook
     add-zsh-hook zshaddhistory _pxh_addhistory
     add-zsh-hook precmd _pxh_update_last_status
+
+    # Bind Ctrl-R to pxh recall
+    zle -N _pxh_recall_widget
+    bindkey '^R' _pxh_recall_widget
 }
 
 _pxh_init
