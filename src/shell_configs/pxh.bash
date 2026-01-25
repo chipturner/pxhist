@@ -32,7 +32,7 @@ _pxh_random() {
 
 _pxh_recall() {
     local selected
-    selected=$(pxh --db "$PXH_DB_PATH" recall --query "$READLINE_LINE" 2>/dev/null)
+    selected=$(pxh --db "$PXH_DB_PATH" recall --shell-mode --query "$READLINE_LINE" 2>/dev/null)
     if [[ "$selected" == run:* ]]; then
         # Execute immediately
         READLINE_LINE="${selected#run:}"

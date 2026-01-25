@@ -61,6 +61,16 @@ fn sanitize_for_display(s: &str) -> String {
 
 const PREVIEW_HEIGHT: usize = 5; // Height of preview pane in lines
 
+fn format_duration(secs: i64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m {}s", secs / 60, secs % 60)
+    } else {
+        format!("{}h {}m {}s", secs / 3600, (secs % 3600) / 60, secs % 60)
+    }
+}
+
 pub struct RecallTui {
     engine: SearchEngine,
     filter_mode: FilterMode,
@@ -77,6 +87,7 @@ pub struct RecallTui {
     keymap_mode: KeymapMode,
     show_preview: bool,
     preview_config: PreviewConfig,
+    shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
     #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
 }
@@ -87,6 +98,7 @@ impl RecallTui {
         initial_mode: FilterMode,
         initial_query: Option<String>,
         config: &RecallConfig,
+        shell_mode: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let query = initial_query.as_deref().unwrap_or("");
         let query_for_load = if query.is_empty() { None } else { Some(query) };
@@ -137,6 +149,7 @@ impl RecallTui {
             keymap_mode: config.initial_keymap_mode(),
             show_preview: config.show_preview,
             preview_config: config.preview.clone(),
+            shell_mode,
             #[cfg(not(target_os = "windows"))]
             keyboard_enhanced,
         };
@@ -226,13 +239,21 @@ impl RecallTui {
                 match self.handle_key(key)? {
                     KeyAction::Continue => continue,
                     KeyAction::Select => {
-                        let result = self.get_selected_command().map(|cmd| format!("run:{cmd}"));
                         self.cleanup()?;
+                        if !self.shell_mode {
+                            self.print_entry_details();
+                            return Ok(None);
+                        }
+                        let result = self.get_selected_command().map(|cmd| format!("run:{cmd}"));
                         return Ok(result);
                     }
                     KeyAction::Edit => {
-                        let result = self.get_selected_command().map(|cmd| format!("edit:{cmd}"));
                         self.cleanup()?;
+                        if !self.shell_mode {
+                            self.print_entry_details();
+                            return Ok(None);
+                        }
+                        let result = self.get_selected_command().map(|cmd| format!("edit:{cmd}"));
                         return Ok(result);
                     }
                     KeyAction::Cancel => {
@@ -241,6 +262,74 @@ impl RecallTui {
                     }
                 }
             }
+        }
+    }
+
+    fn print_entry_details(&self) {
+        use crossterm::style::{Attribute, SetAttribute};
+
+        let Some(entry) =
+            self.filtered_indices.get(self.selected_index).and_then(|&idx| self.entries.get(idx))
+        else {
+            return;
+        };
+
+        let mut stdout = std::io::stdout();
+
+        // Command (bold)
+        let _ = execute!(stdout, SetAttribute(Attribute::Bold));
+        println!("{}", entry.command);
+        let _ = execute!(stdout, SetAttribute(Attribute::Reset));
+
+        // Timestamp
+        if let Some(ts) = entry.timestamp {
+            let datetime = chrono::DateTime::from_timestamp(ts, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let relative = format_relative_time(Some(ts));
+            let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
+            print!("  Time: ");
+            let _ = execute!(stdout, ResetColor);
+            println!("{datetime} ({relative} ago)");
+        }
+
+        // Directory
+        if let Some(ref dir) = entry.working_directory {
+            let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
+            print!("   Dir: ");
+            let _ = execute!(stdout, ResetColor);
+            println!("{}", String::from_utf8_lossy(dir));
+        }
+
+        // Exit status
+        if let Some(status) = entry.exit_status {
+            let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
+            print!("Status: ");
+            let _ = execute!(stdout, ResetColor);
+            if status == 0 {
+                let _ = execute!(stdout, SetForegroundColor(Color::Green));
+                println!("0 (success)");
+            } else {
+                let _ = execute!(stdout, SetForegroundColor(Color::Red));
+                println!("{status} (error)");
+            }
+            let _ = execute!(stdout, ResetColor);
+        }
+
+        // Duration
+        if let Some(secs) = entry.duration_secs {
+            let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
+            print!("  Took: ");
+            let _ = execute!(stdout, ResetColor);
+            println!("{}", format_duration(secs));
+        }
+
+        // Hostname
+        if let Some(ref host) = entry.hostname {
+            let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
+            print!("  Host: ");
+            let _ = execute!(stdout, ResetColor);
+            println!("{}", String::from_utf8_lossy(host));
         }
     }
 
@@ -693,14 +782,7 @@ impl RecallTui {
         if self.preview_config.show_duration
             && let Some(secs) = entry.duration_secs
         {
-            let duration_str = if secs < 60 {
-                format!("Duration: {secs}s")
-            } else if secs < 3600 {
-                format!("Duration: {}m {}s", secs / 60, secs % 60)
-            } else {
-                format!("Duration: {}h {}m", secs / 3600, (secs % 3600) / 60)
-            };
-            status_parts.push(duration_str);
+            status_parts.push(format!("Duration: {}", format_duration(secs)));
         }
 
         if self.preview_config.show_hostname

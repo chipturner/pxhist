@@ -33,7 +33,7 @@ _pxh_random() {
 
 _pxh_recall_widget() {
     local selected
-    selected=$(pxh --db "$PXH_DB_PATH" recall --query "$BUFFER" 2>&1)
+    selected=$(pxh --db "$PXH_DB_PATH" recall --shell-mode --query "$BUFFER" 2>&1)
     if [[ "$selected" == run:* ]]; then
         # Execute immediately
         BUFFER="${selected#run:}"

@@ -26,6 +26,8 @@ pub struct RecallCommand {
     pub timing: bool,
     #[clap(long, help = "Paint TUI once then exit (for profiling)")]
     pub paint_then_exit: bool,
+    #[clap(long, help = "Shell integration mode (outputs command for shell to execute)")]
+    pub shell_mode: bool,
 }
 
 /// Filter mode for recall search
@@ -93,7 +95,13 @@ impl RecallCommand {
 
         // TUI mode
         let tui_start = Instant::now();
-        let mut tui = RecallTui::new(engine, initial_mode, self.query.clone(), &config.recall)?;
+        let mut tui = RecallTui::new(
+            engine,
+            initial_mode,
+            self.query.clone(),
+            &config.recall,
+            self.shell_mode,
+        )?;
         let tui_init_time = tui_start.elapsed();
 
         if self.paint_then_exit {
