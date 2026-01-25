@@ -11,8 +11,10 @@ use super::command::FilterMode;
 pub struct HistoryEntry {
     pub command: String,
     pub timestamp: Option<i64>,
-    #[allow(dead_code)] // May be used in future for directory display
     pub working_directory: Option<BString>,
+    pub hostname: Option<BString>,
+    pub exit_status: Option<i32>,
+    pub duration_secs: Option<i64>,
 }
 
 /// Search engine that combines SQLite queries with nucleo fuzzy matching
@@ -20,76 +22,147 @@ pub struct SearchEngine {
     conn: Connection,
     working_directory: PathBuf,
     matcher: Matcher,
+    result_limit: usize,
 }
 
 impl SearchEngine {
-    pub fn new(conn: Connection, working_directory: PathBuf) -> Self {
-        SearchEngine { conn, working_directory, matcher: Matcher::new(Config::DEFAULT) }
+    pub fn new(conn: Connection, working_directory: PathBuf, result_limit: usize) -> Self {
+        SearchEngine {
+            conn,
+            working_directory,
+            matcher: Matcher::new(Config::DEFAULT),
+            result_limit,
+        }
     }
 
-    /// Load history entries from the database
+    /// Load history entries from the database, optionally filtered by a search query
     pub fn load_entries(
         &self,
         filter_mode: FilterMode,
+        query: Option<&str>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let entries = match filter_mode {
-            FilterMode::Directory => self.load_entries_for_directory()?,
-            FilterMode::Global => self.load_all_entries()?,
+            FilterMode::Directory => self.load_entries_for_directory(query)?,
+            FilterMode::Global => self.load_all_entries(query)?,
         };
         Ok(entries)
     }
 
-    fn load_all_entries(&self) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare(
+    fn load_all_entries(
+        &self,
+        query: Option<&str>,
+    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
+        // Build WHERE clause for search filter
+        let (where_clause, search_param) = match query {
+            Some(q) if !q.is_empty() => {
+                // Use LIKE with % wildcards for case-insensitive substring match
+                // The LIKE is applied in the subquery to filter before grouping
+                (
+                    "WHERE full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string(),
+                    Some(q.to_string()),
+                )
+            }
+            _ => (String::new(), None),
+        };
+
+        // Get full metadata from the most recent execution of each unique command
+        let sql = format!(
             r#"
-SELECT DISTINCT full_command, MAX(start_unix_timestamp) as ts, working_directory
-  FROM command_history
- GROUP BY full_command
- ORDER BY ts DESC
- LIMIT 5000
+SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
+       c.hostname, c.exit_status,
+       CASE WHEN c.end_unix_timestamp IS NOT NULL
+            THEN c.end_unix_timestamp - c.start_unix_timestamp
+            ELSE NULL END as duration
+  FROM command_history c
+ INNER JOIN (
+     SELECT full_command, MAX(start_unix_timestamp) as max_ts
+       FROM command_history
+      {where_clause}
+      GROUP BY full_command
+ ) latest ON c.full_command = latest.full_command
+         AND c.start_unix_timestamp = latest.max_ts
+ ORDER BY c.start_unix_timestamp DESC
+ LIMIT {}
 "#,
-        )?;
+            self.result_limit
+        );
 
-        let rows = stmt.query_map([], |row| {
-            let command: Vec<u8> = row.get(0)?;
-            let timestamp: Option<i64> = row.get(1)?;
-            let working_directory: Option<Vec<u8>> = row.get(2)?;
-            Ok(HistoryEntry {
-                command: String::from_utf8_lossy(&command).to_string(),
-                timestamp,
-                working_directory: working_directory.map(BString::from),
-            })
-        })?;
+        let mut stmt = self.conn.prepare(&sql)?;
 
-        let entries: Result<Vec<_>, _> = rows.collect();
-        Ok(entries?)
+        let entries: Vec<HistoryEntry> = if let Some(ref param) = search_param {
+            stmt.query_map([param], |row| self.row_to_entry(row))?.collect::<Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map([], |row| self.row_to_entry(row))?.collect::<Result<Vec<_>, _>>()?
+        };
+
+        Ok(entries)
     }
 
-    fn load_entries_for_directory(&self) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        let mut stmt = self.conn.prepare(
+    fn row_to_entry(&self, row: &rusqlite::Row) -> rusqlite::Result<HistoryEntry> {
+        let command: Vec<u8> = row.get(0)?;
+        let timestamp: Option<i64> = row.get(1)?;
+        let working_directory: Option<Vec<u8>> = row.get(2)?;
+        let hostname: Option<Vec<u8>> = row.get(3)?;
+        let exit_status: Option<i32> = row.get(4)?;
+        let duration_secs: Option<i64> = row.get(5)?;
+        Ok(HistoryEntry {
+            command: String::from_utf8_lossy(&command).to_string(),
+            timestamp,
+            working_directory: working_directory.map(BString::from),
+            hostname: hostname.map(BString::from),
+            exit_status,
+            duration_secs,
+        })
+    }
+
+    fn load_entries_for_directory(
+        &self,
+        query: Option<&str>,
+    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
+        // Build additional WHERE clause for search filter
+        let (search_clause, search_param) = match query {
+            Some(q) if !q.is_empty() => (
+                "AND full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string(),
+                Some(q.to_string()),
+            ),
+            _ => (String::new(), None),
+        };
+
+        // Get full metadata from the most recent execution of each unique command in this directory
+        let sql = format!(
             r#"
-SELECT DISTINCT full_command, MAX(start_unix_timestamp) as ts, working_directory
-  FROM command_history
- WHERE working_directory = CAST(? as blob)
- GROUP BY full_command
- ORDER BY ts DESC
- LIMIT 5000
+SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
+       c.hostname, c.exit_status,
+       CASE WHEN c.end_unix_timestamp IS NOT NULL
+            THEN c.end_unix_timestamp - c.start_unix_timestamp
+            ELSE NULL END as duration
+  FROM command_history c
+ INNER JOIN (
+     SELECT full_command, MAX(start_unix_timestamp) as max_ts
+       FROM command_history
+      WHERE working_directory = CAST(? as blob)
+      {search_clause}
+      GROUP BY full_command
+ ) latest ON c.full_command = latest.full_command
+         AND c.start_unix_timestamp = latest.max_ts
+ ORDER BY c.start_unix_timestamp DESC
+ LIMIT {}
 "#,
-        )?;
+            self.result_limit
+        );
 
-        let rows = stmt.query_map([self.working_directory.to_string_lossy().as_ref()], |row| {
-            let command: Vec<u8> = row.get(0)?;
-            let timestamp: Option<i64> = row.get(1)?;
-            let working_directory: Option<Vec<u8>> = row.get(2)?;
-            Ok(HistoryEntry {
-                command: String::from_utf8_lossy(&command).to_string(),
-                timestamp,
-                working_directory: working_directory.map(BString::from),
-            })
-        })?;
+        let mut stmt = self.conn.prepare(&sql)?;
+        let dir_str = self.working_directory.to_string_lossy().to_string();
 
-        let entries: Result<Vec<_>, _> = rows.collect();
-        Ok(entries?)
+        let entries: Vec<HistoryEntry> = if let Some(ref param) = search_param {
+            stmt.query_map(rusqlite::params![dir_str, param], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            stmt.query_map([&dir_str], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+
+        Ok(entries)
     }
 
     /// Get the working directory for display

@@ -3,6 +3,7 @@ use std::{env, path::PathBuf};
 use clap::Parser;
 use rusqlite::Connection;
 
+use super::config::Config;
 use super::engine::SearchEngine;
 use super::tui::RecallTui;
 
@@ -12,6 +13,8 @@ pub struct RecallCommand {
     pub here: bool,
     #[clap(long, help = "Search across all directories (default)")]
     pub global: bool,
+    #[clap(long, short = 'q', help = "Initial search query")]
+    pub query: Option<String>,
 }
 
 /// Filter mode for recall search
@@ -25,6 +28,7 @@ pub enum FilterMode {
 
 impl RecallCommand {
     pub fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let config = Config::load();
         let initial_mode = if self.here { FilterMode::Directory } else { FilterMode::Global };
 
         let working_directory = env::var_os("PWD")
@@ -32,14 +36,14 @@ impl RecallCommand {
             .or_else(|| env::current_dir().ok())
             .unwrap_or_default();
 
-        let engine = SearchEngine::new(conn, working_directory);
-        let mut tui = RecallTui::new(engine, initial_mode)?;
+        let engine = SearchEngine::new(conn, working_directory, config.recall.result_limit);
+        let mut tui = RecallTui::new(engine, initial_mode, self.query.clone(), &config.recall)?;
 
         match tui.run()? {
-            Some(selected_command) => {
-                // Output the selected command to stdout
-                // The shell integration will capture this and put it in the buffer
-                print!("{selected_command}");
+            Some(selection) => {
+                // Output the selected command with mode prefix
+                // The shell integration will parse and handle accordingly
+                print!("{selection}");
                 Ok(())
             }
             None => {

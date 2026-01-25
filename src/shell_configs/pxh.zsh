@@ -33,9 +33,14 @@ _pxh_random() {
 
 _pxh_recall_widget() {
     local selected
-    selected=$(pxh --db "$PXH_DB_PATH" recall 2>&1)
-    if [[ -n "$selected" ]]; then
-        BUFFER="$selected"
+    selected=$(pxh --db "$PXH_DB_PATH" recall --query "$BUFFER" 2>&1)
+    if [[ "$selected" == run:* ]]; then
+        # Execute immediately
+        BUFFER="${selected#run:}"
+        zle accept-line
+    elif [[ "$selected" == edit:* ]]; then
+        # Place in buffer for editing
+        BUFFER="${selected#edit:}"
         CURSOR=${#BUFFER}
         zle reset-prompt
     fi

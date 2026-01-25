@@ -10,6 +10,7 @@ use crossterm::{
 };
 
 use super::command::FilterMode;
+use super::config::{KeymapMode, PreviewConfig, RecallConfig};
 use super::engine::{HistoryEntry, SearchEngine, format_relative_time};
 
 const SCROLL_MARGIN: usize = 5;
@@ -52,6 +53,8 @@ fn sanitize_for_display(s: &str) -> String {
     result
 }
 
+const PREVIEW_HEIGHT: usize = 5; // Height of preview pane in lines
+
 pub struct RecallTui {
     engine: SearchEngine,
     filter_mode: FilterMode,
@@ -64,14 +67,22 @@ pub struct RecallTui {
     tty: File,
     term_height: u16,
     term_width: u16,
+    keymap_mode: KeymapMode,
+    show_preview: bool,
+    preview_config: PreviewConfig,
 }
 
 impl RecallTui {
     pub fn new(
         engine: SearchEngine,
         initial_mode: FilterMode,
+        initial_query: Option<String>,
+        config: &RecallConfig,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let entries = engine.load_entries(initial_mode)?;
+        let query = initial_query.as_deref().unwrap_or("");
+        let query_for_load = if query.is_empty() { None } else { Some(query) };
+        let entries = engine.load_entries(initial_mode, query_for_load)?;
+        let query = query.to_string();
 
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
@@ -92,18 +103,23 @@ impl RecallTui {
         }
         tty.flush()?;
 
+        let cursor_position = query.len();
+
         let mut tui = RecallTui {
             engine,
             filter_mode: initial_mode,
             entries,
             filtered_indices: Vec::new(),
-            query: String::new(),
-            cursor_position: 0,
+            query,
+            cursor_position,
             selected_index: 0,
             scroll_offset: 0,
             tty,
             term_height,
             term_width,
+            keymap_mode: config.initial_keymap_mode(),
+            show_preview: config.show_preview,
+            preview_config: config.preview.clone(),
         };
 
         tui.update_filtered_indices();
@@ -112,7 +128,8 @@ impl RecallTui {
     }
 
     fn results_height(&self) -> usize {
-        self.term_height.saturating_sub(2) as usize
+        let base = self.term_height.saturating_sub(2) as usize;
+        if self.show_preview { base.saturating_sub(PREVIEW_HEIGHT) } else { base }
     }
 
     fn adjust_scroll_for_selection(&mut self) {
@@ -155,18 +172,14 @@ impl RecallTui {
     }
 
     fn update_filtered_indices(&mut self) {
-        if self.query.is_empty() {
-            self.filtered_indices = (0..self.entries.len()).collect();
-        } else {
-            let query_lower = self.query.to_lowercase();
-            self.filtered_indices = self
-                .entries
-                .iter()
-                .enumerate()
-                .filter(|(_, e)| e.command.to_lowercase().contains(&query_lower))
-                .map(|(i, _)| i)
-                .collect();
+        // Re-query the database with the current search query
+        // This ensures we search the full database, not just a cached subset
+        let query = if self.query.is_empty() { None } else { Some(self.query.as_str()) };
+        if let Ok(entries) = self.engine.load_entries(self.filter_mode, query) {
+            self.entries = entries;
         }
+        // All loaded entries match the query (filtered in SQL)
+        self.filtered_indices = (0..self.entries.len()).collect();
 
         if self.selected_index >= self.filtered_indices.len() {
             self.selected_index = 0;
@@ -175,8 +188,13 @@ impl RecallTui {
     }
 
     fn reload_entries(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.entries = self.engine.load_entries(self.filter_mode)?;
-        self.update_filtered_indices();
+        let query = if self.query.is_empty() { None } else { Some(self.query.as_str()) };
+        self.entries = self.engine.load_entries(self.filter_mode, query)?;
+        self.filtered_indices = (0..self.entries.len()).collect();
+        if self.selected_index >= self.filtered_indices.len() {
+            self.selected_index = 0;
+        }
+        self.adjust_scroll_for_selection();
         Ok(())
     }
 
@@ -196,7 +214,12 @@ impl RecallTui {
                 match self.handle_key(key)? {
                     KeyAction::Continue => continue,
                     KeyAction::Select => {
-                        let result = self.get_selected_command();
+                        let result = self.get_selected_command().map(|cmd| format!("run:{cmd}"));
+                        self.cleanup()?;
+                        return Ok(result);
+                    }
+                    KeyAction::Edit => {
+                        let result = self.get_selected_command().map(|cmd| format!("edit:{cmd}"));
                         self.cleanup()?;
                         return Ok(result);
                     }
@@ -223,69 +246,84 @@ impl RecallTui {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<KeyAction, Box<dyn std::error::Error>> {
+        match self.keymap_mode {
+            KeymapMode::Emacs => self.handle_key_emacs(key),
+            KeymapMode::VimInsert => self.handle_key_vim_insert(key),
+            KeymapMode::VimNormal => self.handle_key_vim_normal(key),
+        }
+    }
+
+    /// Handle common keys that work in all modes
+    fn handle_common_key(&mut self, key: KeyEvent) -> Option<KeyAction> {
         match key.code {
-            KeyCode::Esc => Ok(KeyAction::Cancel),
-            KeyCode::Enter => Ok(KeyAction::Select),
+            KeyCode::Enter => Some(KeyAction::Select),
+            KeyCode::Tab => Some(KeyAction::Edit),
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                Ok(KeyAction::Cancel)
+                Some(KeyAction::Cancel)
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.toggle_filter_mode()?;
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Up | KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.selected_index + 1 < self.filtered_indices.len() {
-                    self.selected_index += 1;
-                    self.adjust_scroll_for_selection();
-                }
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Down | KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.selected_index > 0 {
-                    self.selected_index -= 1;
-                    self.adjust_scroll_for_selection();
-                }
-                Ok(KeyAction::Continue)
+                let _ = self.toggle_filter_mode();
+                Some(KeyAction::Continue)
             }
             KeyCode::Up => {
-                if self.selected_index + 1 < self.filtered_indices.len() {
-                    self.selected_index += 1;
-                    self.adjust_scroll_for_selection();
-                }
-                Ok(KeyAction::Continue)
+                self.move_selection_up();
+                Some(KeyAction::Continue)
             }
             KeyCode::Down => {
-                if self.selected_index > 0 {
-                    self.selected_index -= 1;
-                    self.adjust_scroll_for_selection();
+                self.move_selection_down();
+                Some(KeyAction::Continue)
+            }
+            KeyCode::PageUp => {
+                self.page_up();
+                Some(KeyAction::Continue)
+            }
+            KeyCode::PageDown => {
+                self.page_down();
+                Some(KeyAction::Continue)
+            }
+            KeyCode::Char(c @ '1'..='9') if key.modifiers.contains(KeyModifiers::ALT) => {
+                let num = c.to_digit(10).unwrap() as usize;
+                let target_index = self.scroll_offset + (num - 1);
+                if target_index < self.filtered_indices.len() {
+                    self.selected_index = target_index;
+                    return Some(KeyAction::Select);
                 }
+                Some(KeyAction::Continue)
+            }
+            _ => None,
+        }
+    }
+
+    fn handle_key_emacs(&mut self, key: KeyEvent) -> Result<KeyAction, Box<dyn std::error::Error>> {
+        // Check common keys first
+        if let Some(action) = self.handle_common_key(key) {
+            return Ok(action);
+        }
+
+        match key.code {
+            KeyCode::Esc => Ok(KeyAction::Cancel),
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.move_selection_up();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.move_selection_down();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Backspace => {
-                if self.cursor_position > 0 {
-                    self.query.remove(self.cursor_position - 1);
-                    self.cursor_position -= 1;
-                    self.update_filtered_indices();
-                }
+                self.delete_char_before_cursor();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Delete => {
-                if self.cursor_position < self.query.len() {
-                    self.query.remove(self.cursor_position);
-                    self.update_filtered_indices();
-                }
+                self.delete_char_at_cursor();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Left => {
-                if self.cursor_position > 0 {
-                    self.cursor_position -= 1;
-                }
+                self.move_cursor_left();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Right => {
-                if self.cursor_position < self.query.len() {
-                    self.cursor_position += 1;
-                }
+                self.move_cursor_right();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Home | KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -297,37 +335,347 @@ impl RecallTui {
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.query = self.query[self.cursor_position..].to_string();
-                self.cursor_position = 0;
-                self.update_filtered_indices();
+                self.delete_to_line_start();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                if self.cursor_position > 0 {
-                    let before_cursor = &self.query[..self.cursor_position];
-                    let word_start = before_cursor
-                        .trim_end()
-                        .rfind(char::is_whitespace)
-                        .map(|i| i + 1)
-                        .unwrap_or(0);
-                    self.query = format!(
-                        "{}{}",
-                        &self.query[..word_start],
-                        &self.query[self.cursor_position..]
-                    );
-                    self.cursor_position = word_start;
-                    self.update_filtered_indices();
-                }
+                self.delete_word_before_cursor();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char(c) => {
-                self.query.insert(self.cursor_position, c);
-                self.cursor_position += 1;
-                self.update_filtered_indices();
+                self.insert_char(c);
                 Ok(KeyAction::Continue)
             }
             _ => Ok(KeyAction::Continue),
         }
+    }
+
+    fn handle_key_vim_insert(
+        &mut self,
+        key: KeyEvent,
+    ) -> Result<KeyAction, Box<dyn std::error::Error>> {
+        // Check common keys first
+        if let Some(action) = self.handle_common_key(key) {
+            return Ok(action);
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                // Switch to normal mode
+                self.keymap_mode = KeymapMode::VimNormal;
+                // Move cursor back one if not at start (vim behavior)
+                if self.cursor_position > 0 {
+                    self.cursor_position -= 1;
+                }
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Backspace => {
+                self.delete_char_before_cursor();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Delete => {
+                self.delete_char_at_cursor();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Left => {
+                self.move_cursor_left();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Right => {
+                self.move_cursor_right();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char(c) => {
+                self.insert_char(c);
+                Ok(KeyAction::Continue)
+            }
+            _ => Ok(KeyAction::Continue),
+        }
+    }
+
+    fn handle_key_vim_normal(
+        &mut self,
+        key: KeyEvent,
+    ) -> Result<KeyAction, Box<dyn std::error::Error>> {
+        // Check common keys first
+        if let Some(action) = self.handle_common_key(key) {
+            return Ok(action);
+        }
+
+        match key.code {
+            KeyCode::Esc => Ok(KeyAction::Cancel),
+            // Navigation in results
+            KeyCode::Char('j') => {
+                self.move_selection_down();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('k') => {
+                self.move_selection_up();
+                Ok(KeyAction::Continue)
+            }
+            // Cursor movement in query
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.move_cursor_left();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.move_cursor_right();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('0') => {
+                self.cursor_position = 0;
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('$') => {
+                self.cursor_position = self.query.len().saturating_sub(1).max(0);
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('w') => {
+                self.move_cursor_word_forward();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('b') => {
+                self.move_cursor_word_backward();
+                Ok(KeyAction::Continue)
+            }
+            // Enter insert mode
+            KeyCode::Char('i') => {
+                self.keymap_mode = KeymapMode::VimInsert;
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('a') => {
+                self.keymap_mode = KeymapMode::VimInsert;
+                if self.cursor_position < self.query.len() {
+                    self.cursor_position += 1;
+                }
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('A') => {
+                self.keymap_mode = KeymapMode::VimInsert;
+                self.cursor_position = self.query.len();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('I') => {
+                self.keymap_mode = KeymapMode::VimInsert;
+                self.cursor_position = 0;
+                Ok(KeyAction::Continue)
+            }
+            // Delete operations
+            KeyCode::Char('x') => {
+                self.delete_char_at_cursor();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('X') => {
+                self.delete_char_before_cursor();
+                Ok(KeyAction::Continue)
+            }
+            _ => Ok(KeyAction::Continue),
+        }
+    }
+
+    // Helper methods for cursor/selection movement
+
+    fn move_selection_up(&mut self) {
+        if self.selected_index + 1 < self.filtered_indices.len() {
+            self.selected_index += 1;
+            self.adjust_scroll_for_selection();
+        }
+    }
+
+    fn move_selection_down(&mut self) {
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
+            self.adjust_scroll_for_selection();
+        }
+    }
+
+    fn page_up(&mut self) {
+        let page = self.results_height().saturating_sub(2);
+        let max_index = self.filtered_indices.len().saturating_sub(1);
+        self.selected_index = (self.selected_index + page).min(max_index);
+        self.adjust_scroll_for_selection();
+    }
+
+    fn page_down(&mut self) {
+        let page = self.results_height().saturating_sub(2);
+        self.selected_index = self.selected_index.saturating_sub(page);
+        self.adjust_scroll_for_selection();
+    }
+
+    fn move_cursor_left(&mut self) {
+        if self.cursor_position > 0 {
+            self.cursor_position -= 1;
+        }
+    }
+
+    fn move_cursor_right(&mut self) {
+        if self.cursor_position < self.query.len() {
+            self.cursor_position += 1;
+        }
+    }
+
+    fn move_cursor_word_forward(&mut self) {
+        let chars: Vec<char> = self.query.chars().collect();
+        let mut pos = self.cursor_position;
+        // Skip current word (non-whitespace)
+        while pos < chars.len() && !chars[pos].is_whitespace() {
+            pos += 1;
+        }
+        // Skip whitespace
+        while pos < chars.len() && chars[pos].is_whitespace() {
+            pos += 1;
+        }
+        self.cursor_position = pos;
+    }
+
+    fn move_cursor_word_backward(&mut self) {
+        let chars: Vec<char> = self.query.chars().collect();
+        let mut pos = self.cursor_position.saturating_sub(1);
+        // Skip whitespace
+        while pos > 0 && chars[pos].is_whitespace() {
+            pos -= 1;
+        }
+        // Skip word (non-whitespace)
+        while pos > 0 && !chars[pos - 1].is_whitespace() {
+            pos -= 1;
+        }
+        self.cursor_position = pos;
+    }
+
+    fn insert_char(&mut self, c: char) {
+        self.query.insert(self.cursor_position, c);
+        self.cursor_position += 1;
+        self.update_filtered_indices();
+    }
+
+    fn delete_char_before_cursor(&mut self) {
+        if self.cursor_position > 0 {
+            self.query.remove(self.cursor_position - 1);
+            self.cursor_position -= 1;
+            self.update_filtered_indices();
+        }
+    }
+
+    fn delete_char_at_cursor(&mut self) {
+        if self.cursor_position < self.query.len() {
+            self.query.remove(self.cursor_position);
+            self.update_filtered_indices();
+        }
+    }
+
+    fn delete_to_line_start(&mut self) {
+        self.query = self.query[self.cursor_position..].to_string();
+        self.cursor_position = 0;
+        self.update_filtered_indices();
+    }
+
+    fn delete_word_before_cursor(&mut self) {
+        if self.cursor_position > 0 {
+            let before_cursor = &self.query[..self.cursor_position];
+            let word_start =
+                before_cursor.trim_end().rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+            self.query =
+                format!("{}{}", &self.query[..word_start], &self.query[self.cursor_position..]);
+            self.cursor_position = word_start;
+            self.update_filtered_indices();
+        }
+    }
+
+    fn draw_preview(&mut self, start_y: u16, width: u16) -> Result<(), Box<dyn std::error::Error>> {
+        // Get the selected entry
+        let entry =
+            self.filtered_indices.get(self.selected_index).and_then(|&idx| self.entries.get(idx));
+
+        // Draw separator line
+        execute!(self.tty, MoveTo(0, start_y), Clear(ClearType::CurrentLine))?;
+        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
+        write!(self.tty, "{}", "─".repeat(width as usize))?;
+        execute!(self.tty, ResetColor)?;
+
+        // If no entry selected, clear the rest and return
+        let Some(entry) = entry else {
+            for row in 1..PREVIEW_HEIGHT {
+                execute!(self.tty, MoveTo(0, start_y + row as u16), Clear(ClearType::CurrentLine))?;
+            }
+            return Ok(());
+        };
+
+        // Line 1: Full command (can truncate)
+        execute!(self.tty, MoveTo(0, start_y + 1), Clear(ClearType::CurrentLine))?;
+        let safe_cmd = sanitize_for_display(&entry.command);
+        let cmd_display: String = if safe_cmd.chars().count() > width as usize - 2 {
+            let truncated: String = safe_cmd.chars().take(width as usize - 5).collect();
+            format!("{truncated}...")
+        } else {
+            safe_cmd
+        };
+        write!(self.tty, "  {cmd_display}")?;
+
+        // Line 2: Directory and timestamp
+        execute!(self.tty, MoveTo(0, start_y + 2), Clear(ClearType::CurrentLine))?;
+        let mut info_parts: Vec<String> = Vec::new();
+
+        if self.preview_config.show_directory
+            && let Some(ref dir) = entry.working_directory
+        {
+            info_parts.push(format!("Dir: {}", String::from_utf8_lossy(dir)));
+        }
+
+        if self.preview_config.show_timestamp
+            && let Some(ts) = entry.timestamp
+        {
+            let datetime = chrono::DateTime::from_timestamp(ts, 0)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_else(|| "?".to_string());
+            info_parts.push(format!("Time: {datetime}"));
+        }
+
+        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
+        write!(self.tty, "  {}", info_parts.join("  "))?;
+        execute!(self.tty, ResetColor)?;
+
+        // Line 3: Exit status, duration, hostname
+        execute!(self.tty, MoveTo(0, start_y + 3), Clear(ClearType::CurrentLine))?;
+        let mut status_parts: Vec<String> = Vec::new();
+
+        if self.preview_config.show_exit_status
+            && let Some(status) = entry.exit_status
+        {
+            let status_str = if status == 0 {
+                "Status: 0 (ok)".to_string()
+            } else {
+                format!("Status: {status} (error)")
+            };
+            status_parts.push(status_str);
+        }
+
+        if self.preview_config.show_duration
+            && let Some(secs) = entry.duration_secs
+        {
+            let duration_str = if secs < 60 {
+                format!("Duration: {secs}s")
+            } else if secs < 3600 {
+                format!("Duration: {}m {}s", secs / 60, secs % 60)
+            } else {
+                format!("Duration: {}h {}m", secs / 3600, (secs % 3600) / 60)
+            };
+            status_parts.push(duration_str);
+        }
+
+        if self.preview_config.show_hostname
+            && let Some(ref host) = entry.hostname
+        {
+            status_parts.push(format!("Host: {}", String::from_utf8_lossy(host)));
+        }
+
+        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
+        write!(self.tty, "  {}", status_parts.join("  "))?;
+        execute!(self.tty, ResetColor)?;
+
+        // Line 4: Bottom separator (blank or separator)
+        execute!(self.tty, MoveTo(0, start_y + 4), Clear(ClearType::CurrentLine))?;
+
+        Ok(())
     }
 
     fn draw(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -336,7 +684,8 @@ impl RecallTui {
         self.term_width = term_width;
         self.term_height = term_height;
 
-        let results_height = term_height.saturating_sub(2) as usize;
+        let results_height = self.results_height();
+        let preview_start_y = results_height as u16;
         let input_y = term_height.saturating_sub(2);
         let help_y = term_height.saturating_sub(1);
 
@@ -362,9 +711,32 @@ impl RecallTui {
             let time_str = format_relative_time(entry.timestamp);
             let is_selected = entry_index == self.selected_index;
 
+            // Calculate quick-select number (1-9) for entries near bottom
+            // quick_num is Some(n) if Alt-n would select this entry
+            let quick_num =
+                if entry_index >= self.scroll_offset && entry_index < self.scroll_offset + 9 {
+                    Some(entry_index - self.scroll_offset + 1)
+                } else {
+                    None
+                };
+
             if is_selected {
                 execute!(self.tty, SetBackgroundColor(Color::DarkGrey))?;
-                write!(self.tty, "> ")?;
+            }
+
+            // Draw quick-select indicator or selection marker
+            if let Some(n) = quick_num {
+                execute!(self.tty, SetForegroundColor(Color::Yellow))?;
+                write!(self.tty, "{n}")?;
+                execute!(self.tty, ResetColor)?;
+                if is_selected {
+                    execute!(self.tty, SetBackgroundColor(Color::DarkGrey))?;
+                    write!(self.tty, ">")?;
+                } else {
+                    write!(self.tty, " ")?;
+                }
+            } else if is_selected {
+                write!(self.tty, " >")?;
             } else {
                 write!(self.tty, "  ")?;
             }
@@ -379,7 +751,7 @@ impl RecallTui {
 
             // Sanitize and truncate command to fit (handle UTF-8 safely)
             let safe_cmd = sanitize_for_display(&entry.command);
-            let prefix_len = 8; // "> " + "XXx  "
+            let prefix_len = 9; // "n>" + " XXx  "
             let max_cmd_len = term_width.saturating_sub(prefix_len) as usize;
             let cmd: String = if safe_cmd.chars().count() > max_cmd_len {
                 let truncated: String =
@@ -391,6 +763,11 @@ impl RecallTui {
             write!(self.tty, "{cmd}")?;
 
             execute!(self.tty, ResetColor)?;
+        }
+
+        // Draw preview pane if enabled
+        if self.show_preview {
+            self.draw_preview(preview_start_y, term_width)?;
         }
 
         // Draw input line
@@ -417,7 +794,7 @@ impl RecallTui {
         // Draw help line
         execute!(self.tty, MoveTo(0, help_y), Clear(ClearType::CurrentLine))?;
         execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-        write!(self.tty, "↑↓ Navigate  Enter Select  Esc Cancel  ^R Toggle filter")?;
+        write!(self.tty, "↑↓ Navigate  Enter Run  Tab Edit  Alt-1-9 Quick  ^R Filter")?;
         execute!(self.tty, ResetColor)?;
 
         // Position cursor at end of query in input line
@@ -431,6 +808,7 @@ impl RecallTui {
 enum KeyAction {
     Continue,
     Select,
+    Edit,
     Cancel,
 }
 

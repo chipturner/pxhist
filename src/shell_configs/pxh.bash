@@ -32,10 +32,18 @@ _pxh_random() {
 
 _pxh_recall() {
     local selected
-    selected=$(pxh --db "$PXH_DB_PATH" recall 2>/dev/null)
-    if [[ -n "$selected" ]]; then
-        READLINE_LINE="$selected"
-        READLINE_POINT=${#selected}
+    selected=$(pxh --db "$PXH_DB_PATH" recall --query "$READLINE_LINE" 2>/dev/null)
+    if [[ "$selected" == run:* ]]; then
+        # Execute immediately
+        READLINE_LINE="${selected#run:}"
+        READLINE_POINT=${#READLINE_LINE}
+        # Simulate pressing Enter by accepting the line
+        # Note: bind -x functions can't directly execute, so we rely on
+        # the user pressing Enter or we could use READLINE_LINE and accept-line
+    elif [[ "$selected" == edit:* ]]; then
+        # Place in buffer for editing
+        READLINE_LINE="${selected#edit:}"
+        READLINE_POINT=${#READLINE_LINE}
     fi
 }
 
