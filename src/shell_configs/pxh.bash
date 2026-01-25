@@ -54,8 +54,8 @@ _pxh_init() {
 
     [ ! -d $(dirname $PXH_DB_PATH) ] && mkdir -p -m 0700 $(dirname $PXH_DB_PATH)
 
-    # Bind Ctrl-R to pxh recall
-    bind -x '"\C-r": _pxh_recall'
+    # Bind Ctrl-R to pxh recall # PXH_CTRL_R_BINDING
+    bind -x '"\C-r": _pxh_recall' # PXH_CTRL_R_BINDING
 }
 
 _pxh_init

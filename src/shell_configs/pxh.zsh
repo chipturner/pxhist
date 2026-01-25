@@ -58,9 +58,9 @@ _pxh_init() {
     add-zsh-hook zshaddhistory _pxh_addhistory
     add-zsh-hook precmd _pxh_update_last_status
 
-    # Bind Ctrl-R to pxh recall
-    zle -N _pxh_recall_widget
-    bindkey '^R' _pxh_recall_widget
+    # Bind Ctrl-R to pxh recall # PXH_CTRL_R_BINDING
+    zle -N _pxh_recall_widget # PXH_CTRL_R_BINDING
+    bindkey '^R' _pxh_recall_widget # PXH_CTRL_R_BINDING
 }
 
 _pxh_init

@@ -275,6 +275,8 @@ struct SealCommand {
 #[derive(Parser, Debug)]
 struct ShellConfigCommand {
     shellname: String,
+    #[clap(long, help = "Don't bind Ctrl-R to pxh recall")]
+    no_ctrl_r: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -344,7 +346,10 @@ impl ImportCommand {
 
 impl ShellConfigCommand {
     fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Todo: bash and other shell formats
+        // Check if ctrl-r should be disabled (via flag or config)
+        let config = pxh::recall::Config::load();
+        let disable_ctrl_r = self.no_ctrl_r || config.shell.disable_ctrl_r;
+
         let contents = match self.shellname.as_str() {
             "zsh" => String::from(include_str!("shell_configs/pxh.zsh")),
             "bash" => {
@@ -360,6 +365,19 @@ impl ShellConfigCommand {
                 )));
             }
         };
+
+        // Remove ctrl-r binding section if disabled
+        let contents = if disable_ctrl_r {
+            contents
+                .lines()
+                .filter(|line| !line.contains("PXH_CTRL_R_BINDING"))
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n"
+        } else {
+            contents
+        };
+
         io::stdout().write_all(contents.as_bytes())?;
         io::stdout().flush()?;
         Ok(())

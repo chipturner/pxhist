@@ -331,6 +331,24 @@ pxh s --session $PXH_SESSION_ID  # Current session
 - Use `pxh scan` regularly to detect accidentally committed secrets
 - Use `--no-secret-filter` with sync if you want to disable automatic secret filtering during import
 
+### Disabling Ctrl-R
+
+If you prefer to keep your shell's default Ctrl-R behavior:
+
+**Option 1: CLI flag**
+```bash
+# When sourcing manually:
+source <(pxh shell-config zsh --no-ctrl-r)
+```
+
+**Option 2: Config file** (`~/.pxh/config.toml`)
+```toml
+[shell]
+disable_ctrl_r = true
+```
+
+You can still use `pxh recall` directly or bind it to a different key.
+
 ## Credits
 
 Inspired by [bash-history-sqlite](https://github.com/thenewwazoo/bash-history-sqlite) and [zsh-histdb](https://github.com/larkery/zsh-histdb).

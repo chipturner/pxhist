@@ -8,6 +8,16 @@ use serde::Deserialize;
 pub struct Config {
     #[serde(default)]
     pub recall: RecallConfig,
+    #[serde(default)]
+    pub shell: ShellConfig,
+}
+
+/// Configuration for shell integration
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct ShellConfig {
+    /// Disable Ctrl-R binding (keep shell's default behavior)
+    pub disable_ctrl_r: bool,
 }
 
 /// Configuration for the recall TUI
