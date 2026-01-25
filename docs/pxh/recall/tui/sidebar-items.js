@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["PREVIEW_HEIGHT","SCROLL_MARGIN"],"enum":["KeyAction"],"fn":["sanitize_for_display"],"struct":["RecallTui"]};

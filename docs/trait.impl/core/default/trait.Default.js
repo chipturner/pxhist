@@ -1,9 +1,9 @@
 (function() {
-    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.92.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/struct.Invocation.html\" title=\"struct pxh::Invocation\">Invocation</a>"]]]]);
+    var implementors = Object.fromEntries([["pxh",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"enum\" href=\"pxh/recall/config/enum.KeymapMode.html\" title=\"enum pxh::recall::config::KeymapMode\">KeymapMode</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/recall/config/struct.Config.html\" title=\"struct pxh::recall::config::Config\">Config</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/recall/config/struct.PreviewConfig.html\" title=\"struct pxh::recall::config::PreviewConfig\">PreviewConfig</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/recall/config/struct.RecallConfig.html\" title=\"struct pxh::recall::config::RecallConfig\">RecallConfig</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.93.0/core/default/trait.Default.html\" title=\"trait core::default::Default\">Default</a> for <a class=\"struct\" href=\"pxh/struct.Invocation.html\" title=\"struct pxh::Invocation\">Invocation</a>"]]]]);
     if (window.register_implementors) {
         window.register_implementors(implementors);
     } else {
         window.pending_implementors = implementors;
     }
 })()
-//{"start":57,"fragment_lengths":[270]}
+//{"start":57,"fragment_lengths":[1431]}

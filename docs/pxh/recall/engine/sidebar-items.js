@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["format_relative_time"],"struct":["HistoryEntry","SearchEngine"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"mod":["command","config","engine","tui"],"struct":["RecallCommand"]};
