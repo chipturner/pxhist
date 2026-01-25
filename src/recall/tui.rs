@@ -187,25 +187,6 @@ impl RecallTui {
         self.adjust_scroll_for_selection();
     }
 
-    fn reload_entries(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let query = if self.query.is_empty() { None } else { Some(self.query.as_str()) };
-        self.entries = self.engine.load_entries(self.filter_mode, query)?;
-        self.filtered_indices = (0..self.entries.len()).collect();
-        if self.selected_index >= self.filtered_indices.len() {
-            self.selected_index = 0;
-        }
-        self.adjust_scroll_for_selection();
-        Ok(())
-    }
-
-    fn toggle_filter_mode(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.filter_mode = match self.filter_mode {
-            FilterMode::Directory => FilterMode::Global,
-            FilterMode::Global => FilterMode::Directory,
-        };
-        self.reload_entries()
-    }
-
     pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
         loop {
             self.draw()?;
@@ -262,7 +243,7 @@ impl RecallTui {
                 Some(KeyAction::Cancel)
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                let _ = self.toggle_filter_mode();
+                self.move_selection_up();
                 Some(KeyAction::Continue)
             }
             KeyCode::Up => {
@@ -283,7 +264,8 @@ impl RecallTui {
             }
             KeyCode::Char(c @ '1'..='9') if key.modifiers.contains(KeyModifiers::ALT) => {
                 let num = c.to_digit(10).unwrap() as usize;
-                let target_index = self.scroll_offset + (num - 1);
+                // Alt-1 selects current, Alt-2 selects next older, etc.
+                let target_index = self.selected_index + (num - 1);
                 if target_index < self.filtered_indices.len() {
                     self.selected_index = target_index;
                     return Some(KeyAction::Select);
@@ -711,11 +693,11 @@ impl RecallTui {
             let time_str = format_relative_time(entry.timestamp);
             let is_selected = entry_index == self.selected_index;
 
-            // Calculate quick-select number (1-9) for entries near bottom
-            // quick_num is Some(n) if Alt-n would select this entry
+            // Calculate quick-select number (1-9) relative to selection
+            // Alt-1 = selected, Alt-2 = selected+1 (next older), etc.
             let quick_num =
-                if entry_index >= self.scroll_offset && entry_index < self.scroll_offset + 9 {
-                    Some(entry_index - self.scroll_offset + 1)
+                if entry_index >= self.selected_index && entry_index < self.selected_index + 9 {
+                    Some(entry_index - self.selected_index + 1)
                 } else {
                     None
                 };
@@ -794,7 +776,7 @@ impl RecallTui {
         // Draw help line
         execute!(self.tty, MoveTo(0, help_y), Clear(ClearType::CurrentLine))?;
         execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-        write!(self.tty, "↑↓ Navigate  Enter Run  Tab Edit  Alt-1-9 Quick  ^R Filter")?;
+        write!(self.tty, "↑↓/^R Navigate  Enter Run  Tab Edit  Alt-1-9 Quick")?;
         execute!(self.tty, ResetColor)?;
 
         // Position cursor at end of query in input line
