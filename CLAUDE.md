@@ -24,20 +24,28 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 ## Architecture Overview
 
 ### Core Components
-- **`src/main.rs`**: CLI interface using clap with subcommands (Show, Sync, Import, Install, etc.)
+- **`src/main.rs`**: CLI interface using clap with subcommands (Show, Sync, Import, Install, Recall, Scan, etc.)
 - **`src/lib.rs`**: Core business logic including database operations, history parsing, shell integration, and the `helpers` and `test_utils` modules
 - **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates
 - **`src/schema_migration.sql`**: Migration script for schema changes (deduplication with COALESCE-based unique index)
 - **`src/shell_configs/`**: Shell integration scripts for bash (`pxh.bash`) and zsh (`pxh.zsh`) using preexec hooks
+- **`src/recall/`**: Interactive TUI history search module
+  - `mod.rs`: Module exports
+  - `command.rs`: RecallCommand struct and FilterMode enum
+  - `engine.rs`: SearchEngine for database queries, HistoryEntry struct
+  - `tui.rs`: Terminal UI using crossterm (drawing, key handling, vim/emacs modes)
+  - `config.rs`: TOML configuration loading from `~/.pxh/config.toml`
 
 ### Command Structure
 All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`. Key commands:
 - **Show/Search**: Query history with regex patterns, directory filters, session filters. Alias: `pxhs` (symlink/rename binary to invoke `pxh show` directly)
+- **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.pxh/config.toml`
 - **Sync**: Bidirectional sync via SSH or shared directories with optional `--since` filtering
 - **Insert/Seal**: Internal commands called by shell hooks to record command start/end
 - **Import**: Bulk import from existing shell history files (bash, zsh, or JSON export)
 - **Export**: Export full history as JSON
-- **Scrub**: Remove sensitive commands from history
+- **Scan**: Detect potential secrets in command history using built-in patterns
+- **Scrub**: Remove sensitive commands from history (supports `--patterns-from-scan`, `--dir`, `--remote`)
 - **Maintenance**: ANALYZE and VACUUM operations, cleans up non-standard tables/indexes
 
 ### Database Design
@@ -75,6 +83,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/integration_tests.rs`**: End-to-end command testing using shell history import/export
 - **`tests/sync_test.rs`**: Comprehensive sync functionality tests (directory, remote SSH, stdin/stdout)
 - **`tests/ssh_sync_test.rs`**: SSH-specific sync testing
+- **`tests/recall_test.rs`**: Interactive TUI recall functionality tests
 - **`tests/unit.rs`**: Unit tests for core functionality
 - **`tests/interactive_shell_test.rs`**: Interactive shell session testing with rexpect
 - **`tests/shell_integration_simple_test.rs`**: Simple shell integration tests
@@ -135,3 +144,14 @@ Remote sync uses a simple binary protocol over stdin/stdout:
 3. Stream database contents
 4. Bidirectional exchange for full sync
 5. `INSERT OR IGNORE` with ATTACH DATABASE for deduplication
+
+### Configuration
+pxh supports a TOML configuration file at `~/.pxh/config.toml` for customizing the recall TUI:
+- **`[recall]`** section:
+  - `keymap_mode`: "emacs" (default) or "vim"
+  - `show_preview`: boolean to show/hide preview pane
+  - `result_limit`: max number of results to load (default: 1000)
+- **`[recall.preview]`** section:
+  - `show_directory`, `show_timestamp`, `show_exit_status`, `show_duration`, `show_hostname`: booleans to control preview pane fields
+
+The config is loaded via `Config::load()` in `src/recall/config.rs` with sensible defaults if the file doesn't exist.
