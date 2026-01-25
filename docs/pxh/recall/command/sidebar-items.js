@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["FilterMode"],"struct":["RecallCommand"]};
+window.SIDEBAR_ITEMS = {"enum":["FilterMode","HostFilter"],"struct":["RecallCommand"]};
