@@ -15,7 +15,7 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 
-use super::command::FilterMode;
+use super::command::{FilterMode, HostFilter};
 use super::config::{KeymapMode, PreviewConfig, RecallConfig};
 use super::engine::{HistoryEntry, SearchEngine, format_relative_time};
 
@@ -64,6 +64,7 @@ const PREVIEW_HEIGHT: usize = 5; // Height of preview pane in lines
 pub struct RecallTui {
     engine: SearchEngine,
     filter_mode: FilterMode,
+    host_filter: HostFilter,
     entries: Vec<HistoryEntry>,
     filtered_indices: Vec<usize>,
     query: String,
@@ -89,7 +90,8 @@ impl RecallTui {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let query = initial_query.as_deref().unwrap_or("");
         let query_for_load = if query.is_empty() { None } else { Some(query) };
-        let entries = engine.load_entries(initial_mode, query_for_load)?;
+        let host_filter = HostFilter::default();
+        let entries = engine.load_entries(initial_mode, host_filter, query_for_load)?;
         let query = query.to_string();
 
         terminal::enable_raw_mode()?;
@@ -122,6 +124,7 @@ impl RecallTui {
         let mut tui = RecallTui {
             engine,
             filter_mode: initial_mode,
+            host_filter,
             entries,
             filtered_indices,
             query,
@@ -190,7 +193,7 @@ impl RecallTui {
         // Re-query the database with the current search query
         // This ensures we search the full database, not just a cached subset
         let query = if self.query.is_empty() { None } else { Some(self.query.as_str()) };
-        if let Ok(entries) = self.engine.load_entries(self.filter_mode, query) {
+        if let Ok(entries) = self.engine.load_entries(self.filter_mode, self.host_filter, query) {
             self.entries = entries;
         }
         // All loaded entries match the query (filtered in SQL)
@@ -200,6 +203,14 @@ impl RecallTui {
             self.selected_index = 0;
         }
         self.adjust_scroll_for_selection();
+    }
+
+    fn toggle_host_filter(&mut self) {
+        self.host_filter = match self.host_filter {
+            HostFilter::ThisHost => HostFilter::AllHosts,
+            HostFilter::AllHosts => HostFilter::ThisHost,
+        };
+        self.update_filtered_indices();
     }
 
     pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
@@ -301,6 +312,10 @@ impl RecallTui {
                     self.selected_index = target_index;
                     return Some(KeyAction::Select);
                 }
+                Some(KeyAction::Continue)
+            }
+            KeyCode::Char('h') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_host_filter();
                 Some(KeyAction::Continue)
             }
             _ => None,
@@ -781,10 +796,37 @@ impl RecallTui {
                 queue!(w, SetBackgroundColor(Color::DarkGrey))?;
             }
 
+            // Show host prefix for entries from other hosts (in AllHosts mode)
+            let host_prefix = if self.host_filter == HostFilter::AllHosts {
+                entry.hostname.as_ref().and_then(|h| {
+                    let current = self.engine.current_hostname();
+                    if h != current {
+                        let short =
+                            String::from_utf8_lossy(h).split('.').next().unwrap_or("?").to_string();
+                        Some(format!("@{short}: "))
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+
+            // Draw host prefix if present
+            let host_prefix_len = host_prefix.as_ref().map_or(0, |p| p.chars().count());
+            if let Some(ref prefix) = host_prefix {
+                queue!(w, SetForegroundColor(Color::Magenta))?;
+                write!(w, "{prefix}")?;
+                queue!(w, ResetColor)?;
+                if is_selected {
+                    queue!(w, SetBackgroundColor(Color::DarkGrey))?;
+                }
+            }
+
             // Sanitize and truncate command to fit (handle UTF-8 safely)
             let safe_cmd = sanitize_for_display(&entry.command);
-            let prefix_len = 9; // "n>" + " XXx  "
-            let max_cmd_len = term_width.saturating_sub(prefix_len) as usize;
+            let prefix_len = 9 + host_prefix_len; // "n>" + " XXx  " + host prefix
+            let max_cmd_len = term_width.saturating_sub(prefix_len as u16) as usize;
             let cmd: String = if safe_cmd.chars().count() > max_cmd_len {
                 let truncated: String =
                     safe_cmd.chars().take(max_cmd_len.saturating_sub(3)).collect();
@@ -806,8 +848,17 @@ impl RecallTui {
         queue!(w, MoveTo(0, input_y), Clear(ClearType::CurrentLine))?;
         write!(w, "> {}", self.query)?;
 
-        // Draw mode indicator on same line
-        let mode_str = match self.filter_mode {
+        // Draw mode indicators on same line (host filter + dir/global)
+        let host_str = match self.host_filter {
+            HostFilter::ThisHost => {
+                let hostname = self.engine.current_hostname();
+                let short_host =
+                    String::from_utf8_lossy(hostname).split('.').next().unwrap_or("?").to_string();
+                format!("[{short_host}]")
+            }
+            HostFilter::AllHosts => "[All Hosts]".to_string(),
+        };
+        let dir_str = match self.filter_mode {
             FilterMode::Directory => {
                 let dir = self.engine.working_directory();
                 let name = dir
@@ -818,6 +869,7 @@ impl RecallTui {
             }
             FilterMode::Global => "[Global]".to_string(),
         };
+        let mode_str = format!("{host_str} {dir_str}");
         let mode_x = term_width.saturating_sub(mode_str.len() as u16 + 1);
         queue!(w, MoveTo(mode_x, input_y), SetForegroundColor(Color::Cyan))?;
         write!(w, "{mode_str}")?;
@@ -826,7 +878,7 @@ impl RecallTui {
         // Draw help line
         queue!(w, MoveTo(0, help_y), Clear(ClearType::CurrentLine))?;
         queue!(w, SetForegroundColor(Color::DarkGrey))?;
-        write!(w, "↑↓/^R Navigate  Enter Run  Tab Edit  Alt-1-9 Quick")?;
+        write!(w, "↑↓/^R Nav  Enter Run  Tab Edit  ^H Host  Alt-1-9 Quick")?;
         queue!(w, ResetColor)?;
 
         // Position cursor at end of query in input line

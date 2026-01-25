@@ -4,7 +4,7 @@ use bstr::BString;
 use nucleo::{Config, Matcher, Utf32Str, pattern::Pattern};
 use rusqlite::Connection;
 
-use super::command::FilterMode;
+use super::command::{FilterMode, HostFilter};
 
 /// A history entry with its metadata
 #[derive(Debug, Clone)]
@@ -21,48 +21,73 @@ pub struct HistoryEntry {
 pub struct SearchEngine {
     conn: Connection,
     working_directory: PathBuf,
+    current_hostname: BString,
     matcher: Matcher,
     result_limit: usize,
 }
 
 impl SearchEngine {
-    pub fn new(conn: Connection, working_directory: PathBuf, result_limit: usize) -> Self {
+    pub fn new(
+        conn: Connection,
+        working_directory: PathBuf,
+        current_hostname: BString,
+        result_limit: usize,
+    ) -> Self {
         SearchEngine {
             conn,
             working_directory,
+            current_hostname,
             matcher: Matcher::new(Config::DEFAULT),
             result_limit,
         }
+    }
+
+    /// Get the current hostname
+    pub fn current_hostname(&self) -> &BString {
+        &self.current_hostname
     }
 
     /// Load history entries from the database, optionally filtered by a search query
     pub fn load_entries(
         &self,
         filter_mode: FilterMode,
+        host_filter: HostFilter,
         query: Option<&str>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let entries = match filter_mode {
-            FilterMode::Directory => self.load_entries_for_directory(query)?,
-            FilterMode::Global => self.load_all_entries(query)?,
+            FilterMode::Directory => self.load_entries_for_directory(host_filter, query)?,
+            FilterMode::Global => self.load_all_entries(host_filter, query)?,
         };
         Ok(entries)
     }
 
     fn load_all_entries(
         &self,
+        host_filter: HostFilter,
         query: Option<&str>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        // Build WHERE clause for search filter
-        let (where_clause, search_param) = match query {
-            Some(q) if !q.is_empty() => {
-                // Use LIKE with % wildcards for case-insensitive substring match
-                // The LIKE is applied in the subquery to filter before grouping
-                (
-                    "WHERE full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string(),
-                    Some(q.to_string()),
-                )
-            }
-            _ => (String::new(), None),
+        // Build WHERE clauses
+        let mut where_conditions = Vec::new();
+        let mut params: Vec<String> = Vec::new();
+
+        // Host filter
+        if host_filter == HostFilter::ThisHost {
+            where_conditions.push("hostname = CAST(? as blob)".to_string());
+            params.push(self.current_hostname.to_string());
+        }
+
+        // Search filter
+        if let Some(q) = query
+            && !q.is_empty()
+        {
+            where_conditions.push("full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
+            params.push(q.to_string());
+        }
+
+        let where_clause = if where_conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_conditions.join(" AND "))
         };
 
         // Get full metadata from the most recent execution of each unique command
@@ -89,10 +114,17 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
 
         let mut stmt = self.conn.prepare(&sql)?;
 
-        let entries: Vec<HistoryEntry> = if let Some(ref param) = search_param {
-            stmt.query_map([param], |row| self.row_to_entry(row))?.collect::<Result<Vec<_>, _>>()?
-        } else {
-            stmt.query_map([], |row| self.row_to_entry(row))?.collect::<Result<Vec<_>, _>>()?
+        let entries: Vec<HistoryEntry> = match params.len() {
+            0 => {
+                stmt.query_map([], |row| self.row_to_entry(row))?.collect::<Result<Vec<_>, _>>()?
+            }
+            1 => stmt
+                .query_map([&params[0]], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?,
+            2 => stmt
+                .query_map([&params[0], &params[1]], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => unreachable!(),
         };
 
         Ok(entries)
@@ -117,16 +149,29 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
 
     fn load_entries_for_directory(
         &self,
+        host_filter: HostFilter,
         query: Option<&str>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        // Build additional WHERE clause for search filter
-        let (search_clause, search_param) = match query {
-            Some(q) if !q.is_empty() => (
-                "AND full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string(),
-                Some(q.to_string()),
-            ),
-            _ => (String::new(), None),
-        };
+        // Build WHERE clauses - directory is always filtered
+        let mut where_conditions = vec!["working_directory = CAST(? as blob)".to_string()];
+        let dir_str = self.working_directory.to_string_lossy().to_string();
+        let mut params: Vec<String> = vec![dir_str];
+
+        // Host filter
+        if host_filter == HostFilter::ThisHost {
+            where_conditions.push("hostname = CAST(? as blob)".to_string());
+            params.push(self.current_hostname.to_string());
+        }
+
+        // Search filter
+        if let Some(q) = query
+            && !q.is_empty()
+        {
+            where_conditions.push("full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
+            params.push(q.to_string());
+        }
+
+        let where_clause = format!("WHERE {}", where_conditions.join(" AND "));
 
         // Get full metadata from the most recent execution of each unique command in this directory
         let sql = format!(
@@ -140,8 +185,7 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
  INNER JOIN (
      SELECT full_command, MAX(start_unix_timestamp) as max_ts
        FROM command_history
-      WHERE working_directory = CAST(? as blob)
-      {search_clause}
+      {where_clause}
       GROUP BY full_command
  ) latest ON c.full_command = latest.full_command
          AND c.start_unix_timestamp = latest.max_ts
@@ -152,14 +196,18 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
-        let dir_str = self.working_directory.to_string_lossy().to_string();
 
-        let entries: Vec<HistoryEntry> = if let Some(ref param) = search_param {
-            stmt.query_map(rusqlite::params![dir_str, param], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            stmt.query_map([&dir_str], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?
+        let entries: Vec<HistoryEntry> = match params.len() {
+            1 => stmt
+                .query_map([&params[0]], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?,
+            2 => stmt
+                .query_map([&params[0], &params[1]], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?,
+            3 => stmt
+                .query_map([&params[0], &params[1], &params[2]], |row| self.row_to_entry(row))?
+                .collect::<Result<Vec<_>, _>>()?,
+            _ => unreachable!(),
         };
 
         Ok(entries)

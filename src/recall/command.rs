@@ -8,6 +8,7 @@ use rusqlite::Connection;
 use super::config::Config;
 use super::engine::{SearchEngine, format_relative_time};
 use super::tui::RecallTui;
+use crate::get_hostname;
 
 #[derive(Parser, Debug)]
 pub struct RecallCommand {
@@ -36,6 +37,16 @@ pub enum FilterMode {
     Global,
 }
 
+/// Host filter mode for recall search
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostFilter {
+    /// Search only on current host (default)
+    #[default]
+    ThisHost,
+    /// Search across all hosts
+    AllHosts,
+}
+
 impl RecallCommand {
     pub fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();
@@ -52,13 +63,14 @@ impl RecallCommand {
             .unwrap_or_default();
 
         let result_limit = if self.print { self.limit } else { config.recall.result_limit };
-        let engine = SearchEngine::new(conn, working_directory, result_limit);
+        let current_hostname = get_hostname();
+        let engine = SearchEngine::new(conn, working_directory, current_hostname, result_limit);
 
         // Print mode: just query and print results, no TUI
         if self.print {
             let query_start = Instant::now();
             let query = self.query.as_deref();
-            let entries = engine.load_entries(initial_mode, query)?;
+            let entries = engine.load_entries(initial_mode, HostFilter::default(), query)?;
             let query_time = query_start.elapsed();
 
             let mut stdout = io::stdout().lock();
