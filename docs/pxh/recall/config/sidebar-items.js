@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["KeymapMode"],"struct":["Config","PreviewConfig","RecallConfig"]};
+window.SIDEBAR_ITEMS = {"enum":["KeymapMode"],"struct":["Config","PreviewConfig","RecallConfig","ShellConfig"]};
