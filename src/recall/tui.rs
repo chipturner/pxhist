@@ -94,22 +94,19 @@ impl RecallTui {
             Clear(ClearType::Purge),
             MoveTo(0, 0)
         )?;
+        tty.flush()?;
 
         let (term_width, term_height) = terminal::size()?;
 
-        // Explicitly clear every line to ensure no residual content
-        for row in 0..term_height {
-            execute!(tty, MoveTo(0, row), Clear(ClearType::CurrentLine))?;
-        }
-        tty.flush()?;
-
         let cursor_position = query.len();
+
+        let filtered_indices = (0..entries.len()).collect();
 
         let mut tui = RecallTui {
             engine,
             filter_mode: initial_mode,
             entries,
-            filtered_indices: Vec::new(),
+            filtered_indices,
             query,
             cursor_position,
             selected_index: 0,
@@ -122,7 +119,6 @@ impl RecallTui {
             preview_config: config.preview.clone(),
         };
 
-        tui.update_filtered_indices();
         tui.adjust_scroll_for_selection();
         Ok(tui)
     }
@@ -211,6 +207,13 @@ impl RecallTui {
                 }
             }
         }
+    }
+
+    /// Draw once and exit (for profiling)
+    pub fn draw_once(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.draw()?;
+        self.cleanup()?;
+        Ok(())
     }
 
     fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
