@@ -1,12 +1,18 @@
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufWriter, Write};
+use std::time::Duration;
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
+    execute, queue,
     style::{Color, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+};
+
+#[cfg(not(target_os = "windows"))]
+use crossterm::event::{
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 
 use super::command::FilterMode;
@@ -70,6 +76,8 @@ pub struct RecallTui {
     keymap_mode: KeymapMode,
     show_preview: bool,
     preview_config: PreviewConfig,
+    #[cfg(not(target_os = "windows"))]
+    keyboard_enhanced: bool,
 }
 
 impl RecallTui {
@@ -86,6 +94,15 @@ impl RecallTui {
 
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
+
+        // Enable keyboard enhancement for instant Escape key response (non-Windows)
+        #[cfg(not(target_os = "windows"))]
+        let keyboard_enhanced = execute!(
+            tty,
+            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+        )
+        .is_ok();
+
         execute!(
             tty,
             EnterAlternateScreen,
@@ -117,6 +134,8 @@ impl RecallTui {
             keymap_mode: config.initial_keymap_mode(),
             show_preview: config.show_preview,
             preview_config: config.preview.clone(),
+            #[cfg(not(target_os = "windows"))]
+            keyboard_enhanced,
         };
 
         tui.adjust_scroll_for_selection();
@@ -187,6 +206,11 @@ impl RecallTui {
         loop {
             self.draw()?;
 
+            // Poll with timeout for responsive cancellation and future async features
+            if !event::poll(Duration::from_millis(100))? {
+                continue;
+            }
+
             if let Event::Key(key) = event::read()? {
                 match self.handle_key(key)? {
                     KeyAction::Continue => continue,
@@ -217,6 +241,10 @@ impl RecallTui {
     }
 
     fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        #[cfg(not(target_os = "windows"))]
+        if self.keyboard_enhanced {
+            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
+        }
         execute!(self.tty, Show, LeaveAlternateScreen)?;
         terminal::disable_raw_mode()?;
         Ok(())
@@ -370,6 +398,14 @@ impl RecallTui {
                 self.move_cursor_right();
                 Ok(KeyAction::Continue)
             }
+            KeyCode::Home => {
+                self.cursor_position = 0;
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::End => {
+                self.cursor_position = self.query.len();
+                Ok(KeyAction::Continue)
+            }
             KeyCode::Char(c) => {
                 self.insert_char(c);
                 Ok(KeyAction::Continue)
@@ -407,11 +443,11 @@ impl RecallTui {
                 self.move_cursor_right();
                 Ok(KeyAction::Continue)
             }
-            KeyCode::Char('0') => {
+            KeyCode::Char('0') | KeyCode::Home => {
                 self.cursor_position = 0;
                 Ok(KeyAction::Continue)
             }
-            KeyCode::Char('$') => {
+            KeyCode::Char('$') | KeyCode::End => {
                 self.cursor_position = self.query.len().saturating_sub(1).max(0);
                 Ok(KeyAction::Continue)
             }
@@ -566,27 +602,32 @@ impl RecallTui {
         }
     }
 
-    fn draw_preview(&mut self, start_y: u16, width: u16) -> Result<(), Box<dyn std::error::Error>> {
+    fn draw_preview<W: Write>(
+        &self,
+        w: &mut W,
+        start_y: u16,
+        width: u16,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // Get the selected entry
         let entry =
             self.filtered_indices.get(self.selected_index).and_then(|&idx| self.entries.get(idx));
 
         // Draw separator line
-        execute!(self.tty, MoveTo(0, start_y), Clear(ClearType::CurrentLine))?;
-        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-        write!(self.tty, "{}", "─".repeat(width as usize))?;
-        execute!(self.tty, ResetColor)?;
+        queue!(w, MoveTo(0, start_y), Clear(ClearType::CurrentLine))?;
+        queue!(w, SetForegroundColor(Color::DarkGrey))?;
+        write!(w, "{}", "─".repeat(width as usize))?;
+        queue!(w, ResetColor)?;
 
         // If no entry selected, clear the rest and return
         let Some(entry) = entry else {
             for row in 1..PREVIEW_HEIGHT {
-                execute!(self.tty, MoveTo(0, start_y + row as u16), Clear(ClearType::CurrentLine))?;
+                queue!(w, MoveTo(0, start_y + row as u16), Clear(ClearType::CurrentLine))?;
             }
             return Ok(());
         };
 
         // Line 1: Full command (can truncate)
-        execute!(self.tty, MoveTo(0, start_y + 1), Clear(ClearType::CurrentLine))?;
+        queue!(w, MoveTo(0, start_y + 1), Clear(ClearType::CurrentLine))?;
         let safe_cmd = sanitize_for_display(&entry.command);
         let cmd_display: String = if safe_cmd.chars().count() > width as usize - 2 {
             let truncated: String = safe_cmd.chars().take(width as usize - 5).collect();
@@ -594,10 +635,10 @@ impl RecallTui {
         } else {
             safe_cmd
         };
-        write!(self.tty, "  {cmd_display}")?;
+        write!(w, "  {cmd_display}")?;
 
         // Line 2: Directory and timestamp
-        execute!(self.tty, MoveTo(0, start_y + 2), Clear(ClearType::CurrentLine))?;
+        queue!(w, MoveTo(0, start_y + 2), Clear(ClearType::CurrentLine))?;
         let mut info_parts: Vec<String> = Vec::new();
 
         if self.preview_config.show_directory
@@ -615,12 +656,12 @@ impl RecallTui {
             info_parts.push(format!("Time: {datetime}"));
         }
 
-        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-        write!(self.tty, "  {}", info_parts.join("  "))?;
-        execute!(self.tty, ResetColor)?;
+        queue!(w, SetForegroundColor(Color::DarkGrey))?;
+        write!(w, "  {}", info_parts.join("  "))?;
+        queue!(w, ResetColor)?;
 
         // Line 3: Exit status, duration, hostname
-        execute!(self.tty, MoveTo(0, start_y + 3), Clear(ClearType::CurrentLine))?;
+        queue!(w, MoveTo(0, start_y + 3), Clear(ClearType::CurrentLine))?;
         let mut status_parts: Vec<String> = Vec::new();
 
         if self.preview_config.show_exit_status
@@ -653,12 +694,12 @@ impl RecallTui {
             status_parts.push(format!("Host: {}", String::from_utf8_lossy(host)));
         }
 
-        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-        write!(self.tty, "  {}", status_parts.join("  "))?;
-        execute!(self.tty, ResetColor)?;
+        queue!(w, SetForegroundColor(Color::DarkGrey))?;
+        write!(w, "  {}", status_parts.join("  "))?;
+        queue!(w, ResetColor)?;
 
         // Line 4: Bottom separator (blank or separator)
-        execute!(self.tty, MoveTo(0, start_y + 4), Clear(ClearType::CurrentLine))?;
+        queue!(w, MoveTo(0, start_y + 4), Clear(ClearType::CurrentLine))?;
 
         Ok(())
     }
@@ -674,12 +715,18 @@ impl RecallTui {
         let input_y = term_height.saturating_sub(2);
         let help_y = term_height.saturating_sub(1);
 
+        // Use buffered writer to batch all terminal writes into a single syscall
+        let mut w = BufWriter::new(&self.tty);
+
+        // Disable line wrap during render to prevent visual glitches
+        write!(w, "\x1b[?7l")?;
+
         // Draw each line, clearing as we go (avoids full-screen clear flicker)
         // Results area: rows 0 to results_height-1
         // Layout: oldest at top (row 0), newest at bottom (row results_height-1)
         // scroll_offset is the entry index shown at the bottom of the visible area
         for row in 0..results_height {
-            execute!(self.tty, MoveTo(0, row as u16), Clear(ClearType::CurrentLine))?;
+            queue!(w, MoveTo(0, row as u16), Clear(ClearType::CurrentLine))?;
 
             // Calculate which entry to show at this row
             // Row 0 (top) shows oldest visible entry
@@ -706,32 +753,32 @@ impl RecallTui {
                 };
 
             if is_selected {
-                execute!(self.tty, SetBackgroundColor(Color::DarkGrey))?;
+                queue!(w, SetBackgroundColor(Color::DarkGrey))?;
             }
 
             // Draw quick-select indicator or selection marker
             if let Some(n) = quick_num {
-                execute!(self.tty, SetForegroundColor(Color::Yellow))?;
-                write!(self.tty, "{n}")?;
-                execute!(self.tty, ResetColor)?;
+                queue!(w, SetForegroundColor(Color::Yellow))?;
+                write!(w, "{n}")?;
+                queue!(w, ResetColor)?;
                 if is_selected {
-                    execute!(self.tty, SetBackgroundColor(Color::DarkGrey))?;
-                    write!(self.tty, ">")?;
+                    queue!(w, SetBackgroundColor(Color::DarkGrey))?;
+                    write!(w, ">")?;
                 } else {
-                    write!(self.tty, " ")?;
+                    write!(w, " ")?;
                 }
             } else if is_selected {
-                write!(self.tty, " >")?;
+                write!(w, " >")?;
             } else {
-                write!(self.tty, "  ")?;
+                write!(w, "  ")?;
             }
 
-            execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-            write!(self.tty, "{time_str}  ")?;
-            execute!(self.tty, ResetColor)?;
+            queue!(w, SetForegroundColor(Color::DarkGrey))?;
+            write!(w, "{time_str}  ")?;
+            queue!(w, ResetColor)?;
 
             if is_selected {
-                execute!(self.tty, SetBackgroundColor(Color::DarkGrey))?;
+                queue!(w, SetBackgroundColor(Color::DarkGrey))?;
             }
 
             // Sanitize and truncate command to fit (handle UTF-8 safely)
@@ -745,19 +792,19 @@ impl RecallTui {
             } else {
                 safe_cmd
             };
-            write!(self.tty, "{cmd}")?;
+            write!(w, "{cmd}")?;
 
-            execute!(self.tty, ResetColor)?;
+            queue!(w, ResetColor)?;
         }
 
         // Draw preview pane if enabled
         if self.show_preview {
-            self.draw_preview(preview_start_y, term_width)?;
+            self.draw_preview(&mut w, preview_start_y, term_width)?;
         }
 
         // Draw input line
-        execute!(self.tty, MoveTo(0, input_y), Clear(ClearType::CurrentLine))?;
-        write!(self.tty, "> {}", self.query)?;
+        queue!(w, MoveTo(0, input_y), Clear(ClearType::CurrentLine))?;
+        write!(w, "> {}", self.query)?;
 
         // Draw mode indicator on same line
         let mode_str = match self.filter_mode {
@@ -772,20 +819,24 @@ impl RecallTui {
             FilterMode::Global => "[Global]".to_string(),
         };
         let mode_x = term_width.saturating_sub(mode_str.len() as u16 + 1);
-        execute!(self.tty, MoveTo(mode_x, input_y), SetForegroundColor(Color::Cyan))?;
-        write!(self.tty, "{mode_str}")?;
-        execute!(self.tty, ResetColor)?;
+        queue!(w, MoveTo(mode_x, input_y), SetForegroundColor(Color::Cyan))?;
+        write!(w, "{mode_str}")?;
+        queue!(w, ResetColor)?;
 
         // Draw help line
-        execute!(self.tty, MoveTo(0, help_y), Clear(ClearType::CurrentLine))?;
-        execute!(self.tty, SetForegroundColor(Color::DarkGrey))?;
-        write!(self.tty, "↑↓/^R Navigate  Enter Run  Tab Edit  Alt-1-9 Quick")?;
-        execute!(self.tty, ResetColor)?;
+        queue!(w, MoveTo(0, help_y), Clear(ClearType::CurrentLine))?;
+        queue!(w, SetForegroundColor(Color::DarkGrey))?;
+        write!(w, "↑↓/^R Navigate  Enter Run  Tab Edit  Alt-1-9 Quick")?;
+        queue!(w, ResetColor)?;
 
         // Position cursor at end of query in input line
-        execute!(self.tty, MoveTo(2 + self.cursor_position as u16, input_y))?;
+        queue!(w, MoveTo(2 + self.cursor_position as u16, input_y))?;
 
-        self.tty.flush()?;
+        // Re-enable line wrap
+        write!(w, "\x1b[?7h")?;
+
+        // Single flush writes all buffered content
+        w.flush()?;
         Ok(())
     }
 }
@@ -799,6 +850,10 @@ enum KeyAction {
 
 impl Drop for RecallTui {
     fn drop(&mut self) {
+        #[cfg(not(target_os = "windows"))]
+        if self.keyboard_enhanced {
+            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
+        }
         let _ = execute!(self.tty, Show, LeaveAlternateScreen);
         let _ = terminal::disable_raw_mode();
     }
