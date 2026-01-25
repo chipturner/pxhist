@@ -36,7 +36,7 @@ regex = "1.12.2"
 hostname = "0.4.2"
 rusqlite = { version = "0.38.0", features = ["bundled", "functions"] }
 tempfile = "3.24.0"
-crossterm = "0.28"
+crossterm = { version = "0.28", features = ["use-dev-tty"] }
 nucleo = "0.5"
 toml = "0.8"
 unicode-width = "0.2"
