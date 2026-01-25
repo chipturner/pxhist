@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["PREVIEW_HEIGHT","SCROLL_MARGIN"],"enum":["KeyAction"],"fn":["sanitize_for_display"],"struct":["RecallTui"]};
+window.SIDEBAR_ITEMS = {"constant":["PREVIEW_HEIGHT","SCROLL_MARGIN"],"enum":["KeyAction"],"fn":["format_duration","sanitize_for_display"],"struct":["RecallTui"]};
