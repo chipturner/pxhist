@@ -71,8 +71,10 @@ fn deduplicate_entries(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
     entries.into_iter().filter(|e| seen.insert(e.command.clone())).collect()
 }
 
-/// Highlight matching portions of a command for display.
+/// Highlight matching portions of a command for display (substring matching).
 /// Returns spans with (text, is_highlight) pairs.
+/// Only used in tests now - fuzzy matching uses highlight_command_with_indices.
+#[cfg(test)]
 fn highlight_command(cmd: &str, query: &str, max_len: usize) -> Vec<(String, bool)> {
     if query.is_empty() {
         let truncated = if cmd.chars().count() > max_len {
@@ -150,8 +152,56 @@ fn highlight_command(cmd: &str, query: &str, max_len: usize) -> Vec<(String, boo
 }
 
 /// Convert byte position to char position in a string.
+#[cfg(test)]
 fn char_pos_from_byte(s: &str, byte_pos: usize) -> usize {
     s[..byte_pos].chars().count()
+}
+
+/// Highlight a command using pre-computed match indices from fuzzy matching.
+/// Returns spans with (text, is_highlight) pairs.
+fn highlight_command_with_indices(
+    cmd: &str,
+    match_indices: &[u32],
+    max_len: usize,
+) -> Vec<(String, bool)> {
+    if cmd.is_empty() {
+        return vec![];
+    }
+
+    // Build a set of matched character positions for O(1) lookup
+    let match_set: HashSet<u32> = match_indices.iter().copied().collect();
+
+    let chars: Vec<char> = cmd.chars().collect();
+    let mut spans = Vec::new();
+    let mut current_span = String::new();
+    let mut current_is_match = false;
+
+    for (i, &c) in chars.iter().enumerate() {
+        // Truncate early to leave room for "..." suffix
+        if i >= max_len.saturating_sub(3) {
+            // Truncate with ellipsis
+            if !current_span.is_empty() {
+                spans.push((current_span, current_is_match));
+            }
+            spans.push(("...".to_string(), false));
+            return spans;
+        }
+
+        let is_match = match_set.contains(&(i as u32));
+
+        if is_match != current_is_match && !current_span.is_empty() {
+            spans.push((std::mem::take(&mut current_span), current_is_match));
+        }
+
+        current_is_match = is_match;
+        current_span.push(c);
+    }
+
+    if !current_span.is_empty() {
+        spans.push((current_span, current_is_match));
+    }
+
+    spans
 }
 
 fn format_duration(secs: i64) -> String {
@@ -169,7 +219,8 @@ pub struct RecallTui {
     filter_mode: FilterMode,
     host_filter: HostFilter,
     entries: Vec<HistoryEntry>,
-    filtered_indices: Vec<usize>,
+    /// Filtered indices with match positions: (entry_index, match_char_indices)
+    filtered_indices: Vec<(usize, Vec<u32>)>,
     query: String,
     cursor_position: usize,
     selected_index: usize,
@@ -188,18 +239,16 @@ pub struct RecallTui {
 
 impl RecallTui {
     pub fn new(
-        engine: SearchEngine,
+        mut engine: SearchEngine,
         initial_mode: FilterMode,
         initial_query: Option<String>,
         config: &RecallConfig,
         shell_mode: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let query = initial_query.as_deref().unwrap_or("");
-        let query_for_load = if query.is_empty() { None } else { Some(query) };
+        let query = initial_query.as_deref().unwrap_or("").to_string();
         let host_filter = HostFilter::default();
-        let entries =
-            deduplicate_entries(engine.load_entries(initial_mode, host_filter, query_for_load)?);
-        let query = query.to_string();
+        // Load all entries without query filtering - fuzzy matching happens client-side
+        let entries = deduplicate_entries(engine.load_entries(initial_mode, host_filter, None)?);
 
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
@@ -226,7 +275,24 @@ impl RecallTui {
 
         let cursor_position = query.len();
 
-        let filtered_indices = (0..entries.len()).collect();
+        // Apply initial fuzzy filtering
+        let filtered_indices = if query.is_empty() {
+            (0..entries.len()).map(|i| (i, Vec::new())).collect()
+        } else {
+            engine
+                .filter_entries(&entries, &query)
+                .into_iter()
+                .map(|(entry, indices)| {
+                    // Map entry reference back to index via pointer equality
+                    // (filter_entries returns references into our entries slice)
+                    let idx = entries
+                        .iter()
+                        .position(|e| std::ptr::eq(e, entry))
+                        .expect("filter_entries returned entry not in entries slice");
+                    (idx, indices)
+                })
+                .collect()
+        };
 
         let mut tui = RecallTui {
             engine,
@@ -298,22 +364,42 @@ impl RecallTui {
         self.scroll_offset = self.scroll_offset.min(max_scroll);
     }
 
-    fn update_filtered_indices(&mut self) {
-        // Re-query the database with the current search query
-        // This ensures we search the full database, not just a cached subset
-        let query = if self.query.is_empty() { None } else { Some(self.query.as_str()) };
-        match self.engine.load_entries(self.filter_mode, self.host_filter, query) {
+    /// Reload entries from database and re-apply fuzzy filtering.
+    /// Called when mode (directory/global) or host filter changes.
+    fn reload_entries(&mut self) {
+        match self.engine.load_entries(self.filter_mode, self.host_filter, None) {
             Ok(entries) => {
-                // Deduplicate entries by command string (keeps most recent)
                 self.entries = deduplicate_entries(entries);
             }
-            Err(_) => {
-                // Flash to indicate search failed; keeps previous results
+            Err(e) => {
+                eprintln!("pxh recall: failed to reload entries: {e}");
                 self.flash();
+                return;
             }
         }
-        // All loaded entries match the query (filtered in SQL)
-        self.filtered_indices = (0..self.entries.len()).collect();
+        self.update_filtered_indices();
+    }
+
+    /// Apply fuzzy filtering to the current entries based on query
+    fn update_filtered_indices(&mut self) {
+        if self.query.is_empty() {
+            self.filtered_indices = (0..self.entries.len()).map(|i| (i, Vec::new())).collect();
+        } else {
+            self.filtered_indices = self
+                .engine
+                .filter_entries(&self.entries, &self.query)
+                .into_iter()
+                .map(|(entry, indices)| {
+                    // Map entry reference back to index via pointer equality
+                    let idx = self
+                        .entries
+                        .iter()
+                        .position(|e| std::ptr::eq(e, entry))
+                        .expect("filter_entries returned entry not in entries slice");
+                    (idx, indices)
+                })
+                .collect();
+        }
 
         if self.selected_index >= self.filtered_indices.len() {
             self.selected_index = 0;
@@ -336,7 +422,7 @@ impl RecallTui {
             HostFilter::ThisHost => HostFilter::AllHosts,
             HostFilter::AllHosts => HostFilter::ThisHost,
         };
-        self.update_filtered_indices();
+        self.reload_entries();
     }
 
     fn toggle_filter_mode(&mut self) {
@@ -344,7 +430,7 @@ impl RecallTui {
             FilterMode::Directory => FilterMode::Global,
             FilterMode::Global => FilterMode::Directory,
         };
-        self.update_filtered_indices();
+        self.reload_entries();
     }
 
     pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
@@ -389,8 +475,10 @@ impl RecallTui {
     fn print_entry_details(&self) {
         use crossterm::style::{Attribute, SetAttribute};
 
-        let Some(entry) =
-            self.filtered_indices.get(self.selected_index).and_then(|&idx| self.entries.get(idx))
+        let Some(entry) = self
+            .filtered_indices
+            .get(self.selected_index)
+            .and_then(|(idx, _)| self.entries.get(*idx))
         else {
             return;
         };
@@ -474,7 +562,7 @@ impl RecallTui {
     fn get_selected_command(&self) -> Option<String> {
         self.filtered_indices
             .get(self.selected_index)
-            .and_then(|&idx| self.entries.get(idx))
+            .and_then(|(idx, _)| self.entries.get(*idx))
             .map(|e| e.command.clone())
     }
 
@@ -853,8 +941,10 @@ impl RecallTui {
         width: u16,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Get the selected entry
-        let entry =
-            self.filtered_indices.get(self.selected_index).and_then(|&idx| self.entries.get(idx));
+        let entry = self
+            .filtered_indices
+            .get(self.selected_index)
+            .and_then(|(idx, _)| self.entries.get(*idx));
 
         // Draw separator line
         queue!(w, MoveTo(0, start_y), Clear(ClearType::CurrentLine))?;
@@ -978,7 +1068,7 @@ impl RecallTui {
                 continue;
             }
 
-            let idx = self.filtered_indices[entry_index];
+            let (idx, ref match_indices) = self.filtered_indices[entry_index];
             let entry = &self.entries[idx];
             let time_str = format_relative_time(entry.timestamp);
             let is_selected = entry_index == self.selected_index;
@@ -1053,8 +1143,8 @@ impl RecallTui {
             let prefix_len = 9 + host_prefix_len; // "n>" + " XXx  " + host prefix
             let max_cmd_len = term_width.saturating_sub(prefix_len as u16) as usize;
 
-            // Render command with highlighted matches
-            let spans = highlight_command(&safe_cmd, &self.query, max_cmd_len);
+            // Render command with highlighted fuzzy matches
+            let spans = highlight_command_with_indices(&safe_cmd, match_indices, max_cmd_len);
             for (text, is_match) in spans {
                 if is_match {
                     queue!(w, SetAttribute(Attribute::Bold))?;
@@ -1398,5 +1488,86 @@ mod tests {
         assert_eq!(deduped[0].command, "cmd1");
         assert_eq!(deduped[0].timestamp, Some(100)); // kept first (most recent)
         assert_eq!(deduped[1].command, "cmd2");
+    }
+
+    // Tests for highlight_command_with_indices (fuzzy match highlighting)
+    #[test]
+    fn test_fuzzy_highlight_no_indices() {
+        use super::highlight_command_with_indices;
+        // No match indices - whole string unhighlighted
+        let spans = highlight_command_with_indices("git fetch origin", &[], 100);
+        assert_eq!(spans, vec![("git fetch origin".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_scattered_matches() {
+        use super::highlight_command_with_indices;
+        // "gfo" fuzzy matching "git fetch origin" -> indices 0, 4, 10
+        let spans = highlight_command_with_indices("git fetch origin", &[0, 4, 10], 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("g".to_string(), true),
+                ("it ".to_string(), false),
+                ("f".to_string(), true),
+                ("etch ".to_string(), false),
+                ("o".to_string(), true),
+                ("rigin".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_contiguous_matches() {
+        use super::highlight_command_with_indices;
+        // Contiguous matches should be grouped
+        let spans = highlight_command_with_indices("grep foo bar", &[5, 6, 7], 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("grep ".to_string(), false),
+                ("foo".to_string(), true),
+                (" bar".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_truncation() {
+        use super::highlight_command_with_indices;
+        // Long command truncated with ellipsis
+        // max_len=10 means we truncate at position 7 (10-3), leaving room for "..."
+        let spans = highlight_command_with_indices("very long command here", &[0, 5], 10);
+        assert_eq!(
+            spans,
+            vec![
+                ("v".to_string(), true),
+                ("ery ".to_string(), false),
+                ("l".to_string(), true),
+                ("o".to_string(), false),
+                ("...".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_empty_command() {
+        use super::highlight_command_with_indices;
+        let spans = highlight_command_with_indices("", &[0, 1, 2], 100);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_match_at_start() {
+        use super::highlight_command_with_indices;
+        let spans = highlight_command_with_indices("foo bar", &[0, 1, 2], 100);
+        assert_eq!(spans, vec![("foo".to_string(), true), (" bar".to_string(), false),]);
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_match_at_end() {
+        use super::highlight_command_with_indices;
+        let spans = highlight_command_with_indices("foo bar", &[4, 5, 6], 100);
+        assert_eq!(spans, vec![("foo ".to_string(), false), ("bar".to_string(), true),]);
     }
 }

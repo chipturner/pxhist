@@ -218,8 +218,9 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
         &self.working_directory
     }
 
-    /// Filter entries using nucleo fuzzy matching
-    /// Returns entries with their match scores, sorted by score (best first)
+    /// Filter entries using nucleo fuzzy matching.
+    /// Returns entries sorted by match score (word boundary matches favored, gaps penalized),
+    /// with recency as a tiebreaker for equal scores.
     pub fn filter_entries<'a>(
         &mut self,
         entries: &'a [HistoryEntry],
@@ -237,26 +238,29 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
             nucleo::pattern::Normalization::Smart,
         );
 
-        let mut results: Vec<(&HistoryEntry, Vec<u32>)> = Vec::new();
+        // Collect matches with scores: (original_index, score, entry, indices)
+        let mut scored_results: Vec<(usize, u32, &HistoryEntry, Vec<u32>)> = Vec::new();
         let mut buf = Vec::new();
 
-        for entry in entries {
+        for (original_idx, entry) in entries.iter().enumerate() {
             buf.clear();
             let haystack = Utf32Str::new(&entry.command, &mut buf);
 
-            if pattern.score(haystack, &mut self.matcher).is_some() {
+            if let Some(score) = pattern.score(haystack, &mut self.matcher) {
                 // Get match indices for highlighting
                 let mut indices = Vec::new();
                 buf.clear();
                 let haystack = Utf32Str::new(&entry.command, &mut buf);
                 pattern.indices(haystack, &mut self.matcher, &mut indices);
-                results.push((entry, indices));
+                scored_results.push((original_idx, score, entry, indices));
             }
         }
 
-        // Keep original order (sorted by recency from SQL query)
-        // Fuzzy matching is used as a filter, not for ranking
-        results
+        // Sort by score (descending), then by original index (ascending = more recent first)
+        scored_results.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+        // Return just the entries and indices
+        scored_results.into_iter().map(|(_, _, entry, indices)| (entry, indices)).collect()
     }
 }
 
