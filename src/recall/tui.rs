@@ -1,12 +1,13 @@
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufWriter, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute, queue,
-    style::{Color, ResetColor, SetBackgroundColor, SetForegroundColor},
+    style::{Attribute, Color, ResetColor, SetAttribute, SetBackgroundColor, SetForegroundColor},
     terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
@@ -60,6 +61,98 @@ fn sanitize_for_display(s: &str) -> String {
 }
 
 const PREVIEW_HEIGHT: usize = 5; // Height of preview pane in lines
+const FLASH_DURATION_MS: u64 = 100; // Duration of visual flash in milliseconds
+
+/// Deduplicate history entries by command string, keeping the most recent occurrence.
+/// Entries are already sorted by timestamp (most recent first), so we keep the first
+/// occurrence of each command.
+fn deduplicate_entries(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
+    let mut seen = HashSet::new();
+    entries.into_iter().filter(|e| seen.insert(e.command.clone())).collect()
+}
+
+/// Highlight matching portions of a command for display.
+/// Returns spans with (text, is_highlight) pairs.
+fn highlight_command(cmd: &str, query: &str, max_len: usize) -> Vec<(String, bool)> {
+    if query.is_empty() {
+        let truncated = if cmd.chars().count() > max_len {
+            let t: String = cmd.chars().take(max_len.saturating_sub(3)).collect();
+            format!("{t}...")
+        } else {
+            cmd.to_string()
+        };
+        return vec![(truncated, false)];
+    }
+
+    let cmd_lower = cmd.to_lowercase();
+    let query_lower = query.to_lowercase();
+    let mut spans = Vec::new();
+    let mut pos = 0;
+    let cmd_chars: Vec<char> = cmd.chars().collect();
+    let mut total_len = 0;
+
+    while let Some(match_start) = cmd_lower[pos..].find(&query_lower) {
+        let abs_start = pos + match_start;
+        let abs_end = abs_start + query_lower.len();
+
+        // Add non-matching text before this match
+        if abs_start > pos {
+            let text: String = cmd_chars
+                [char_pos_from_byte(cmd, pos)..char_pos_from_byte(cmd, abs_start)]
+                .iter()
+                .collect();
+            let text_len = text.chars().count();
+            if total_len + text_len > max_len.saturating_sub(3) {
+                let remaining = max_len.saturating_sub(3).saturating_sub(total_len);
+                let truncated: String = text.chars().take(remaining).collect();
+                spans.push((truncated, false));
+                spans.push(("...".to_string(), false));
+                return spans;
+            }
+            total_len += text_len;
+            spans.push((text, false));
+        }
+
+        // Add matching text
+        let match_text: String = cmd_chars
+            [char_pos_from_byte(cmd, abs_start)..char_pos_from_byte(cmd, abs_end)]
+            .iter()
+            .collect();
+        let match_len = match_text.chars().count();
+        if total_len + match_len > max_len.saturating_sub(3) {
+            let remaining = max_len.saturating_sub(3).saturating_sub(total_len);
+            let truncated: String = match_text.chars().take(remaining).collect();
+            spans.push((truncated, true));
+            spans.push(("...".to_string(), false));
+            return spans;
+        }
+        total_len += match_len;
+        spans.push((match_text, true));
+
+        pos = abs_end;
+    }
+
+    // Add remaining text after last match
+    if pos < cmd.len() {
+        let text: String = cmd_chars[char_pos_from_byte(cmd, pos)..].iter().collect();
+        let text_len = text.chars().count();
+        if total_len + text_len > max_len {
+            let remaining = max_len.saturating_sub(3).saturating_sub(total_len);
+            let truncated: String = text.chars().take(remaining).collect();
+            spans.push((truncated, false));
+            spans.push(("...".to_string(), false));
+        } else {
+            spans.push((text, false));
+        }
+    }
+
+    spans
+}
+
+/// Convert byte position to char position in a string.
+fn char_pos_from_byte(s: &str, byte_pos: usize) -> usize {
+    s[..byte_pos].chars().count()
+}
 
 fn format_duration(secs: i64) -> String {
     if secs < 60 {
@@ -88,6 +181,7 @@ pub struct RecallTui {
     show_preview: bool,
     preview_config: PreviewConfig,
     shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
+    flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
 }
@@ -103,7 +197,8 @@ impl RecallTui {
         let query = initial_query.as_deref().unwrap_or("");
         let query_for_load = if query.is_empty() { None } else { Some(query) };
         let host_filter = HostFilter::default();
-        let entries = engine.load_entries(initial_mode, host_filter, query_for_load)?;
+        let entries =
+            deduplicate_entries(engine.load_entries(initial_mode, host_filter, query_for_load)?);
         let query = query.to_string();
 
         terminal::enable_raw_mode()?;
@@ -150,6 +245,7 @@ impl RecallTui {
             show_preview: config.show_preview,
             preview_config: config.preview.clone(),
             shell_mode,
+            flash_until: None,
             #[cfg(not(target_os = "windows"))]
             keyboard_enhanced,
         };
@@ -206,8 +302,15 @@ impl RecallTui {
         // Re-query the database with the current search query
         // This ensures we search the full database, not just a cached subset
         let query = if self.query.is_empty() { None } else { Some(self.query.as_str()) };
-        if let Ok(entries) = self.engine.load_entries(self.filter_mode, self.host_filter, query) {
-            self.entries = entries;
+        match self.engine.load_entries(self.filter_mode, self.host_filter, query) {
+            Ok(entries) => {
+                // Deduplicate entries by command string (keeps most recent)
+                self.entries = deduplicate_entries(entries);
+            }
+            Err(_) => {
+                // Flash to indicate search failed; keeps previous results
+                self.flash();
+            }
         }
         // All loaded entries match the query (filtered in SQL)
         self.filtered_indices = (0..self.entries.len()).collect();
@@ -218,10 +321,28 @@ impl RecallTui {
         self.adjust_scroll_for_selection();
     }
 
+    /// Trigger a brief visual flash for feedback on unrecognized keys
+    fn flash(&mut self) {
+        self.flash_until = Some(Instant::now() + Duration::from_millis(FLASH_DURATION_MS));
+    }
+
+    /// Check if flash effect is currently active
+    fn is_flashing(&self) -> bool {
+        self.flash_until.is_some_and(|until| Instant::now() < until)
+    }
+
     fn toggle_host_filter(&mut self) {
         self.host_filter = match self.host_filter {
             HostFilter::ThisHost => HostFilter::AllHosts,
             HostFilter::AllHosts => HostFilter::ThisHost,
+        };
+        self.update_filtered_indices();
+    }
+
+    fn toggle_filter_mode(&mut self) {
+        self.filter_mode = match self.filter_mode {
+            FilterMode::Directory => FilterMode::Global,
+            FilterMode::Global => FilterMode::Directory,
         };
         self.update_filtered_indices();
     }
@@ -407,6 +528,10 @@ impl RecallTui {
                 self.toggle_host_filter();
                 Some(KeyAction::Continue)
             }
+            KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_filter_mode();
+                Some(KeyAction::Continue)
+            }
             _ => None,
         }
     }
@@ -459,6 +584,11 @@ impl RecallTui {
                 self.delete_word_before_cursor();
                 Ok(KeyAction::Continue)
             }
+            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Unhandled Ctrl+key combo - flash for feedback
+                self.flash();
+                Ok(KeyAction::Continue)
+            }
             KeyCode::Char(c) => {
                 self.insert_char(c);
                 Ok(KeyAction::Continue)
@@ -508,6 +638,11 @@ impl RecallTui {
             }
             KeyCode::End => {
                 self.cursor_position = self.query.len();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Unhandled Ctrl+key combo - flash for feedback
+                self.flash();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char(c) => {
@@ -592,6 +727,11 @@ impl RecallTui {
             }
             KeyCode::Char('X') => {
                 self.delete_char_before_cursor();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Unhandled Ctrl+key combo - flash for feedback
+                self.flash();
                 Ok(KeyAction::Continue)
             }
             _ => Ok(KeyAction::Continue),
@@ -815,6 +955,9 @@ impl RecallTui {
         // Use buffered writer to batch all terminal writes into a single syscall
         let mut w = BufWriter::new(&self.tty);
 
+        // Check if we're in flash mode for visual feedback
+        let flashing = self.is_flashing();
+
         // Disable line wrap during render to prevent visual glitches
         write!(w, "\x1b[?7l")?;
 
@@ -909,14 +1052,23 @@ impl RecallTui {
             let safe_cmd = sanitize_for_display(&entry.command);
             let prefix_len = 9 + host_prefix_len; // "n>" + " XXx  " + host prefix
             let max_cmd_len = term_width.saturating_sub(prefix_len as u16) as usize;
-            let cmd: String = if safe_cmd.chars().count() > max_cmd_len {
-                let truncated: String =
-                    safe_cmd.chars().take(max_cmd_len.saturating_sub(3)).collect();
-                format!("{truncated}...")
-            } else {
-                safe_cmd
-            };
-            write!(w, "{cmd}")?;
+
+            // Render command with highlighted matches
+            let spans = highlight_command(&safe_cmd, &self.query, max_cmd_len);
+            for (text, is_match) in spans {
+                if is_match {
+                    queue!(w, SetAttribute(Attribute::Bold))?;
+                    queue!(w, SetForegroundColor(Color::Cyan))?;
+                }
+                write!(w, "{text}")?;
+                if is_match {
+                    queue!(w, SetAttribute(Attribute::Reset))?;
+                    queue!(w, ResetColor)?;
+                    if is_selected {
+                        queue!(w, SetBackgroundColor(Color::DarkGrey))?;
+                    }
+                }
+            }
 
             queue!(w, ResetColor)?;
         }
@@ -957,10 +1109,23 @@ impl RecallTui {
         write!(w, "{mode_str}")?;
         queue!(w, ResetColor)?;
 
-        // Draw help line
+        // Draw help line (mode-aware, flashes on unrecognized keys)
         queue!(w, MoveTo(0, help_y), Clear(ClearType::CurrentLine))?;
-        queue!(w, SetForegroundColor(Color::DarkGrey))?;
-        write!(w, "↑↓/^R Nav  Enter Run  Tab Edit  ^H Host  Alt-1-9 Quick")?;
+        if flashing {
+            // Flash effect: invert the help line colors
+            queue!(w, SetBackgroundColor(Color::White), SetForegroundColor(Color::Black))?;
+        } else {
+            queue!(w, SetForegroundColor(Color::DarkGrey))?;
+        }
+        let help_text = match self.keymap_mode {
+            KeymapMode::Emacs => {
+                "↑↓/^R Nav  Enter Select  Tab Edit  ^G Dir  ^H Host  ^C Quit  Esc Cancel  Alt-1-9"
+            }
+            KeymapMode::VimInsert | KeymapMode::VimNormal => {
+                "j/k Nav  Enter Select  Tab Edit  ^G Dir  ^H Host  ^C Quit  Esc Mode  Alt-1-9"
+            }
+        };
+        write!(w, "{help_text}")?;
         queue!(w, ResetColor)?;
 
         // Position cursor at end of query in input line
@@ -1073,5 +1238,165 @@ mod tests {
     #[test]
     fn test_sanitize_empty_string() {
         assert_eq!(sanitize_for_display(""), "");
+    }
+
+    #[test]
+    fn test_highlight_no_query() {
+        // Empty query returns whole string unhighlighted
+        let spans = highlight_command("ls -la", "", 100);
+        assert_eq!(spans, vec![("ls -la".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_highlight_single_match() {
+        let spans = highlight_command("grep foo bar", "foo", 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("grep ".to_string(), false),
+                ("foo".to_string(), true),
+                (" bar".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_highlight_case_insensitive() {
+        let spans = highlight_command("grep FOO bar", "foo", 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("grep ".to_string(), false),
+                ("FOO".to_string(), true),
+                (" bar".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_highlight_multiple_matches() {
+        let spans = highlight_command("foo bar foo", "foo", 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("foo".to_string(), true),
+                (" bar ".to_string(), false),
+                ("foo".to_string(), true),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_highlight_at_start() {
+        let spans = highlight_command("foo bar", "foo", 100);
+        assert_eq!(spans, vec![("foo".to_string(), true), (" bar".to_string(), false),]);
+    }
+
+    #[test]
+    fn test_highlight_at_end() {
+        let spans = highlight_command("bar foo", "foo", 100);
+        assert_eq!(spans, vec![("bar ".to_string(), false), ("foo".to_string(), true),]);
+    }
+
+    #[test]
+    fn test_highlight_truncation() {
+        // When command is too long, it should be truncated with "..."
+        let spans = highlight_command("very long command here", "", 10);
+        assert_eq!(spans, vec![("very lo...".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_highlight_no_match() {
+        // Query not found - return whole string unhighlighted
+        let spans = highlight_command("ls -la", "xyz", 100);
+        assert_eq!(spans, vec![("ls -la".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_highlight_multibyte_query() {
+        // Query with multi-byte UTF-8 characters
+        let spans = highlight_command("find 日本語 here", "日本語", 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("find ".to_string(), false),
+                ("日本語".to_string(), true),
+                (" here".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_highlight_multibyte_command() {
+        // ASCII query in command with multi-byte chars
+        let spans = highlight_command("echo 日本語 foo bar", "foo", 100);
+        assert_eq!(
+            spans,
+            vec![
+                ("echo 日本語 ".to_string(), false),
+                ("foo".to_string(), true),
+                (" bar".to_string(), false),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_highlight_empty_command() {
+        // Empty command returns empty spans (nothing to display)
+        let spans = highlight_command("", "foo", 100);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn test_highlight_empty_both() {
+        // Empty command with empty query returns the empty string
+        let spans = highlight_command("", "", 100);
+        assert_eq!(spans, vec![("".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_deduplicate_empty_list() {
+        use super::deduplicate_entries;
+        let deduped = deduplicate_entries(vec![]);
+        assert!(deduped.is_empty());
+    }
+
+    #[test]
+    fn test_deduplicate_keeps_first_occurrence() {
+        use super::deduplicate_entries;
+        use crate::recall::engine::HistoryEntry;
+
+        let entries = vec![
+            HistoryEntry {
+                command: "cmd1".to_string(),
+                timestamp: Some(100),
+                working_directory: None,
+                exit_status: None,
+                duration_secs: None,
+                hostname: None,
+            },
+            HistoryEntry {
+                command: "cmd2".to_string(),
+                timestamp: Some(90),
+                working_directory: None,
+                exit_status: None,
+                duration_secs: None,
+                hostname: None,
+            },
+            HistoryEntry {
+                command: "cmd1".to_string(), // duplicate
+                timestamp: Some(80),
+                working_directory: None,
+                exit_status: None,
+                duration_secs: None,
+                hostname: None,
+            },
+        ];
+
+        let deduped = deduplicate_entries(entries);
+        assert_eq!(deduped.len(), 2);
+        assert_eq!(deduped[0].command, "cmd1");
+        assert_eq!(deduped[0].timestamp, Some(100)); // kept first (most recent)
+        assert_eq!(deduped[1].command, "cmd2");
     }
 }
