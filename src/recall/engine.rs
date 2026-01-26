@@ -231,27 +231,46 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
             return entries.iter().map(|e| (e, Vec::new())).collect();
         }
 
-        // Parse the pattern
-        let pattern = Pattern::parse(
+        // Nucleo's fuzzy matcher gives word-boundary bonuses, treating `-` as a separator.
+        // This causes `--release` to score poorly (empty segments before "release").
+        // We normalize dashes to spaces for scoring so `--release` and `release` rank equally,
+        // but use the original query for highlighting so `--release` shows highlighted dashes.
+        let normalized_query: String =
+            query.chars().map(|c| if c == '-' { ' ' } else { c }).collect();
+        let scoring_pattern = Pattern::parse(
+            &normalized_query,
+            nucleo::pattern::CaseMatching::Smart,
+            nucleo::pattern::Normalization::Smart,
+        );
+        let highlight_pattern = Pattern::parse(
             query,
             nucleo::pattern::CaseMatching::Smart,
             nucleo::pattern::Normalization::Smart,
         );
 
-        // Collect matches with scores: (original_index, score, entry, indices)
         let mut scored_results: Vec<(usize, u32, &HistoryEntry, Vec<u32>)> = Vec::new();
         let mut buf = Vec::new();
+        let mut normalized_cmd = String::new();
 
         for (original_idx, entry) in entries.iter().enumerate() {
+            // Normalize command for scoring (- → space)
+            normalized_cmd.clear();
+            normalized_cmd.extend(entry.command.chars().map(|c| if c == '-' { ' ' } else { c }));
             buf.clear();
-            let haystack = Utf32Str::new(&entry.command, &mut buf);
+            let haystack = Utf32Str::new(&normalized_cmd, &mut buf);
 
-            if let Some(score) = pattern.score(haystack, &mut self.matcher) {
-                // Get match indices for highlighting
+            if let Some(score) = scoring_pattern.score(haystack, &mut self.matcher) {
+                // Get highlight indices from original command/query, with fallback to scoring
+                // pattern if original query doesn't match (e.g., query "--release" vs cmd "release")
                 let mut indices = Vec::new();
                 buf.clear();
                 let haystack = Utf32Str::new(&entry.command, &mut buf);
-                pattern.indices(haystack, &mut self.matcher, &mut indices);
+                highlight_pattern.indices(haystack, &mut self.matcher, &mut indices);
+                if indices.is_empty() {
+                    buf.clear();
+                    let haystack = Utf32Str::new(&entry.command, &mut buf);
+                    scoring_pattern.indices(haystack, &mut self.matcher, &mut indices);
+                }
                 scored_results.push((original_idx, score, entry, indices));
             }
         }
