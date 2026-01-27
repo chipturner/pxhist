@@ -217,3 +217,43 @@ fn atomic_matching_line_remove() {
     let contents = std::fs::read_to_string(&path).unwrap();
     assert!(contents.is_empty());
 }
+
+#[test]
+fn test_get_hostname_strips_domain() {
+    use bstr::BString;
+    use std::env;
+
+    // Save original PXH_HOSTNAME if it exists
+    let original = env::var_os("PXH_HOSTNAME");
+
+    // Test FQDN hostname gets shortened to first component
+    unsafe { env::set_var("PXH_HOSTNAME", "myhost.example.local") };
+    let hostname = pxh::get_hostname();
+    assert_eq!(hostname, BString::from("myhost"));
+
+    // Test simple hostname stays unchanged
+    unsafe { env::set_var("PXH_HOSTNAME", "myhost") };
+    let hostname = pxh::get_hostname();
+    assert_eq!(hostname, BString::from("myhost"));
+
+    // Test multiple dots - should only keep first component
+    unsafe { env::set_var("PXH_HOSTNAME", "host.sub.example.com") };
+    let hostname = pxh::get_hostname();
+    assert_eq!(hostname, BString::from("host"));
+
+    // Test empty hostname stays empty
+    unsafe { env::set_var("PXH_HOSTNAME", "") };
+    let hostname = pxh::get_hostname();
+    assert_eq!(hostname, BString::from(""));
+
+    // Test leading dot produces empty string
+    unsafe { env::set_var("PXH_HOSTNAME", ".example.com") };
+    let hostname = pxh::get_hostname();
+    assert_eq!(hostname, BString::from(""));
+
+    // Restore original PXH_HOSTNAME or unset it
+    match original {
+        Some(val) => unsafe { env::set_var("PXH_HOSTNAME", val) },
+        None => unsafe { env::remove_var("PXH_HOSTNAME") },
+    }
+}

@@ -57,10 +57,18 @@ pub fn set_setting(
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
 pub fn get_hostname() -> BString {
-    env::var_os("PXH_HOSTNAME")
-        .unwrap_or_else(|| hostname::get().unwrap_or_default())
-        .as_bytes()
-        .into()
+    let hostname =
+        env::var_os("PXH_HOSTNAME").unwrap_or_else(|| hostname::get().unwrap_or_default());
+
+    // Extract short hostname (before first dot). The shell integration already
+    // sets PXH_HOSTNAME via `hostname -s`, but when falling back to
+    // hostname::get() the result may be an FQDN, so strip the domain suffix.
+    let hostname_bytes = hostname.as_bytes();
+    if let Some(dot_pos) = hostname_bytes.iter().position(|&b| b == b'.') {
+        BString::from(&hostname_bytes[..dot_pos])
+    } else {
+        BString::from(hostname_bytes)
+    }
 }
 
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
