@@ -222,7 +222,6 @@ pub struct RecallTui {
     /// Filtered indices with match positions: (entry_index, match_char_indices)
     filtered_indices: Vec<(usize, Vec<u32>)>,
     query: String,
-    cursor_position: usize,
     selected_index: usize,
     scroll_offset: usize, // Index of entry at top of visible area
     tty: File,
@@ -273,8 +272,6 @@ impl RecallTui {
 
         let (term_width, term_height) = terminal::size()?;
 
-        let cursor_position = query.len();
-
         // Apply initial fuzzy filtering
         let filtered_indices = if query.is_empty() {
             (0..entries.len()).map(|i| (i, Vec::new())).collect()
@@ -301,7 +298,6 @@ impl RecallTui {
             entries,
             filtered_indices,
             query,
-            cursor_position,
             selected_index: 0,
             scroll_offset: 0,
             tty,
@@ -443,24 +439,19 @@ impl RecallTui {
             }
 
             if let Event::Key(key) = event::read()? {
-                match self.handle_key(key)? {
+                let action = self.handle_key(key)?;
+                match action {
                     KeyAction::Continue => continue,
-                    KeyAction::Select => {
+                    KeyAction::Select | KeyAction::Edit => {
                         self.cleanup()?;
                         if !self.shell_mode {
                             self.print_entry_details();
                             return Ok(None);
                         }
-                        let result = self.get_selected_command().map(|cmd| format!("run:{cmd}"));
-                        return Ok(result);
-                    }
-                    KeyAction::Edit => {
-                        self.cleanup()?;
-                        if !self.shell_mode {
-                            self.print_entry_details();
-                            return Ok(None);
-                        }
-                        let result = self.get_selected_command().map(|cmd| format!("edit:{cmd}"));
+                        let prefix =
+                            if matches!(action, KeyAction::Select) { "run" } else { "edit" };
+                        let result =
+                            self.get_selected_command().map(|cmd| format!("{prefix}:{cmd}"));
                         return Ok(result);
                     }
                     KeyAction::Cancel => {
@@ -473,8 +464,6 @@ impl RecallTui {
     }
 
     fn print_entry_details(&self) {
-        use crossterm::style::{Attribute, SetAttribute};
-
         let Some(entry) = self
             .filtered_indices
             .get(self.selected_index)
@@ -579,7 +568,7 @@ impl RecallTui {
         match key.code {
             KeyCode::Enter => Some(KeyAction::Select),
             KeyCode::Tab => Some(KeyAction::Edit),
-            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('c' | 'd') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::Cancel)
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -641,39 +630,19 @@ impl RecallTui {
                 Ok(KeyAction::Continue)
             }
             KeyCode::Backspace => {
-                self.delete_char_before_cursor();
+                self.delete_last_char();
                 Ok(KeyAction::Continue)
             }
-            KeyCode::Delete => {
-                self.delete_char_at_cursor();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Left => {
-                self.move_cursor_left();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Right => {
-                self.move_cursor_right();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Home | KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cursor_position = 0;
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::End | KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.cursor_position = self.query.len();
-                Ok(KeyAction::Continue)
-            }
+            KeyCode::Right => Ok(KeyAction::Edit),
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.delete_to_line_start();
+                self.clear_query();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.delete_word_before_cursor();
+                self.delete_last_word();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Unhandled Ctrl+key combo - flash for feedback
                 self.flash();
                 Ok(KeyAction::Continue)
             }
@@ -696,40 +665,23 @@ impl RecallTui {
 
         match key.code {
             KeyCode::Esc => {
-                // Switch to normal mode
                 self.keymap_mode = KeymapMode::VimNormal;
-                // Move cursor back one if not at start (vim behavior)
-                if self.cursor_position > 0 {
-                    self.cursor_position -= 1;
-                }
                 Ok(KeyAction::Continue)
             }
             KeyCode::Backspace => {
-                self.delete_char_before_cursor();
+                self.delete_last_char();
                 Ok(KeyAction::Continue)
             }
-            KeyCode::Delete => {
-                self.delete_char_at_cursor();
+            KeyCode::Right => Ok(KeyAction::Edit),
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.clear_query();
                 Ok(KeyAction::Continue)
             }
-            KeyCode::Left => {
-                self.move_cursor_left();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Right => {
-                self.move_cursor_right();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Home => {
-                self.cursor_position = 0;
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::End => {
-                self.cursor_position = self.query.len();
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.delete_last_word();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Unhandled Ctrl+key combo - flash for feedback
                 self.flash();
                 Ok(KeyAction::Continue)
             }
@@ -752,7 +704,6 @@ impl RecallTui {
 
         match key.code {
             KeyCode::Esc => Ok(KeyAction::Cancel),
-            // Navigation in results
             KeyCode::Char('j') => {
                 self.move_selection_down();
                 Ok(KeyAction::Continue)
@@ -761,64 +712,16 @@ impl RecallTui {
                 self.move_selection_up();
                 Ok(KeyAction::Continue)
             }
-            // Cursor movement in query
-            KeyCode::Char('h') | KeyCode::Left => {
-                self.move_cursor_left();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('l') | KeyCode::Right => {
-                self.move_cursor_right();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('0') | KeyCode::Home => {
-                self.cursor_position = 0;
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('$') | KeyCode::End => {
-                self.cursor_position = self.query.len().saturating_sub(1).max(0);
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('w') => {
-                self.move_cursor_word_forward();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('b') => {
-                self.move_cursor_word_backward();
-                Ok(KeyAction::Continue)
-            }
-            // Enter insert mode
-            KeyCode::Char('i') => {
+            KeyCode::Char('l') | KeyCode::Right => Ok(KeyAction::Edit),
+            KeyCode::Char('i' | 'a' | 'A' | 'I') => {
                 self.keymap_mode = KeymapMode::VimInsert;
                 Ok(KeyAction::Continue)
             }
-            KeyCode::Char('a') => {
-                self.keymap_mode = KeymapMode::VimInsert;
-                if self.cursor_position < self.query.len() {
-                    self.cursor_position += 1;
-                }
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('A') => {
-                self.keymap_mode = KeymapMode::VimInsert;
-                self.cursor_position = self.query.len();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('I') => {
-                self.keymap_mode = KeymapMode::VimInsert;
-                self.cursor_position = 0;
-                Ok(KeyAction::Continue)
-            }
-            // Delete operations
-            KeyCode::Char('x') => {
-                self.delete_char_at_cursor();
-                Ok(KeyAction::Continue)
-            }
-            KeyCode::Char('X') => {
-                self.delete_char_before_cursor();
+            KeyCode::Char('x' | 'X') => {
+                self.delete_last_char();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Unhandled Ctrl+key combo - flash for feedback
                 self.flash();
                 Ok(KeyAction::Continue)
             }
@@ -826,7 +729,7 @@ impl RecallTui {
         }
     }
 
-    // Helper methods for cursor/selection movement
+    // Helper methods for selection movement and query editing
 
     fn move_selection_up(&mut self) {
         if self.selected_index + 1 < self.filtered_indices.len() {
@@ -855,81 +758,30 @@ impl RecallTui {
         self.adjust_scroll_for_selection();
     }
 
-    fn move_cursor_left(&mut self) {
-        if self.cursor_position > 0 {
-            self.cursor_position -= 1;
-        }
-    }
-
-    fn move_cursor_right(&mut self) {
-        if self.cursor_position < self.query.len() {
-            self.cursor_position += 1;
-        }
-    }
-
-    fn move_cursor_word_forward(&mut self) {
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut pos = self.cursor_position;
-        // Skip current word (non-whitespace)
-        while pos < chars.len() && !chars[pos].is_whitespace() {
-            pos += 1;
-        }
-        // Skip whitespace
-        while pos < chars.len() && chars[pos].is_whitespace() {
-            pos += 1;
-        }
-        self.cursor_position = pos;
-    }
-
-    fn move_cursor_word_backward(&mut self) {
-        let chars: Vec<char> = self.query.chars().collect();
-        let mut pos = self.cursor_position.saturating_sub(1);
-        // Skip whitespace
-        while pos > 0 && chars[pos].is_whitespace() {
-            pos -= 1;
-        }
-        // Skip word (non-whitespace)
-        while pos > 0 && !chars[pos - 1].is_whitespace() {
-            pos -= 1;
-        }
-        self.cursor_position = pos;
-    }
-
     fn insert_char(&mut self, c: char) {
-        self.query.insert(self.cursor_position, c);
-        self.cursor_position += 1;
+        self.query.push(c);
         self.update_filtered_indices();
     }
 
-    fn delete_char_before_cursor(&mut self) {
-        if self.cursor_position > 0 {
-            self.query.remove(self.cursor_position - 1);
-            self.cursor_position -= 1;
+    fn delete_last_char(&mut self) {
+        if self.query.pop().is_some() {
             self.update_filtered_indices();
         }
     }
 
-    fn delete_char_at_cursor(&mut self) {
-        if self.cursor_position < self.query.len() {
-            self.query.remove(self.cursor_position);
+    fn clear_query(&mut self) {
+        if !self.query.is_empty() {
+            self.query.clear();
             self.update_filtered_indices();
         }
     }
 
-    fn delete_to_line_start(&mut self) {
-        self.query = self.query[self.cursor_position..].to_string();
-        self.cursor_position = 0;
-        self.update_filtered_indices();
-    }
-
-    fn delete_word_before_cursor(&mut self) {
-        if self.cursor_position > 0 {
-            let before_cursor = &self.query[..self.cursor_position];
+    fn delete_last_word(&mut self) {
+        if !self.query.is_empty() {
+            let trimmed_len = self.query.trim_end().len();
             let word_start =
-                before_cursor.trim_end().rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
-            self.query =
-                format!("{}{}", &self.query[..word_start], &self.query[self.cursor_position..]);
-            self.cursor_position = word_start;
+                self.query[..trimmed_len].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+            self.query.truncate(word_start);
             self.update_filtered_indices();
         }
     }
@@ -1209,17 +1061,17 @@ impl RecallTui {
         }
         let help_text = match self.keymap_mode {
             KeymapMode::Emacs => {
-                "↑↓/^R Nav  Enter Select  Tab Edit  ^G Dir  ^H Host  ^C Quit  Esc Cancel  Alt-1-9"
+                "↑↓/^R Nav  Enter Select  Tab/→ Edit  ^G Dir  ^H Host  ^C/^D Quit  Alt-1-9"
             }
             KeymapMode::VimInsert | KeymapMode::VimNormal => {
-                "j/k Nav  Enter Select  Tab Edit  ^G Dir  ^H Host  ^C Quit  Esc Mode  Alt-1-9"
+                "j/k Nav  Enter Select  Tab/→ Edit  ^G Dir  ^H Host  ^C/^D Quit  Esc Mode  Alt-1-9"
             }
         };
         write!(w, "{help_text}")?;
         queue!(w, ResetColor)?;
 
         // Position cursor at end of query in input line
-        queue!(w, MoveTo(2 + self.cursor_position as u16, input_y))?;
+        queue!(w, MoveTo(2 + self.query.len() as u16, input_y))?;
 
         // Re-enable line wrap
         write!(w, "\x1b[?7h")?;

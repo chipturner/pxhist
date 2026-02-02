@@ -83,10 +83,12 @@ When you press **Ctrl-R** in your shell, pxh recall opens in shell integration m
 | Type | Filter results incrementally |
 | ↑/↓ or Ctrl-R/Ctrl-N | Navigate results |
 | Enter | Show details (standalone) or execute (Ctrl-R) |
-| Tab | Edit before executing (Ctrl-R mode) |
+| Tab or → | Edit before executing (Ctrl-R mode) |
 | Alt-1 to Alt-9 | Quick-select visible entries |
-| Home/End | Jump to start/end of query |
-| Ctrl-C or Esc | Cancel |
+| Backspace | Delete last character |
+| Ctrl-W | Delete last word |
+| Ctrl-U | Clear query |
+| Ctrl-C, Ctrl-D, or Esc | Cancel |
 | Ctrl-P/Ctrl-N | Navigate (emacs mode) |
 | j/k | Navigate (vim normal mode) |
 
