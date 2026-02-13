@@ -8,6 +8,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 
 ## Build Commands
 - Build: `cargo build` or `cargo build --release`
+- Quick validation: `just check` (runs clippy + tests)
 - Run tests: `cargo test`
 - Run single test: `cargo test test_name`
 - Run integration tests: `cargo test --test integration_tests`
@@ -28,6 +29,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - **`src/lib.rs`**: Core business logic including database operations, history parsing, shell integration, and the `helpers` and `test_utils` modules
 - **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates
 - **`src/schema_migration.sql`**: Migration script for schema changes (deduplication with COALESCE-based unique index)
+- **`src/secrets_patterns.rs`**: Built-in regex patterns for detecting secrets in command history (used by Scan/Scrub)
 - **`src/shell_configs/`**: Shell integration scripts for bash (`pxh.bash`) and zsh (`pxh.zsh`) using preexec hooks
 - **`src/recall/`**: Interactive TUI history search module
   - `mod.rs`: Module exports
@@ -84,6 +86,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/sync_test.rs`**: Comprehensive sync functionality tests (directory, remote SSH, stdin/stdout)
 - **`tests/ssh_sync_test.rs`**: SSH-specific sync testing
 - **`tests/recall_test.rs`**: Interactive TUI recall functionality tests
+- **`tests/scan_test.rs`**: Secret scanning and pattern detection tests
 - **`tests/unit.rs`**: Unit tests for core functionality
 - **`tests/interactive_shell_test.rs`**: Interactive shell session testing with rexpect
 - **`tests/shell_integration_simple_test.rs`**: Simple shell integration tests
