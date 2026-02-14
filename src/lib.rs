@@ -673,7 +673,7 @@ pub mod test_utils {
         process::Command,
     };
 
-    use rand::{Rng, distr::Alphanumeric};
+    use rand::{RngExt, distr::Alphanumeric};
     use tempfile::TempDir;
 
     pub fn pxh_path() -> PathBuf {

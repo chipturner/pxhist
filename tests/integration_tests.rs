@@ -6,7 +6,7 @@ use std::{
 
 use assert_cmd::Command;
 use bstr::BString;
-use rand::Rng;
+use rand::RngExt;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
