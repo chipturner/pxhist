@@ -47,6 +47,10 @@ jobs:
     - name: Run tests
       run: cargo test --locked --verbose
 
+    - name: Check publishable
+      if: runner.os == 'Linux'
+      run: cargo publish --locked --dry-run
+
   msrv:
     runs-on: ubuntu-latest
 
