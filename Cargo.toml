@@ -15,6 +15,9 @@ keywords = ["shell", "history", "search", "bash", "zsh"]
 categories = ["command-line-utilities"]
 license = "MIT"
 
+[package.metadata.release]
+publish = false
+
 [lib]
 path = "src/lib.rs"
 
