@@ -17,6 +17,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Lint: `cargo clippy -- -D warnings`
 - Upgrade dependencies: `just cargo-upgrade`
 - Coverage: `just coverage` or `just coverage-detailed`
+- Clean coverage data: `just coverage-clean`
 
 ## Workflow
 - After tests pass, run `cargo clippy -- -D warnings` to catch any warnings
@@ -34,14 +35,14 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - **`src/recall/`**: Interactive TUI history search module
   - `mod.rs`: Module exports
   - `command.rs`: RecallCommand struct and FilterMode enum
-  - `engine.rs`: SearchEngine for database queries, HistoryEntry struct
+  - `engine.rs`: SearchEngine with nucleo fuzzy matching, score-based ranking, HistoryEntry struct
   - `tui.rs`: Terminal UI using crossterm (drawing, key handling, vim/emacs modes)
   - `config.rs`: TOML configuration loading from `~/.pxh/config.toml`
 
 ### Command Structure
 All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`. Key commands:
 - **Show/Search**: Query history with regex patterns, directory filters, session filters. Alias: `pxhs` (symlink/rename binary to invoke `pxh show` directly)
-- **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.pxh/config.toml`
+- **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.pxh/config.toml`. Uses nucleo fuzzy matching with `-` and `*` normalized to spaces (acting as word separators)
 - **Sync**: Bidirectional sync via SSH or shared directories with optional `--since` filtering
 - **Insert/Seal**: Internal commands called by shell hooks to record command start/end
 - **Import**: Bulk import from existing shell history files (bash, zsh, or JSON export)
