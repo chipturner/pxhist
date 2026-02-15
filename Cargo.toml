@@ -2,7 +2,7 @@
 name = "pxh"
 version = "0.9.3"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = [ "Chip Turner <cturner@pattern.net>" ]
 description = """
 pxh is a fast, cross-shell history mining tool with interactive fuzzy search,
