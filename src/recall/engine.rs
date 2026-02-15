@@ -233,10 +233,11 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
 
         // Nucleo's fuzzy matcher gives word-boundary bonuses, treating `-` as a separator.
         // This causes `--release` to score poorly (empty segments before "release").
-        // We normalize dashes to spaces for scoring so `--release` and `release` rank equally,
-        // but use the original query for highlighting so `--release` shows highlighted dashes.
+        // We normalize dashes and asterisks to spaces for scoring so `--release` and `release`
+        // rank equally, and `*` acts as a word separator in queries.
+        // The original query is used for highlighting so `--release` shows highlighted dashes.
         let normalized_query: String =
-            query.chars().map(|c| if c == '-' { ' ' } else { c }).collect();
+            query.chars().map(|c| if c == '-' || c == '*' { ' ' } else { c }).collect();
         let scoring_pattern = Pattern::parse(
             &normalized_query,
             nucleo::pattern::CaseMatching::Smart,
@@ -253,9 +254,10 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
         let mut normalized_cmd = String::new();
 
         for (original_idx, entry) in entries.iter().enumerate() {
-            // Normalize command for scoring (- → space)
+            // Normalize command for scoring (- and * → space)
             normalized_cmd.clear();
-            normalized_cmd.extend(entry.command.chars().map(|c| if c == '-' { ' ' } else { c }));
+            normalized_cmd
+                .extend(entry.command.chars().map(|c| if c == '-' || c == '*' { ' ' } else { c }));
             buf.clear();
             let haystack = Utf32Str::new(&normalized_cmd, &mut buf);
 
