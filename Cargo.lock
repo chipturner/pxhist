@@ -1006,7 +1006,7 @@ dependencies = [
 
 [[package]]
 name = "pxh"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "assert_cmd",
  "bstr 1.12.1",
