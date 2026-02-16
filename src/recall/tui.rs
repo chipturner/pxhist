@@ -609,6 +609,9 @@ impl RecallTui {
                 self.toggle_filter_mode();
                 Some(KeyAction::Continue)
             }
+            KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::Edit)
+            }
             _ => None,
         }
     }
@@ -1061,10 +1064,10 @@ impl RecallTui {
         }
         let help_text = match self.keymap_mode {
             KeymapMode::Emacs => {
-                "↑↓/^R Nav  Enter Select  Tab/→ Edit  ^G Dir  ^H Host  ^C/^D Quit  Alt-1-9"
+                "↑↓/^R Nav  Enter Select  Tab/→/^E Edit  ^G Dir  ^H Host  ^C/^D Quit  Alt-1-9"
             }
             KeymapMode::VimInsert | KeymapMode::VimNormal => {
-                "j/k Nav  Enter Select  Tab/→ Edit  ^G Dir  ^H Host  ^C/^D Quit  Esc Mode  Alt-1-9"
+                "j/k Nav  Enter Select  Tab/→/^E Edit  ^G Dir  ^H Host  ^C/^D Quit  Esc Mode  Alt-1-9"
             }
         };
         write!(w, "{help_text}")?;
