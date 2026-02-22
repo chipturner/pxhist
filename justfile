@@ -12,6 +12,9 @@ fmt:
 
 cargo-upgrade *args:
 	cargo-upgrade upgrade {{ args }}
+	cargo update
+	cargo clippy -- -D warnings
+	cargo test
 
 coverage:
 	./coverage.sh
