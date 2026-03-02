@@ -30,7 +30,7 @@ home = "0.5.12"
 itertools = "0.14.0"
 prettytable-rs = "0.10.0"
 rand = "0.10.0"
-chrono = "0.4.43"
+chrono = "0.4.44"
 uzers = "0.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
