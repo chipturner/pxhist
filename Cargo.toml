@@ -36,7 +36,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["arbitrary_precision"] }
 regex = "1.12.3"
 hostname = "0.4.2"
-rusqlite = { version = "0.38.0", features = ["bundled", "functions"] }
+rusqlite = { version = "0.39.0", features = ["bundled", "functions"] }
 tempfile = "3.25.0"
 crossterm = { version = "0.29", features = ["use-dev-tty"] }
 nucleo = "0.5"
