@@ -16,6 +16,11 @@ cargo-upgrade *args:
 	cargo clippy -- -D warnings
 	cargo test
 
+vendor-update:
+	git submodule update --init --recursive
+	cp secrets-patterns-db/db/rules-stable.yml src/vendor/rules-stable.yml
+	cp src/shell_configs/bash-preexec/bash-preexec.sh src/vendor/bash-preexec.sh
+
 coverage:
 	./coverage.sh
 

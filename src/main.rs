@@ -354,7 +354,7 @@ impl ShellConfigCommand {
             "zsh" => String::from(include_str!("shell_configs/pxh.zsh")),
             "bash" => {
                 let mut contents = String::new();
-                contents.push_str(include_str!("shell_configs/bash-preexec/bash-preexec.sh"));
+                contents.push_str(include_str!("vendor/bash-preexec.sh"));
                 contents.push_str(include_str!("shell_configs/pxh.bash"));
                 contents
             }

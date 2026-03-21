@@ -69,12 +69,12 @@ fn main() {
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("secrets_patterns_generated.rs");
 
-    let yaml_path = Path::new("secrets-patterns-db/db/rules-stable.yml");
+    let yaml_path = Path::new("src/vendor/rules-stable.yml");
 
     if !yaml_path.exists() {
         panic!(
-            "secrets-patterns-db submodule not initialized. \
-             Run: git submodule update --init"
+            "src/vendor/rules-stable.yml not found. \
+             Run: just vendor-update"
         );
     }
 
@@ -123,6 +123,6 @@ pub const PATTERNS_LOW: &[(&str, &str)] = &[
 
     fs::write(&dest_path, code).unwrap();
 
-    println!("cargo:rerun-if-changed=secrets-patterns-db/db/rules-stable.yml");
+    println!("cargo:rerun-if-changed=src/vendor/rules-stable.yml");
     println!("cargo:rerun-if-changed=build.rs");
 }
