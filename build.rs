@@ -72,14 +72,10 @@ fn main() {
     let yaml_path = Path::new("secrets-patterns-db/db/rules-stable.yml");
 
     if !yaml_path.exists() {
-        // Generate empty patterns if submodule not initialized
-        let empty_code = r#"
-pub const PATTERNS_CRITICAL: &[(&str, &str)] = &[];
-pub const PATTERNS_HIGH: &[(&str, &str)] = &[];
-pub const PATTERNS_LOW: &[(&str, &str)] = &[];
-"#;
-        fs::write(&dest_path, empty_code).unwrap();
-        return;
+        panic!(
+            "secrets-patterns-db submodule not initialized. \
+             Run: git submodule update --init"
+        );
     }
 
     let yaml_content = fs::read_to_string(yaml_path).expect("Failed to read YAML file");
