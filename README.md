@@ -1,57 +1,45 @@
 # pxh
 
-Portable, extensible history manager for bash and zsh.
+Fast, local-first shell history search and sync for bash and zsh.
 
-pxh is a fast, reliable, and unobtrusive persistence and search engine for one of your most valuable knowledge vaults: your shell history. Import your existing history files to get started, then enjoy powerful search, synchronization across machines, and security scanning.
+Your shell history is one of the most useful things on your machine -- but it's
+fragile, unsearchable, and stuck on one box. pxh fixes that. It stores every
+command in a local SQLite database with rich metadata (directory, host, exit
+code, duration), gives you powerful regex search and an interactive TUI, and
+syncs across machines over SSH or a shared filesystem.
 
-## Features
+**No cloud accounts. No servers. No networking code. No AI.** Just your history,
+on your machines, searchable in milliseconds.
 
-- **Fast and unobtrusive** - Once installed, you'll never notice it except when searching
-- **Rich metadata** - Tags commands with directory, host, user, exit codes, and durations
-- **Powerful search** - Regex patterns, directory filtering, session filtering, and more
-- **Interactive browser** - TUI for exploring history with vim/emacs keybindings
-- **Cross-machine sync** - No cloud service or account required; uses SSH or shared directories
-- **Privacy-focused** - Contains zero networking code; all sync happens through SSH or filesystem
-- **Security scanning** - Detect and remove secrets from your history
-- **Configuration** - Customize behavior via `~/.pxh/config.toml`
+```
+$ pxh s ffmpeg
+ 2022-06-04 07:54:04  ffmpeg -encoders | grep '^ V'
+ 2022-06-07 23:17:33  ffmpeg -y -r 30 -f concat -safe 0 -i <(sed...) -c:v libx264rgb output.mp4
+ 2022-08-03 10:39:11  ffmpeg -i cropped.mp4 -vf "pad=width=430:..." cropped.gif
+```
 
-Currently supports **bash** and **zsh**.
+## Install
 
-## Table of Contents
-
-- [Installation](#installation)
-- [Usage](#usage)
-  - [Interactive Browser](#interactive-browser-pxh-recall)
-  - [Searching History](#searching-history-pxh-show)
-  - [Synchronizing](#synchronizing-history-pxh-sync)
-  - [Security](#security-scanning-and-scrubbing)
-  - [Other Commands](#other-commands)
-- [Configuration](#configuration)
-- [Design Tradeoffs](#design-tradeoffs)
-- [Tips and Tricks](#tips-and-tricks)
-- [Credits](#credits)
-- [How it Works](#how-it-works)
-
-## Installation
-
-### From source
+**Prebuilt binaries** (Linux x86_64/ARM64, macOS x86_64/ARM64):
 
 ```bash
-git clone https://github.com/chipturner/pxhist.git
-cd pxhist
-cargo build --release
-cp target/release/pxh ~/.local/bin/  # or somewhere in your PATH
+curl -sSfL https://raw.githubusercontent.com/chipturner/pxhist/main/install.sh | sh
+```
+
+**From source:**
+
+```bash
+cargo install pxh        # requires Rust 1.88+
 ```
 
 ### Shell setup
 
-After installing the binary, set up shell integration and import your existing history:
+After installing, set up shell integration and import your existing history:
 
 ```bash
-# Install shell hooks (modifies your .bashrc or .zshrc)
 pxh install bash  # or: pxh install zsh
 
-# Import your existing history - this is important!
+# Import your existing history
 pxh import --shellname bash --histfile ~/.bash_history
 # or for zsh:
 pxh import --shellname zsh --histfile ~/.zsh_history
@@ -60,13 +48,13 @@ pxh import --shellname zsh --histfile ~/.zsh_history
 source <(pxh shell-config bash)  # or: source <(pxh shell-config zsh)
 ```
 
-From now on, pxh will automatically record your commands with rich metadata.
+From now on, pxh automatically records commands with directory, host, user, exit code, and duration.
 
 ## Usage
 
 ### Interactive Browser (pxh recall)
 
-The `pxh recall` command opens an interactive TUI for browsing your history. When used standalone, pressing Enter displays detailed information about the selected command.
+Press **Ctrl-R** in your shell to open the interactive history browser. Type to filter, arrows to navigate, Enter to execute, Tab to edit before executing. Alt-1 through Alt-9 quick-select visible entries.
 
 ```bash
 pxh recall           # Open history browser
@@ -74,29 +62,11 @@ pxh recall --here    # Limit to current directory
 pxh recall -q "git"  # Start with a pre-filled query
 ```
 
-When you press **Ctrl-R** in your shell, pxh recall opens in shell integration mode where Enter executes the selected command directly.
-
-**Keybindings:**
-
-| Key | Action |
-|-----|--------|
-| Type | Filter results incrementally |
-| ↑/↓ or Ctrl-R/Ctrl-N | Navigate results |
-| Enter | Show details (standalone) or execute (Ctrl-R) |
-| Tab or → | Edit before executing (Ctrl-R mode) |
-| Alt-1 to Alt-9 | Quick-select visible entries |
-| Backspace | Delete last character |
-| Ctrl-W | Delete last word |
-| Ctrl-U | Clear query |
-| Ctrl-C, Ctrl-D, or Esc | Cancel |
-| Ctrl-P/Ctrl-N | Navigate (emacs mode) |
-| j/k | Navigate (vim normal mode) |
-
-**Vim mode:** Configure `keymap = "vim"` in your config file to start in vim insert mode. Press Escape to enter normal mode.
+Supports both emacs (default) and vim keybindings -- set `keymap = "vim"` in `~/.pxh/config.toml`.
 
 ### Searching History (pxh show)
 
-For power searching and scripting, use the `show` command (alias: `s`). This is the primary interface for finding commands:
+The `show` command (alias: `s`) is the power-search interface:
 
 ```bash
 pxh show ffmpeg           # Find commands containing "ffmpeg"
@@ -107,14 +77,6 @@ pxh s --session $PXH_SESSION_ID  # Only commands from current shell session
 pxh s -v cargo build      # Verbose: show duration, session, directory
 pxh s -l 100 git          # Show up to 100 results (default: 50, 0 = unlimited)
 pxh s --loosen foo bar    # Match patterns in any order
-```
-
-**Example output:**
-```
-$ pxh s ffmpeg
- 2022-06-04 07:54:04  ffmpeg -encoders | grep '^ V'
- 2022-06-07 23:17:33  ffmpeg -y -r 30 -f concat -safe 0 -i <(sed...) -c:v libx264rgb output.mp4
- 2022-08-03 10:39:11  ffmpeg -i cropped.mp4 -vf "pad=width=430:..." cropped.gif
 ```
 
 **Verbose output (`-v`):**
@@ -264,39 +226,11 @@ show_hostname = false  # Useful if syncing across machines
 disable_ctrl_r = false
 ```
 
-## Design Tradeoffs
+## Design
 
-pxh makes deliberate design choices that differ from other history tools:
+pxh contains **zero networking code**. Sync works by invoking your SSH client or reading/writing files on a shared filesystem. No accounts, no cloud services, no ports, no attack surface. Your history stays on machines you control.
 
-### No Networking Code
-
-pxh contains zero networking code. All synchronization happens through:
-- **SSH**: pxh invokes your SSH client directly, leveraging your existing keys and config
-- **Shared filesystems**: Dropbox, NFS, or any directory you can read/write
-
-This means no accounts to create, no cloud services to trust, no ports to open, and no attack surface from network-facing code. Your history stays on machines you control.
-
-### Local-First Storage
-
-All data is stored in a local SQLite database (`~/.pxh/pxh.db`). There's no central server. You own your data completely.
-
-### Performance Goals
-
-pxh is designed to be fast enough that you never notice it:
-- **Recording**: Commands are inserted via prepared statements; you won't feel any delay
-- **Searching**: SQLite with proper indexes handles hundreds of thousands of commands easily
-- **TUI**: Optimized rendering with buffered writes and minimal syscalls
-
-### Native Binary
-
-Unlike shell-script-based solutions, pxh is a compiled Rust binary. This provides:
-- Consistent behavior across bash and zsh
-- Proper handling of edge cases (quoting, binary data, concurrent access)
-- No dependency on system SQLite version or shell quirks
-
-### Minimal Dependencies at Runtime
-
-pxh has no runtime dependencies beyond libc. The SQLite library is statically linked.
+All data lives in a local SQLite database (`~/.pxh/pxh.db`). There's no central server. The binary is statically linked with no runtime dependencies beyond libc -- consistent behavior across bash and zsh, proper handling of edge cases (quoting, binary data, concurrent access), and fast enough that you never notice it.
 
 ## Tips and Tricks
 
@@ -357,53 +291,16 @@ You can still use `pxh recall` directly or bind it to a different key.
 
 ## Credits
 
-Inspired by:
-- [bash-history-sqlite](https://github.com/thenewwazoo/bash-history-sqlite)
-- [zsh-histdb](https://github.com/larkery/zsh-histdb)
-- [mcfly](https://github.com/cantino/mcfly)
-- [atuin](https://github.com/atuinsh/atuin)
-
-pxh improves on shell-script solutions by:
-- Supporting multiple shells with one tool
-- Using a native binary instead of shell-invoked SQLite (faster, no quoting issues)
-- Providing a TUI, synchronization, and security scanning
-
-Embeds:
-- [Bash-Preexec](https://github.com/rcaloras/bash-preexec) for bash hook support
-- [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db) for secret detection patterns
+Inspired by [bash-history-sqlite](https://github.com/thenewwazoo/bash-history-sqlite), [zsh-histdb](https://github.com/larkery/zsh-histdb), [mcfly](https://github.com/cantino/mcfly), and [atuin](https://github.com/atuinsh/atuin). Embeds [bash-preexec](https://github.com/rcaloras/bash-preexec) and [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db).
 
 ## How it Works
 
-pxh uses SQLite to store and search your history efficiently. It hooks into your shell via preexec/precmd functions to capture:
+pxh hooks into your shell via preexec/precmd functions to capture each command with its start/end time, working directory, exit status, session ID, hostname, and username. For bash, it embeds [bash-preexec](https://github.com/rcaloras/bash-preexec); for zsh, it uses native hooks.
 
-- The command itself
-- Start and end timestamps
-- Working directory
-- Exit status
-- Session ID (to group commands by shell session)
-- Hostname and username
+Commands are stored as BLOBs (to handle non-UTF8 data) in SQLite with WAL mode and a 5-second busy timeout, so multiple shells can record simultaneously. A unique index prevents duplicates. Secret scanning uses patterns from [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db), categorized by confidence level.
 
-### Database Schema
+**Database location:** `~/.pxh/pxh.db` (override with `--db` or `PXH_DB_PATH`)
 
-The main `command_history` table stores commands as BLOBs to handle arbitrary binary data (some commands contain non-UTF8 characters). A unique index prevents duplicates while allowing the same command to appear with different metadata.
-
-### Concurrency
-
-The database uses WAL (Write-Ahead Logging) journal mode with a 5-second busy timeout, allowing multiple shells to record commands simultaneously without conflicts.
-
-### Shell Integration
-
-For **bash**, pxh embeds and uses [bash-preexec](https://github.com/rcaloras/bash-preexec), which provides zsh-style `preexec` and `precmd` hooks. The `preexec` hook records the command and start time; `precmd` records the exit status and end time.
-
-For **zsh**, pxh uses native `zshaddhistory` and `precmd` hooks.
-
-### Secret Detection
-
-The `scan` command uses patterns from [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db) to detect API keys, passwords, and tokens. Patterns are categorized by confidence level to minimize false positives.
-
-**Database location:** `~/.pxh/pxh.db` (override with `--db` or `PXH_DB_PATH` environment variable)
-
-You can examine the database directly:
 ```bash
 sqlite3 ~/.pxh/pxh.db "SELECT * FROM command_history LIMIT 10"
 ```
