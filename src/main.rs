@@ -1211,9 +1211,9 @@ impl SyncCommand {
             fs::create_dir(dirname)?;
         }
         let mut output_path = dirname.clone();
-        let original_hostname =
-            pxh::get_setting(&conn, "original_hostname")?.unwrap_or_else(pxh::get_hostname);
-        output_path.push(original_hostname.to_path_lossy());
+        let config = pxh::recall::config::Config::load();
+        let hostname = pxh::resolve_hostname(&config, &conn);
+        output_path.push(hostname.to_path_lossy());
         output_path.set_extension("db");
         // TODO: vacuum seems to want a plain text string path, unlike
         // ATTACH below which takes an os_str as bytes, so we can't
@@ -2269,6 +2269,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Insert(cmd) => {
             let mut conn = make_conn()?;
+            let config = pxh::recall::config::Config::load();
             let invocation = pxh::Invocation {
                 command: cmd.command.join(OsStr::new(" ")).as_bytes().into(),
                 shellname: cmd.shellname.clone(),
@@ -2282,6 +2283,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 start_unix_timestamp: cmd.start_unix_timestamp,
                 end_unix_timestamp: cmd.end_unix_timestamp,
                 session_id: cmd.session_id,
+                machine_id: config.host.machine_id,
             };
             let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
             invocation.insert(&tx)?;

@@ -969,8 +969,7 @@ impl RecallTui {
             // Show host prefix for entries from other hosts (in AllHosts mode)
             let host_prefix = if self.host_filter == HostFilter::AllHosts {
                 entry.hostname.as_ref().and_then(|h| {
-                    let current = self.engine.current_hostname();
-                    if h != current {
+                    if !self.engine.is_this_host(h) {
                         let short =
                             String::from_utf8_lossy(h).split('.').next().unwrap_or("?").to_string();
                         Some(format!("@{short}: "))
@@ -1030,7 +1029,7 @@ impl RecallTui {
         // Draw mode indicators on same line (host filter + dir/global)
         let host_str = match self.host_filter {
             HostFilter::ThisHost => {
-                let hostname = self.engine.current_hostname();
+                let hostname = self.engine.primary_hostname();
                 let short_host =
                     String::from_utf8_lossy(hostname).split('.').next().unwrap_or("?").to_string();
                 format!("[{short_host}]")

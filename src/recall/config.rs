@@ -2,14 +2,26 @@ use std::fs;
 use std::path::PathBuf;
 
 use serde::Deserialize;
+use toml_edit::DocumentMut;
 
 /// Main configuration struct
 #[derive(Debug, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
+    pub host: HostConfig,
+    #[serde(default)]
     pub recall: RecallConfig,
     #[serde(default)]
     pub shell: ShellConfig,
+}
+
+/// Configuration for host identity
+#[derive(Debug, Deserialize, Default)]
+#[serde(default)]
+pub struct HostConfig {
+    pub hostname: Option<String>,
+    pub machine_id: Option<u64>,
+    pub aliases: Vec<String>,
 }
 
 /// Configuration for shell integration
@@ -103,9 +115,48 @@ impl Config {
         Some(home.join(".pxh").join("config.toml"))
     }
 
-    fn load_from_path(path: &PathBuf) -> Option<Self> {
+    pub fn load_from_path(path: &PathBuf) -> Option<Self> {
         let content = fs::read_to_string(path).ok()?;
         toml::from_str(&content).ok()
+    }
+
+    /// Update the config file at the default path, preserving existing content.
+    /// Each update is a (dotted_key, value) pair, e.g. ("host.hostname", value).
+    pub fn update_default_config(
+        updates: &[(&str, toml_edit::Item)],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let path = Self::default_config_path().ok_or("Could not determine config path")?;
+        Self::update_config_at_path(&path, updates)
+    }
+
+    pub fn update_config_at_path(
+        path: &PathBuf,
+        updates: &[(&str, toml_edit::Item)],
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let content = fs::read_to_string(path).unwrap_or_default();
+        let mut doc: DocumentMut = content.parse()?;
+
+        for (dotted_key, item) in updates {
+            let parts: Vec<&str> = dotted_key.split('.').collect();
+            match parts.as_slice() {
+                [section, key] => {
+                    if !doc.contains_table(section) {
+                        doc[section] = toml_edit::Item::Table(toml_edit::Table::new());
+                    }
+                    doc[section][key] = item.clone();
+                }
+                [key] => {
+                    doc[key] = item.clone();
+                }
+                _ => return Err(format!("Unsupported key depth: {dotted_key}").into()),
+            }
+        }
+
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(path, doc.to_string())?;
+        Ok(())
     }
 }
 
@@ -147,6 +198,100 @@ show_hostname = true
         // Defaults should be preserved for unspecified fields
         assert!(config.recall.preview.show_timestamp);
         assert!(config.recall.preview.show_exit_status);
+    }
+
+    #[test]
+    fn test_default_host_config() {
+        let config = Config::default();
+        assert!(config.host.hostname.is_none());
+        assert!(config.host.machine_id.is_none());
+        assert!(config.host.aliases.is_empty());
+    }
+
+    #[test]
+    fn test_parse_host_config() {
+        let toml = r#"
+[host]
+hostname = "my-old-mac"
+machine_id = 12345678901234567
+aliases = ["old-mac", "work-laptop"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.host.hostname.as_deref(), Some("my-old-mac"));
+        assert_eq!(config.host.machine_id, Some(12345678901234567));
+        assert_eq!(config.host.aliases, vec!["old-mac", "work-laptop"]);
+    }
+
+    #[test]
+    fn test_parse_partial_host_config() {
+        let toml = r#"
+[host]
+aliases = ["other-host"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.host.hostname.is_none());
+        assert!(config.host.machine_id.is_none());
+        assert_eq!(config.host.aliases, vec!["other-host"]);
+    }
+
+    #[test]
+    fn test_update_config_preserves_existing() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"# my comment
+[recall]
+keymap = "vim"
+"#,
+        )
+        .unwrap();
+
+        Config::update_config_at_path(
+            &path,
+            &[
+                ("host.hostname", toml_edit::value("my-host")),
+                ("host.machine_id", toml_edit::value(42_i64)),
+            ],
+        )
+        .unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("# my comment"), "comment preserved");
+        assert!(content.contains("keymap = \"vim\""), "existing config preserved");
+        assert!(content.contains("hostname = \"my-host\""));
+        assert!(content.contains("machine_id = 42"));
+
+        let config = Config::load_from_path(&path).unwrap();
+        assert_eq!(config.host.hostname.as_deref(), Some("my-host"));
+        assert_eq!(config.recall.keymap, "vim");
+    }
+
+    #[test]
+    fn test_update_config_creates_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("subdir").join("config.toml");
+
+        Config::update_config_at_path(
+            &path,
+            &[("host.aliases", toml_edit::value(toml_edit::Array::from_iter(["a", "b"])))],
+        )
+        .unwrap();
+
+        let config = Config::load_from_path(&path).unwrap();
+        assert_eq!(config.host.aliases, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_existing_config_without_host_section() {
+        let toml = r#"
+[recall]
+keymap = "vim"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.host.hostname.is_none());
+        assert!(config.host.aliases.is_empty());
+        assert_eq!(config.recall.keymap, "vim");
     }
 
     #[test]

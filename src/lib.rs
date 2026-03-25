@@ -93,6 +93,78 @@ fn resolve_through_symlinks(path: &Path) -> PathBuf {
     resolved
 }
 
+/// Resolve hostname: config > DB setting (legacy "original_hostname") > live hostname.
+pub fn resolve_hostname(config: &recall::config::Config, conn: &Connection) -> BString {
+    if let Some(ref h) = config.host.hostname {
+        return BString::from(h.as_bytes());
+    }
+    get_setting(conn, "original_hostname").ok().flatten().unwrap_or_else(get_hostname)
+}
+
+/// Build the set of hostnames that count as "this host" for recall filtering.
+/// Returns {current_hostname} ∪ {aliases}, deduped.
+pub fn effective_host_set(config: &recall::config::Config) -> Vec<BString> {
+    let current = get_hostname();
+    let mut hosts = vec![current];
+    for alias in &config.host.aliases {
+        let b = BString::from(alias.as_bytes());
+        if !hosts.contains(&b) {
+            hosts.push(b);
+        }
+    }
+    hosts
+}
+
+/// Migrate host settings to config file on startup.
+/// - If config lacks hostname, read from DB (legacy "original_hostname"), then delete from DB.
+/// - If config hostname doesn't match live hostname, move old to aliases and update.
+/// - If config lacks machine_id, generate one.
+fn migrate_host_settings(conn: &Connection) {
+    let config = recall::config::Config::load();
+    let mut updates: Vec<(&str, toml_edit::Item)> = Vec::new();
+    let live_hostname = get_hostname();
+
+    // Step 1: Establish config hostname (from DB legacy or live)
+    let config_hostname = if let Some(ref h) = config.host.hostname {
+        BString::from(h.as_bytes())
+    } else if let Ok(Some(hostname)) = get_setting(conn, "original_hostname") {
+        updates.push(("host.hostname", toml_edit::value(hostname.to_string())));
+        hostname
+    } else {
+        updates.push(("host.hostname", toml_edit::value(live_hostname.to_string())));
+        live_hostname.clone()
+    };
+
+    // Step 2: If hostname changed, move old to aliases and update
+    if config_hostname != live_hostname {
+        let mut aliases = config.host.aliases.clone();
+        let old_str = config_hostname.to_string();
+        if !aliases.contains(&old_str) {
+            aliases.push(old_str);
+        }
+        let alias_array = toml_edit::Array::from_iter(aliases.iter().map(|s| s.as_str()));
+        updates.push(("host.aliases", toml_edit::value(alias_array)));
+        updates.push(("host.hostname", toml_edit::value(live_hostname.to_string())));
+    }
+
+    // Step 3: Generate machine_id if missing
+    if config.host.machine_id.is_none() {
+        let id = rand::random::<u64>();
+        updates.push(("host.machine_id", toml_edit::value(id as i64)));
+    }
+
+    if !updates.is_empty()
+        && let Err(e) = recall::config::Config::update_default_config(&updates)
+    {
+        log::warn!("Failed to migrate host settings to config: {e}");
+        return;
+    }
+
+    // Clear legacy original_hostname from DB after successful config write
+    if config.host.hostname.is_none() {
+        let _ = conn.execute("DELETE FROM settings WHERE key = 'original_hostname'", []);
+    }
+}
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     if let Some(parent) = path.parent() {
@@ -136,11 +208,11 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
         Ok(is_match)
     })?;
 
-    // Check and set the original_hostname if it's not already set
-    if let Ok(None) = get_setting(&conn, "original_hostname") {
-        let hostname = get_hostname();
-        set_setting(&conn, "original_hostname", &hostname)?;
-    }
+    // Add machine_id column if not present (idempotent migration)
+    let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+
+    // Migrate host settings from DB to config file
+    migrate_host_settings(&conn);
 
     Ok(conn)
 }
@@ -156,6 +228,8 @@ pub struct Invocation {
     pub start_unix_timestamp: Option<i64>,
     pub end_unix_timestamp: Option<i64>,
     pub session_id: i64,
+    #[serde(default)]
+    pub machine_id: Option<u64>,
 }
 
 impl Invocation {
@@ -175,9 +249,10 @@ INSERT OR IGNORE INTO command_history (
     working_directory,
     exit_status,
     start_unix_timestamp,
-    end_unix_timestamp
+    end_unix_timestamp,
+    machine_id
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             (
                 self.session_id,
                 self.command.as_slice(),
@@ -188,6 +263,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                 self.exit_status,
                 self.start_unix_timestamp,
                 self.end_unix_timestamp,
+                self.machine_id.map(|id| id as i64),
             ),
         )?;
 
@@ -354,6 +430,7 @@ impl Invocation {
             exit_status: row.get("exit_status")?,
             start_unix_timestamp: row.get("start_unix_timestamp")?,
             end_unix_timestamp: row.get("end_unix_timestamp")?,
+            machine_id: row.get::<_, Option<i64>>("machine_id").ok().flatten().map(|v| v as u64),
         })
     }
 }
@@ -917,5 +994,75 @@ pub mod test_utils {
         fn default() -> Self {
             Self::new()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_hostname_from_config() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
+        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+
+        let mut config = recall::config::Config::default();
+        config.host.hostname = Some("from-config".to_string());
+        set_setting(&conn, "original_hostname", &BString::from("from-db")).unwrap();
+
+        let result = resolve_hostname(&config, &conn);
+        assert_eq!(result, BString::from("from-config"));
+    }
+
+    #[test]
+    fn test_resolve_hostname_from_db() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
+        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+
+        let config = recall::config::Config::default();
+        set_setting(&conn, "original_hostname", &BString::from("from-db")).unwrap();
+
+        let result = resolve_hostname(&config, &conn);
+        assert_eq!(result, BString::from("from-db"));
+    }
+
+    #[test]
+    fn test_resolve_hostname_live_fallback() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
+        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+
+        let config = recall::config::Config::default();
+        let result = resolve_hostname(&config, &conn);
+        assert_eq!(result, get_hostname());
+    }
+
+    #[test]
+    fn test_effective_host_set_no_aliases() {
+        let config = recall::config::Config::default();
+        let hosts = effective_host_set(&config);
+        assert_eq!(hosts, vec![get_hostname()]);
+    }
+
+    #[test]
+    fn test_effective_host_set_with_aliases() {
+        let mut config = recall::config::Config::default();
+        config.host.aliases = vec!["old-host".to_string(), "other-host".to_string()];
+        let hosts = effective_host_set(&config);
+        assert_eq!(hosts.len(), 3);
+        assert_eq!(hosts[0], get_hostname());
+        assert_eq!(hosts[1], BString::from("old-host"));
+        assert_eq!(hosts[2], BString::from("other-host"));
+    }
+
+    #[test]
+    fn test_effective_host_set_dedup() {
+        let mut config = recall::config::Config::default();
+        let current = get_hostname().to_string();
+        config.host.aliases = vec![current, "other".to_string()];
+        let hosts = effective_host_set(&config);
+        assert_eq!(hosts.len(), 2);
     }
 }

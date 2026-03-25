@@ -8,8 +8,6 @@ use rusqlite::Connection;
 use super::config::Config;
 use super::engine::{SearchEngine, format_relative_time};
 use super::tui::RecallTui;
-use crate::get_hostname;
-
 #[derive(Parser, Debug)]
 pub struct RecallCommand {
     #[clap(long, help = "Search only in current directory", conflicts_with = "global")]
@@ -65,8 +63,8 @@ impl RecallCommand {
             .unwrap_or_default();
 
         let result_limit = if self.print { self.limit } else { config.recall.result_limit };
-        let current_hostname = get_hostname();
-        let engine = SearchEngine::new(conn, working_directory, current_hostname, result_limit);
+        let host_set = crate::effective_host_set(&config);
+        let engine = SearchEngine::new(conn, working_directory, host_set, result_limit);
 
         // Print mode: just query and print results, no TUI
         if self.print {

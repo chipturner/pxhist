@@ -21,7 +21,7 @@ pub struct HistoryEntry {
 pub struct SearchEngine {
     conn: Connection,
     working_directory: PathBuf,
-    current_hostname: BString,
+    host_set: Vec<BString>,
     matcher: Matcher,
     result_limit: usize,
 }
@@ -30,21 +30,26 @@ impl SearchEngine {
     pub fn new(
         conn: Connection,
         working_directory: PathBuf,
-        current_hostname: BString,
+        host_set: Vec<BString>,
         result_limit: usize,
     ) -> Self {
         SearchEngine {
             conn,
             working_directory,
-            current_hostname,
+            host_set,
             matcher: Matcher::new(Config::DEFAULT),
             result_limit,
         }
     }
 
-    /// Get the current hostname
-    pub fn current_hostname(&self) -> &BString {
-        &self.current_hostname
+    /// Get the primary (current live) hostname -- used for display
+    pub fn primary_hostname(&self) -> &BString {
+        &self.host_set[0]
+    }
+
+    /// Check if a hostname is in this host's set (current + aliases)
+    pub fn is_this_host(&self, hostname: &BString) -> bool {
+        self.host_set.contains(hostname)
     }
 
     /// Load history entries from the database, optionally filtered by a search query
@@ -66,17 +71,18 @@ impl SearchEngine {
         host_filter: HostFilter,
         query: Option<&str>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        // Build WHERE clauses
         let mut where_conditions = Vec::new();
         let mut params: Vec<String> = Vec::new();
 
-        // Host filter
         if host_filter == HostFilter::ThisHost {
-            where_conditions.push("hostname = CAST(? as blob)".to_string());
-            params.push(self.current_hostname.to_string());
+            let placeholders: String =
+                self.host_set.iter().map(|_| "CAST(? as blob)").collect::<Vec<_>>().join(", ");
+            where_conditions.push(format!("hostname IN ({placeholders})"));
+            for h in &self.host_set {
+                params.push(h.to_string());
+            }
         }
 
-        // Search filter
         if let Some(q) = query
             && !q.is_empty()
         {
@@ -90,7 +96,6 @@ impl SearchEngine {
             format!("WHERE {}", where_conditions.join(" AND "))
         };
 
-        // Get full metadata from the most recent execution of each unique command
         let sql = format!(
             r#"
 SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
@@ -113,19 +118,11 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
-
-        let entries: Vec<HistoryEntry> = match params.len() {
-            0 => {
-                stmt.query_map([], |row| self.row_to_entry(row))?.collect::<Result<Vec<_>, _>>()?
-            }
-            1 => stmt
-                .query_map([&params[0]], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?,
-            2 => stmt
-                .query_map([&params[0], &params[1]], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?,
-            _ => unreachable!(),
-        };
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let entries: Vec<HistoryEntry> = stmt
+            .query_map(param_refs.as_slice(), |row| self.row_to_entry(row))?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(entries)
     }
@@ -152,18 +149,19 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
         host_filter: HostFilter,
         query: Option<&str>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        // Build WHERE clauses - directory is always filtered
         let mut where_conditions = vec!["working_directory = CAST(? as blob)".to_string()];
         let dir_str = self.working_directory.to_string_lossy().to_string();
         let mut params: Vec<String> = vec![dir_str];
 
-        // Host filter
         if host_filter == HostFilter::ThisHost {
-            where_conditions.push("hostname = CAST(? as blob)".to_string());
-            params.push(self.current_hostname.to_string());
+            let placeholders: String =
+                self.host_set.iter().map(|_| "CAST(? as blob)").collect::<Vec<_>>().join(", ");
+            where_conditions.push(format!("hostname IN ({placeholders})"));
+            for h in &self.host_set {
+                params.push(h.to_string());
+            }
         }
 
-        // Search filter
         if let Some(q) = query
             && !q.is_empty()
         {
@@ -173,7 +171,6 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
 
         let where_clause = format!("WHERE {}", where_conditions.join(" AND "));
 
-        // Get full metadata from the most recent execution of each unique command in this directory
         let sql = format!(
             r#"
 SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
@@ -196,19 +193,11 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
-
-        let entries: Vec<HistoryEntry> = match params.len() {
-            1 => stmt
-                .query_map([&params[0]], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?,
-            2 => stmt
-                .query_map([&params[0], &params[1]], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?,
-            3 => stmt
-                .query_map([&params[0], &params[1], &params[2]], |row| self.row_to_entry(row))?
-                .collect::<Result<Vec<_>, _>>()?,
-            _ => unreachable!(),
-        };
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let entries: Vec<HistoryEntry> = stmt
+            .query_map(param_refs.as_slice(), |row| self.row_to_entry(row))?
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(entries)
     }
