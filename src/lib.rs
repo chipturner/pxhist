@@ -74,6 +74,16 @@ pub fn get_hostname() -> BString {
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     let conn = Connection::open(path)?;
+
+    // Ensure the database file is only readable by the owner
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let mode = metadata.permissions().mode();
+        if mode & 0o077 != 0 {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+
     conn.busy_timeout(Duration::from_millis(5000))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
@@ -506,9 +516,9 @@ pub fn atomically_remove_lines_from_file(
     let input_file = File::open(input_filepath)?;
     let mut input_reader = BufReader::new(input_file);
 
-    let output_filepath = input_filepath.with_extension(".new"); // good enough for zsh, good enough for us
-    let output_file = File::create(&output_filepath)?;
-    let mut output_writer = BufWriter::new(output_file);
+    let parent = input_filepath.parent().unwrap_or(Path::new("."));
+    let temp_file = tempfile::NamedTempFile::new_in(parent)?;
+    let mut output_writer = BufWriter::new(&temp_file);
 
     input_reader.for_byte_line_with_terminator(|line| {
         if !line.contains_str(contraband) {
@@ -518,7 +528,8 @@ pub fn atomically_remove_lines_from_file(
     })?;
 
     output_writer.flush()?;
-    std::fs::rename(output_filepath, input_filepath)?;
+    drop(output_writer);
+    temp_file.persist(input_filepath)?;
     Ok(())
 }
 
@@ -535,11 +546,9 @@ pub fn atomically_remove_matching_lines_from_file(
     let input_file = File::open(input_filepath)?;
     let mut input_reader = BufReader::new(input_file);
 
-    let mut output_filepath = input_filepath.as_os_str().to_owned();
-    output_filepath.push(".new");
-    let output_filepath = PathBuf::from(output_filepath);
-    let output_file = File::create(&output_filepath)?;
-    let mut output_writer = BufWriter::new(output_file);
+    let parent = input_filepath.parent().unwrap_or(Path::new("."));
+    let temp_file = tempfile::NamedTempFile::new_in(parent)?;
+    let mut output_writer = BufWriter::new(&temp_file);
 
     input_reader.for_byte_line_with_terminator(|line| {
         let line_str = line.to_str_lossy();
@@ -551,7 +560,8 @@ pub fn atomically_remove_matching_lines_from_file(
     })?;
 
     output_writer.flush()?;
-    std::fs::rename(output_filepath, input_filepath)?;
+    drop(output_writer);
+    temp_file.persist(input_filepath)?;
     Ok(())
 }
 

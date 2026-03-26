@@ -4,14 +4,14 @@ _pxh_addhistory() {
     [[ "$cmd" =~ ^[[:space:]] ]] && return 1
     local started=$EPOCHSECONDS
     pxh \
-	--db $PXH_DB_PATH \
+	--db "$PXH_DB_PATH" \
 	insert \
 	--working-directory "$PWD" \
 	--hostname "$PXH_HOSTNAME" \
 	--shellname zsh \
 	--username "$USER" \
-	--session-id $PXH_SESSION_ID \
-	--start-unix-timestamp $started \
+	--session-id "$PXH_SESSION_ID" \
+	--start-unix-timestamp "$started" \
 	"$cmd"
 }
 
@@ -19,11 +19,11 @@ _pxh_update_last_status() {
     local retval=$?
     local ended=$EPOCHSECONDS
     pxh \
-	--db $PXH_DB_PATH \
+	--db "$PXH_DB_PATH" \
 	seal \
-	--session-id $PXH_SESSION_ID \
-	--end-unix-timestamp $ended \
-	--exit-status $retval
+	--session-id "$PXH_SESSION_ID" \
+	--end-unix-timestamp "$ended" \
+	--exit-status "$retval"
 }
 
 _pxh_random() {
@@ -51,7 +51,7 @@ _pxh_init() {
     PXH_HOSTNAME=$(hostname -s)
     export PXH_DB_PATH=${PXH_DB_PATH:-$HOME/.pxh/pxh.db}
 
-    [ ! -d $(dirname $PXH_DB_PATH) ] && mkdir -p -m 0700 $(dirname $PXH_DB_PATH)
+    [ ! -d "$(dirname "$PXH_DB_PATH")" ] && mkdir -p -m 0700 "$(dirname "$PXH_DB_PATH")"
 
     zmodload zsh/datetime # epochseconds
     autoload -Uz add-zsh-hook

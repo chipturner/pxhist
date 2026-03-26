@@ -44,6 +44,9 @@ struct SyncOptions {
 const REGEX_SIZE_LIMIT_DEFAULT: usize = 50 * 1024 * 1024; // 50MB
 const REGEX_SIZE_LIMIT_ALL: usize = 100 * 1024 * 1024; // 100MB for combined patterns
 
+// Maximum database size accepted during sync (1 GB)
+const MAX_SYNC_DB_SIZE: u64 = 1024 * 1024 * 1024;
+
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct PxhArgs {
@@ -516,7 +519,8 @@ impl MaintenanceCommand {
                 }
 
                 println!("  Dropping non-standard table: {table_name}");
-                conn.execute(&format!("DROP TABLE IF EXISTS {table_name}"), [])?;
+                let quoted = table_name.replace('"', "\"\"");
+                conn.execute(&format!("DROP TABLE IF EXISTS \"{quoted}\""), [])?;
                 cleanup_count += 1;
             }
 
@@ -556,7 +560,8 @@ impl MaintenanceCommand {
 
                 // Try to drop the index, but don't fail if it can't be dropped
                 // (might be a PRIMARY KEY or UNIQUE constraint)
-                match conn.execute(&format!("DROP INDEX IF EXISTS {index_name}"), []) {
+                let quoted = index_name.replace('"', "\"\"");
+                match conn.execute(&format!("DROP INDEX IF EXISTS \"{quoted}\""), []) {
                     Ok(_) => {
                         println!("  Dropping non-standard index: {index_name}");
                         cleanup_count += 1;
@@ -1521,6 +1526,14 @@ FROM other.command_history
         reader.read_exact(&mut size_bytes)?;
         let size = u64::from_le_bytes(size_bytes);
 
+        if size > MAX_SYNC_DB_SIZE {
+            return Err(format!(
+                "Received database size ({} bytes) exceeds maximum allowed ({} bytes)",
+                size, MAX_SYNC_DB_SIZE
+            )
+            .into());
+        }
+
         // Receive database data
         let mut data = vec![0u8; size as usize];
         reader.read_exact(&mut data)?;
@@ -1791,6 +1804,9 @@ impl ScrubCommand {
         }
 
         println!("Scrubbed {} entries from {} file(s).", total_scrubbed, files_modified);
+        if total_scrubbed > 0 {
+            eprintln!("Hint: run `pxh maintenance` to VACUUM and reclaim disk space.");
+        }
 
         if total_skipped > 0 {
             return Err(format!(
@@ -1916,6 +1932,9 @@ impl ScrubCommand {
         } else {
             let count = scrub_from_database(conn, &matches)?;
             println!("Scrubbed {} entries from database.", count);
+            if count > 0 {
+                eprintln!("Hint: run `pxh maintenance` to VACUUM and reclaim disk space.");
+            }
         }
 
         Ok(())
@@ -2002,8 +2021,16 @@ impl PrintableCommand for ShowCommand {
         &self,
         rows: Vec<pxh::Invocation>,
     ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
-        let regexes: Result<Vec<Regex>, _> =
-            self.patterns.iter().skip(1).map(|s| Regex::new(s.as_str())).collect();
+        let regexes: Result<Vec<Regex>, _> = self
+            .patterns
+            .iter()
+            .skip(1)
+            .map(|s| {
+                regex::bytes::RegexBuilder::new(s.as_str())
+                    .size_limit(REGEX_SIZE_LIMIT_DEFAULT)
+                    .build()
+            })
+            .collect();
         let regexes = regexes?;
         Ok(rows
             .into_iter()
