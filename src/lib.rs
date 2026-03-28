@@ -71,8 +71,36 @@ pub fn get_hostname() -> BString {
     }
 }
 
+/// Resolve symlinks in a path, even if the final target doesn't exist yet.
+/// Walks components left-to-right: canonicalizes each prefix that exists on disk,
+/// follows symlinks whose targets don't exist yet, and appends remaining components.
+fn resolve_through_symlinks(path: &Path) -> PathBuf {
+    let mut resolved = PathBuf::new();
+    for component in path.components() {
+        resolved.push(component);
+        if let Ok(canonical) = std::fs::canonicalize(&resolved) {
+            resolved = canonical;
+        } else if let Ok(target) = std::fs::read_link(&resolved) {
+            // Symlink exists but target doesn't -- follow it anyway
+            if target.is_absolute() {
+                resolved = target;
+            } else {
+                resolved.pop();
+                resolved.push(target);
+            }
+        }
+    }
+    resolved
+}
+
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
+    if let Some(parent) = path.parent() {
+        // Follow symlinks so create_dir_all creates the real target directory
+        // rather than conflicting with an existing symlink entry.
+        let resolved = resolve_through_symlinks(parent);
+        std::fs::create_dir_all(resolved)?;
+    }
     let conn = Connection::open(path)?;
 
     // Ensure the database file is only readable by the owner

@@ -87,6 +87,33 @@ fn test_build_remote_pxh_command_default() {
 }
 
 #[test]
+fn test_sqlite_connection_creates_parent_dirs() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("nested").join("subdir").join("pxh.db");
+    assert!(!db_path.parent().unwrap().exists());
+    let conn = pxh::sqlite_connection(&Some(db_path.clone()));
+    assert!(conn.is_ok(), "should create parent dirs: {:?}", conn.err());
+    assert!(db_path.exists());
+}
+
+#[test]
+fn test_sqlite_connection_creates_dirs_through_symlink() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // Symlink pointing to a directory that doesn't exist yet
+    let real_target = dir.path().join("real_pxh_dir");
+    let symlink = dir.path().join("pxh_link");
+    std::os::unix::fs::symlink(&real_target, &symlink).unwrap();
+    assert!(!real_target.exists());
+
+    let db_path = symlink.join("pxh.db");
+    let conn = pxh::sqlite_connection(&Some(db_path.clone()));
+    assert!(conn.is_ok(), "should create target dir through symlink: {:?}", conn.err());
+    assert!(real_target.exists());
+    assert!(db_path.exists());
+}
+
+#[test]
 fn test_get_relative_path_from_home() {
     // Test with no overrides - this will use the actual current exe and home dir
     let result = helpers::get_relative_path_from_home(None, None);
