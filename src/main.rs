@@ -80,6 +80,10 @@ enum Commands {
     #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
     ShellConfig(ShellConfigCommand),
     #[clap(
+        about = "(internal) print the most recent command matching a prefix for zsh-autosuggestions"
+    )]
+    Autosuggest(AutosuggestCommand),
+    #[clap(
         about = "perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space"
     )]
     Maintenance(MaintenanceCommand),
@@ -283,6 +287,12 @@ struct ShellConfigCommand {
 }
 
 #[derive(Parser, Debug)]
+struct AutosuggestCommand {
+    #[clap(help = "prefix to match against command history")]
+    prefix: OsString,
+}
+
+#[derive(Parser, Debug)]
 struct ExportCommand {}
 
 #[derive(Parser, Debug)]
@@ -440,6 +450,33 @@ UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
    AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"#,
             (self.exit_status, self.end_unix_timestamp, self.session_id),
         )?;
+        Ok(())
+    }
+}
+
+impl AutosuggestCommand {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let prefix = self.prefix.as_bytes();
+        if prefix.is_empty() {
+            return Ok(());
+        }
+
+        let mut stmt = conn.prepare(
+            r#"
+SELECT full_command
+  FROM command_history
+ WHERE substr(full_command, 1, ?) = CAST(? AS BLOB)
+ ORDER BY start_unix_timestamp DESC, id DESC
+ LIMIT 1"#,
+        )?;
+
+        let suggestion: Option<Vec<u8>> =
+            stmt.query_row((prefix.len() as i64, prefix), |row| row.get(0)).ok();
+
+        if let Some(cmd) = suggestion {
+            io::stdout().write_all(&cmd)?;
+            io::stdout().flush()?;
+        }
         Ok(())
     }
 }
@@ -2181,6 +2218,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Recall(cmd) => {
+            cmd.go(make_conn()?)?;
+        }
+        Commands::Autosuggest(cmd) => {
             cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {

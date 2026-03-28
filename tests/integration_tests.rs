@@ -1003,3 +1003,43 @@ fn test_maintenance_clean_nonstandard_tables() {
         "idx_command_history_unique should still exist"
     );
 }
+
+#[test]
+fn test_autosuggest() {
+    let pc = PxhCaller::new();
+
+    let insert = |cmd: &str, ts: u64| {
+        pc.call(format!(
+            "insert --shellname zsh --hostname h --username u --session-id 1 --start-unix-timestamp {ts} -- {cmd}"
+        ))
+        .assert()
+        .success();
+    };
+
+    insert("git status", 100);
+    insert("git commit", 200);
+    insert("grep foo", 300);
+    insert("cargo build", 400);
+
+    let autosuggest = |prefix: &str| {
+        let mut cmd = pc.call("autosuggest");
+        cmd.arg("--").arg(prefix);
+        cmd.output().unwrap().stdout
+    };
+
+    // Prefix match returns most recent matching command with no trailing newline
+    assert_eq!(autosuggest("git"), b"git commit");
+
+    // Narrower prefix crossing a word boundary
+    assert_eq!(autosuggest("git s"), b"git status");
+
+    // No match produces empty output
+    assert_eq!(autosuggest("nonexistent"), b"");
+
+    // Empty prefix produces empty output
+    assert_eq!(autosuggest(""), b"");
+
+    // Prefix that would be a LIKE/GLOB wildcard must match literally
+    insert("g_t special", 500);
+    assert_eq!(autosuggest("g_"), b"g_t special");
+}

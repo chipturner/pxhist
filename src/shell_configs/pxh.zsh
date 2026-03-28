@@ -46,6 +46,11 @@ _pxh_recall_widget() {
     fi
 }
 
+_zsh_autosuggest_strategy_pxh() {
+    typeset -g suggestion
+    suggestion=$(pxh --db "$PXH_DB_PATH" autosuggest -- "$1" 2>/dev/null)
+}
+
 _pxh_init() {
     PXH_SESSION_ID=$(_pxh_random)
     PXH_HOSTNAME=$(hostname -s)
@@ -57,6 +62,12 @@ _pxh_init() {
     autoload -Uz add-zsh-hook
     add-zsh-hook zshaddhistory _pxh_addhistory
     add-zsh-hook precmd _pxh_update_last_status
+
+    if [[ -n "${ZSH_AUTOSUGGEST_STRATEGY:-}" ]]; then
+        ZSH_AUTOSUGGEST_STRATEGY=(pxh $ZSH_AUTOSUGGEST_STRATEGY)
+    else
+        ZSH_AUTOSUGGEST_STRATEGY=(pxh history)
+    fi
 
     # Bind Ctrl-R to pxh recall # PXH_CTRL_R_BINDING
     zle -N _pxh_recall_widget # PXH_CTRL_R_BINDING
