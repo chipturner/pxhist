@@ -1,0 +1,47 @@
+#!/bin/sh
+#
+# Convert an atuin history database to pxh-compatible JSON.
+#
+# Usage:
+#   contrib/atuin-to-pxh [/path/to/history.db] | pxh import --shellname json --histfile /dev/stdin
+#   contrib/atuin-to-pxh | pxh import --shellname json --histfile /dev/stdin --dry-run
+#
+# Defaults to ~/.local/share/atuin/history.db if no path is given.
+
+set -eu
+
+db="${1:-${HOME}/.local/share/atuin/history.db}"
+
+if [ ! -f "$db" ]; then
+    echo "error: $db not found" >&2
+    exit 1
+fi
+
+if ! command -v sqlite3 >/dev/null 2>&1; then
+    echo "error: sqlite3 is required but not found" >&2
+    exit 1
+fi
+
+shellname="${SHELL##*/}"
+shellname="${shellname:-unknown}"
+username="${USER:-unknown}"
+hostname="$(hostname -s 2>/dev/null || hostname)"
+
+# Query atuin and emit pxh-compatible JSON.
+# Atuin stores timestamps in nanoseconds; divide by 1e9 for seconds.
+# DENSE_RANK maps session UUIDs to stable integer session_ids.
+sqlite3 -readonly "$db" ".mode json" "
+SELECT
+    command,
+    '${shellname}' AS shellname,
+    cwd AS working_directory,
+    '${hostname}' AS hostname,
+    '${username}' AS username,
+    exit AS exit_status,
+    timestamp / 1000000000 AS start_unix_timestamp,
+    (timestamp + duration) / 1000000000 AS end_unix_timestamp,
+    DENSE_RANK() OVER (ORDER BY session) AS session_id
+FROM history
+WHERE deleted_at IS NULL
+ORDER BY timestamp;
+"

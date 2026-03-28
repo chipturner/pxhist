@@ -220,8 +220,9 @@ pub fn import_zsh_history(
     let buf_iter = buf.split(|&ch| ch == b'\n');
 
     let mut ret = vec![];
+    let mut skipped = 0usize;
     let session_id = generate_import_session_id(histfile);
-    for line in buf_iter {
+    for (line_num, line) in buf_iter.enumerate() {
         let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() else {
             continue;
         };
@@ -230,21 +231,50 @@ pub fn import_zsh_history(
         else {
             continue;
         };
-        let start_unix_timestamp = str::from_utf8(&start_time[1..])?.parse::<i64>()?; // 1.. is to skip the leading space!
+        let start_unix_timestamp =
+            match str::from_utf8(&start_time[1..]).ok().and_then(|s| s.parse::<i64>().ok()) {
+                Some(ts) => ts,
+                None => {
+                    eprintln!(
+                        "warning: {}: skipping line {}: bad timestamp {:?}",
+                        histfile.display(),
+                        line_num + 1,
+                        BString::from(start_time),
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
+        let duration =
+            match str::from_utf8(duration_seconds).ok().and_then(|s| s.parse::<i64>().ok()) {
+                Some(d) => d,
+                None => {
+                    eprintln!(
+                        "warning: {}: skipping line {}: bad duration {:?}",
+                        histfile.display(),
+                        line_num + 1,
+                        BString::from(duration_seconds),
+                    );
+                    skipped += 1;
+                    continue;
+                }
+            };
         let invocation = Invocation {
             command: BString::from(command),
             shellname: "zsh".into(),
             hostname: Some(BString::from(hostname.as_bytes())),
             username: Some(BString::from(username.as_bytes())),
             start_unix_timestamp: Some(start_unix_timestamp),
-            end_unix_timestamp: Some(
-                start_unix_timestamp + str::from_utf8(duration_seconds)?.parse::<i64>()?,
-            ),
+            end_unix_timestamp: Some(start_unix_timestamp + duration),
             session_id,
             ..Default::default()
         };
 
         ret.push(invocation);
+    }
+
+    if skipped > 0 {
+        eprintln!("warning: {}: skipped {skipped} malformed line(s)", histfile.display());
     }
 
     Ok(dedup_invocations(ret))

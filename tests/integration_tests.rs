@@ -348,6 +348,52 @@ fn timestamped_bash_import_roundtrip() {
 }
 
 #[test]
+fn import_dry_run() {
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
+    let pc = PxhCaller::new();
+
+    // Dry-run should report counts but not import
+    let output = pc
+        .call(format!(
+            "import --shellname zsh --dry-run --histfile {}",
+            resources.join("zsh_histfile").to_string_lossy()
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("3 entries found"), "got: {stdout}");
+    assert!(stdout.contains("3 new"), "got: {stdout}");
+
+    // Verify nothing was actually imported
+    let json_output = pc.call("export").output().unwrap();
+    let invocations: Vec<pxh::Invocation> =
+        serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
+    assert_eq!(invocations.len(), 0);
+
+    // Now actually import
+    pc.call(format!(
+        "import --shellname zsh --histfile {}",
+        resources.join("zsh_histfile").to_string_lossy()
+    ))
+    .assert()
+    .success();
+
+    // Dry-run again should show all as duplicates
+    let output = pc
+        .call(format!(
+            "import --shellname zsh --dry-run --histfile {}",
+            resources.join("zsh_histfile").to_string_lossy()
+        ))
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("0 new"), "got: {stdout}");
+    assert!(stdout.contains("3 duplicates"), "got: {stdout}");
+}
+
+#[test]
 fn install_command() {
     let tmpdir = TempDir::new().unwrap();
     let home = tmpdir.path();

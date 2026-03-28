@@ -137,14 +137,19 @@ struct ShowCommand {
 
 #[derive(Parser, Debug)]
 struct ImportCommand {
-    #[clap(long, help = "path to history file to import")]
-    histfile: PathBuf,
+    #[clap(
+        long,
+        help = "path to history file to import (defaults: bash=~/.bash_history, zsh=~/.zsh_history)"
+    )]
+    histfile: Option<PathBuf>,
     #[clap(long, help = "type of shell history specified by --histfile")]
     shellname: String,
     #[clap(long, help = "hostname to tag imported entries with (defaults to current hostname)")]
     hostname: Option<OsString>,
-    #[clap(long, help = "username to tag importen entries with (defaults to current user)")]
+    #[clap(long, help = "username to tag imported entries with (defaults to current user)")]
     username: Option<OsString>,
+    #[clap(short = 'n', long, help = "show what would be imported without making changes")]
+    dry_run: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -333,26 +338,65 @@ struct ScanCommand {
 }
 
 impl ImportCommand {
+    fn default_histfile(shellname: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let home = home::home_dir().ok_or("could not determine home directory")?;
+        match shellname {
+            "bash" | "zsh" => {
+                if let Ok(histfile) = env::var("HISTFILE") {
+                    return Ok(PathBuf::from(histfile));
+                }
+                match shellname {
+                    "bash" => Ok(home.join(".bash_history")),
+                    _ => Ok(home.join(".zsh_history")),
+                }
+            }
+            "json" => Err(Box::from("--histfile is required for json imports")),
+            _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
+        }
+    }
+
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let histfile = match &self.histfile {
+            Some(path) => path.clone(),
+            None => Self::default_histfile(&self.shellname)?,
+        };
         let invocations = match self.shellname.as_ref() {
             "zsh" => pxh::import_zsh_history(
-                &self.histfile,
+                &histfile,
                 self.hostname.as_ref().map(|v| v.as_bytes().into()),
                 self.username.as_ref().map(|v| v.as_bytes().into()),
             ),
             "bash" => pxh::import_bash_history(
-                &self.histfile,
+                &histfile,
                 self.hostname.as_ref().map(|v| v.as_bytes().into()),
                 self.username.as_ref().map(|v| v.as_bytes().into()),
             ),
-            "json" => pxh::import_json_history(&self.histfile),
+            "json" => pxh::import_json_history(&histfile),
             _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", self.shellname))),
         }?;
+
+        let total = invocations.len();
+        let before_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))?;
         let tx = conn.transaction()?;
-        for invocation in invocations {
+        for invocation in &invocations {
             invocation.insert(&tx)?;
         }
-        tx.commit()?;
+        let after_count: i64 =
+            tx.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))?;
+        let new_count = after_count - before_count;
+        let dup_count = total as i64 - new_count;
+
+        if self.dry_run {
+            tx.rollback()?;
+            println!("Dry-run: {total} entries found, {new_count} new, {dup_count} duplicates.");
+        } else {
+            tx.commit()?;
+            println!(
+                "Imported {new_count} new entries ({dup_count} duplicates skipped) from {}.",
+                histfile.display()
+            );
+        }
         Ok(())
     }
 }
