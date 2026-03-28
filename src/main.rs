@@ -1200,15 +1200,11 @@ impl SyncCommand {
             let remote_db_path =
                 self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
 
-            // Intelligently determine remote pxh path if not specified
-            let remote_pxh = pxh::helpers::determine_remote_pxh_path(&self.remote_pxh);
-
-            // Start SSH connection to remote with server mode
-            let mut remote_command =
-                format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
-            if let Some(days) = self.since {
-                remote_command.push_str(&format!(" --since {days}"));
-            }
+            // Build remote pxh command with candidate path probing
+            let since_arg = self.since.map_or(String::new(), |d| format!(" --since {d}"));
+            let pxh_args = format!("--db {} sync --server{since_arg}", remote_db_path.display());
+            let remote_command =
+                pxh::helpers::build_remote_pxh_command(&self.remote_pxh, &pxh_args);
 
             let mut cmd = std::process::Command::new(&ssh_cmd);
             cmd.args(&ssh_args)
@@ -1832,8 +1828,7 @@ impl ScrubCommand {
             self.contraband.clone()
         };
 
-        let remote_pxh = self.remote_pxh.as_deref().unwrap_or("pxh");
-        let remote_pxh = pxh::helpers::determine_remote_pxh_path(remote_pxh);
+        let configured_path = self.remote_pxh.as_deref().unwrap_or("pxh");
 
         let remote_db_path =
             self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
@@ -1842,8 +1837,8 @@ impl ScrubCommand {
         let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
 
         // Build remote command - v2 protocol for scrub
-        let remote_command =
-            format!("{} --db {} sync --server", remote_pxh, remote_db_path.display());
+        let pxh_args = format!("--db {} sync --server", remote_db_path.display());
+        let remote_command = pxh::helpers::build_remote_pxh_command(configured_path, &pxh_args);
 
         let mut cmd = std::process::Command::new(&ssh_cmd);
         cmd.args(&ssh_args)

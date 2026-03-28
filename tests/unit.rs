@@ -61,15 +61,29 @@ fn test_determine_is_pxhs() {
 }
 
 #[test]
-fn test_determine_remote_pxh_path() {
-    // Test explicit path - should return as-is
-    assert_eq!(helpers::determine_remote_pxh_path("/usr/bin/custom-pxh"), "/usr/bin/custom-pxh");
-    assert_eq!(helpers::determine_remote_pxh_path("custom-pxh"), "custom-pxh");
+fn test_build_remote_pxh_command_explicit_path() {
+    // Explicit path -- used directly, no probing shell snippet
+    let cmd = helpers::build_remote_pxh_command(
+        "/usr/bin/custom-pxh",
+        "--db ~/.pxh/pxh.db sync --server",
+    );
+    assert_eq!(cmd, "/usr/bin/custom-pxh --db ~/.pxh/pxh.db sync --server");
 
-    // Test default "pxh" - we can't easily test the actual smart path logic without
-    // controlling the environment, but we can test that it returns something
-    let result = helpers::determine_remote_pxh_path("pxh");
-    assert!(!result.is_empty());
+    let cmd = helpers::build_remote_pxh_command("custom-pxh", "--db ~/.pxh/pxh.db sync --server");
+    assert_eq!(cmd, "custom-pxh --db ~/.pxh/pxh.db sync --server");
+}
+
+#[test]
+fn test_build_remote_pxh_command_default() {
+    // Default "pxh" -- should produce a multi-candidate probing command
+    let cmd = helpers::build_remote_pxh_command("pxh", "--db ~/.pxh/pxh.db sync --server");
+    // Should be a sh -c wrapper that probes multiple locations
+    assert!(cmd.starts_with("sh -c '"), "expected sh -c wrapper, got: {cmd}");
+    assert!(cmd.contains(".cargo/bin/pxh"), "should probe .cargo/bin");
+    assert!(cmd.contains("/usr/local/bin/pxh"), "should probe /usr/local/bin");
+    assert!(cmd.contains("not found on remote host"), "should have fallback error");
+    // Should contain the args we passed
+    assert!(cmd.contains("--db ~/.pxh/pxh.db sync --server"));
 }
 
 #[test]
