@@ -1,6 +1,6 @@
 [package]
 name = "pxh"
-version = "0.9.8"
+version = "0.9.9"
 edition = "2024"
 rust-version = "1.88"
 authors = [ "Chip Turner <cturner@pattern.net>" ]
