@@ -966,13 +966,14 @@ impl RecallTui {
                 queue!(w, SetBackgroundColor(Color::DarkGrey))?;
             }
 
-            // Show host prefix for entries from other hosts (in AllHosts mode)
-            let host_prefix = if self.host_filter == HostFilter::AllHosts {
+            // Show host suffix for entries from other hosts (in AllHosts mode).
+            // Right-aligned so command text stays column-aligned across rows.
+            let host_suffix = if self.host_filter == HostFilter::AllHosts {
                 entry.hostname.as_ref().and_then(|h| {
                     if !self.engine.is_this_host(h) {
                         let short =
                             String::from_utf8_lossy(h).split('.').next().unwrap_or("?").to_string();
-                        Some(format!("@{short}: "))
+                        Some(format!(" @{short}"))
                     } else {
                         None
                     }
@@ -980,22 +981,12 @@ impl RecallTui {
             } else {
                 None
             };
-
-            // Draw host prefix if present
-            let host_prefix_len = host_prefix.as_ref().map_or(0, |p| p.chars().count());
-            if let Some(ref prefix) = host_prefix {
-                queue!(w, SetForegroundColor(Color::Magenta))?;
-                write!(w, "{prefix}")?;
-                queue!(w, ResetColor)?;
-                if is_selected {
-                    queue!(w, SetBackgroundColor(Color::DarkGrey))?;
-                }
-            }
+            let suffix_len = host_suffix.as_ref().map_or(0, |s| s.chars().count());
 
             // Sanitize and truncate command to fit (handle UTF-8 safely)
             let safe_cmd = sanitize_for_display(&entry.command);
-            let prefix_len = 9 + host_prefix_len; // "n>" + " XXx  " + host prefix
-            let max_cmd_len = term_width.saturating_sub(prefix_len as u16) as usize;
+            let prefix_len = 9; // "n>" + " XXx  "
+            let max_cmd_len = term_width.saturating_sub(prefix_len + suffix_len as u16) as usize;
 
             // Render command with highlighted fuzzy matches
             let spans = highlight_command_with_indices(&safe_cmd, match_indices, max_cmd_len);
@@ -1012,6 +1003,13 @@ impl RecallTui {
                         queue!(w, SetBackgroundColor(Color::DarkGrey))?;
                     }
                 }
+            }
+
+            // Draw right-aligned host suffix
+            if let Some(suffix) = host_suffix {
+                let suffix_x = term_width.saturating_sub(suffix_len as u16);
+                queue!(w, MoveTo(suffix_x, row as u16), SetForegroundColor(Color::Magenta))?;
+                write!(w, "{suffix}")?;
             }
 
             queue!(w, ResetColor)?;

@@ -40,10 +40,10 @@ pub enum FilterMode {
 /// Host filter mode for recall search
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HostFilter {
-    /// Search only on current host (default)
-    #[default]
+    /// Search only on current host
     ThisHost,
-    /// Search across all hosts
+    /// Search across all hosts (default)
+    #[default]
     AllHosts,
 }
 
