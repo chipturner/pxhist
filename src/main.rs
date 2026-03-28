@@ -12,7 +12,7 @@ use std::{
 
 use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand};
 use regex::bytes::Regex;
 use rusqlite::{Connection, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
@@ -54,7 +54,7 @@ struct PxhArgs {
     db: Option<PathBuf>,
 
     #[clap(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -2226,8 +2226,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         PxhArgs::parse()
     };
 
+    let Some(command) = args.command.as_mut() else {
+        PxhArgs::command().print_help()?;
+        return Ok(());
+    };
     let make_conn = || pxh::sqlite_connection(&args.db);
-    match &mut args.command {
+    match command {
         Commands::ShellConfig(cmd) => {
             cmd.go()?;
         }

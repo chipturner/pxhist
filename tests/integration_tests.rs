@@ -20,7 +20,7 @@ fn count_lines(bytes: &[u8]) -> usize {
 #[test]
 fn trivial_invocation() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd
         .env_clear()
@@ -60,7 +60,7 @@ fn trivial_invocation() {
 #[test]
 fn show_with_here() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd
         .env_clear()
@@ -101,7 +101,7 @@ fn show_with_here() {
 #[test]
 fn show_with_loosen() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
@@ -130,7 +130,7 @@ fn show_with_loosen() {
 #[test]
 fn show_with_session_id() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
@@ -165,7 +165,7 @@ fn show_with_session_id() {
 #[test]
 fn show_with_limit() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
@@ -190,7 +190,7 @@ fn show_with_limit() {
 #[test]
 fn show_with_case_insensitive() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
@@ -478,7 +478,7 @@ fn shell_config_command() {
 #[test]
 fn scrub_command() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
-    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().failure();
+    naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
     let mut show_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
