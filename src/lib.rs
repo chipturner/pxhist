@@ -631,17 +631,56 @@ pub mod helpers {
         (cmd, args)
     }
 
-    /// Determines the remote pxh path intelligently. If remote_pxh is
-    /// not "pxh", use it as-is.
-    /// Otherwise, try to determine a smart default based on the current executable location.
-    /// Returns the relative path from home if the binary is in the home directory.
-    pub fn determine_remote_pxh_path(configured_path: &str) -> String {
+    /// Build a list of candidate paths to search for pxh on the remote host.
+    /// The first candidate that exists and is executable will be used.
+    fn remote_pxh_candidates(configured_path: &str) -> Vec<String> {
+        let mut candidates = Vec::new();
+
         if configured_path != "pxh" {
-            return configured_path.to_string();
+            candidates.push(configured_path.to_string());
+            return candidates;
         }
 
-        // Try to be smart about the default path
-        get_relative_path_from_home(None, None).unwrap_or_else(|| "pxh".to_string())
+        // Try the same relative-to-home path as the local binary
+        if let Some(rel) = get_relative_path_from_home(None, None)
+            && rel != "pxh"
+        {
+            candidates.push(format!("$HOME/{rel}"));
+        }
+
+        // Common installation locations
+        for p in [
+            "$HOME/.cargo/bin/pxh",
+            "$HOME/bin/pxh",
+            "$HOME/.local/bin/pxh",
+            "/usr/local/bin/pxh",
+            "/usr/bin/pxh",
+        ] {
+            if !candidates.contains(&p.to_string()) {
+                candidates.push(p.to_string());
+            }
+        }
+
+        candidates
+    }
+
+    /// Build a shell command that finds and executes pxh on the remote host.
+    /// When a single explicit path is configured, uses it directly.
+    /// Otherwise, probes a prioritized list of candidate locations.
+    pub fn build_remote_pxh_command(configured_path: &str, args: &str) -> String {
+        let candidates = remote_pxh_candidates(configured_path);
+
+        if candidates.len() == 1 {
+            return format!("{} {args}", candidates[0]);
+        }
+
+        // Build a shell snippet that tries each candidate in order
+        let checks: Vec<String> =
+            candidates.iter().map(|p| format!("[ -x \"{p}\" ] && exec \"{p}\" {args}")).collect();
+        format!(
+            "sh -c '{}; echo \"pxh: not found on remote host\" >&2; exit 127'",
+            checks.join("; ")
+        )
     }
 
     /// Gets the relative path from home directory if the current executable is within it.
