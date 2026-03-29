@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["build_remote_pxh_command","determine_is_pxhs","get_relative_path_from_home","parse_ssh_command","remote_pxh_candidates"]};
+window.SIDEBAR_ITEMS = {"fn":["build_remote_pxh_command","default_remote_db_expr","determine_is_pxhs","get_relative_path_from_home","parse_ssh_command","remote_pxh_candidates"]};

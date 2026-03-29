@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["FLASH_DURATION_MS","PREVIEW_HEIGHT","SCROLL_MARGIN"],"enum":["KeyAction"],"fn":["deduplicate_entries","format_duration","highlight_command_with_indices","sanitize_for_display"],"struct":["RecallTui"]};
+window.SIDEBAR_ITEMS = {"constant":["FLASH_DURATION_MS","PREVIEW_HEIGHT","SCROLL_MARGIN"],"enum":["KeyAction"],"fn":["base64_encode","deduplicate_entries","format_duration","highlight_command_with_indices","sanitize_for_display"],"struct":["RecallTui"]};
