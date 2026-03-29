@@ -56,6 +56,8 @@ source <(pxh shell-config bash)  # or: source <(pxh shell-config zsh)
 
 From now on, pxh automatically records commands with directory, host, user, exit code, and duration.
 
+> **Note:** fish shell is not currently supported. PRs welcome!
+
 ## Usage
 
 ### Interactive Browser (pxh recall)
