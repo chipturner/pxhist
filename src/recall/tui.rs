@@ -22,6 +22,31 @@ use super::engine::{HistoryEntry, SearchEngine, format_relative_time};
 
 const SCROLL_MARGIN: usize = 5;
 
+/// Base64-encode bytes for OSC 52 clipboard escape.
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        output.push(ALPHABET[(triple >> 18 & 0x3F) as usize] as char);
+        output.push(ALPHABET[(triple >> 12 & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[(triple >> 6 & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(triple & 0x3F) as usize] as char);
+        } else {
+            output.push('=');
+        }
+    }
+    output
+}
+
 /// Sanitize a string for safe terminal display by removing ANSI escape sequences
 /// and control characters that could affect cursor position or terminal state.
 fn sanitize_for_display(s: &str) -> String {
@@ -232,6 +257,7 @@ pub struct RecallTui {
     preview_config: PreviewConfig,
     shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
+    status_message: Option<(String, Instant)>,
     #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
 }
@@ -308,6 +334,7 @@ impl RecallTui {
             preview_config: config.preview.clone(),
             shell_mode,
             flash_until: None,
+            status_message: None,
             #[cfg(not(target_os = "windows"))]
             keyboard_enhanced,
         };
@@ -411,6 +438,43 @@ impl RecallTui {
     /// Check if flash effect is currently active
     fn is_flashing(&self) -> bool {
         self.flash_until.is_some_and(|until| Instant::now() < until)
+    }
+
+    /// Copy the selected command to clipboard via OSC 52 escape sequence.
+    fn copy_to_clipboard(&mut self) {
+        if let Some(cmd) = self.get_selected_command() {
+            let encoded = base64_encode(cmd.as_bytes());
+            let _ = write!(self.tty, "\x1b]52;c;{encoded}\x07");
+            let _ = self.tty.flush();
+            self.status_message =
+                Some(("(copied)".to_string(), Instant::now() + Duration::from_secs(1)));
+        }
+    }
+
+    /// Delete the selected entry from the database and remove from the list.
+    fn delete_selected_entry(&mut self) {
+        let Some(&(entry_idx, _)) = self.filtered_indices.get(self.selected_index) else {
+            return;
+        };
+        let id = self.entries[entry_idx].id;
+        if self.engine.delete_entry(id).is_ok() {
+            self.entries.remove(entry_idx);
+            // Rebuild filtered indices -- adjust all indices >= entry_idx
+            self.filtered_indices.retain_mut(|(idx, _)| {
+                if *idx == entry_idx {
+                    return false;
+                }
+                if *idx > entry_idx {
+                    *idx -= 1;
+                }
+                true
+            });
+            if self.selected_index >= self.filtered_indices.len() && self.selected_index > 0 {
+                self.selected_index -= 1;
+            }
+            self.status_message =
+                Some(("(deleted)".to_string(), Instant::now() + Duration::from_secs(1)));
+        }
     }
 
     fn toggle_host_filter(&mut self) {
@@ -618,6 +682,14 @@ impl RecallTui {
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::EditBeginning)
             }
+            KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.copy_to_clipboard();
+                Some(KeyAction::Continue)
+            }
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.delete_selected_entry();
+                Some(KeyAction::Continue)
+            }
             _ => None,
         }
     }
@@ -649,6 +721,10 @@ impl RecallTui {
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.delete_last_word();
+                Ok(KeyAction::Continue)
+            }
+            KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
+                self.copy_to_clipboard();
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1076,6 +1152,19 @@ impl RecallTui {
         write!(w, "{help_text}")?;
         queue!(w, ResetColor)?;
 
+        // Show status message if active
+        match self.status_message {
+            Some((_, until)) if Instant::now() >= until => {
+                self.status_message = None;
+            }
+            Some((ref msg, _)) => {
+                queue!(w, SetForegroundColor(Color::Yellow))?;
+                write!(w, " {msg}")?;
+                queue!(w, ResetColor)?;
+            }
+            None => {}
+        }
+
         // Position cursor at end of query in input line
         queue!(w, MoveTo(2 + self.query.len() as u16, input_y))?;
 
@@ -1317,6 +1406,7 @@ mod tests {
 
         let entries = vec![
             HistoryEntry {
+                id: 1,
                 command: "cmd1".to_string(),
                 timestamp: Some(100),
                 working_directory: None,
@@ -1325,6 +1415,7 @@ mod tests {
                 hostname: None,
             },
             HistoryEntry {
+                id: 2,
                 command: "cmd2".to_string(),
                 timestamp: Some(90),
                 working_directory: None,
@@ -1333,6 +1424,7 @@ mod tests {
                 hostname: None,
             },
             HistoryEntry {
+                id: 3,
                 command: "cmd1".to_string(), // duplicate
                 timestamp: Some(80),
                 working_directory: None,
@@ -1428,5 +1520,15 @@ mod tests {
         use super::highlight_command_with_indices;
         let spans = highlight_command_with_indices("foo bar", &[4, 5, 6], 100);
         assert_eq!(spans, vec![("foo ".to_string(), false), ("bar".to_string(), true),]);
+    }
+
+    #[test]
+    fn test_base64_encode() {
+        assert_eq!(super::base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(super::base64_encode(b""), "");
+        assert_eq!(super::base64_encode(b"a"), "YQ==");
+        assert_eq!(super::base64_encode(b"ab"), "YWI=");
+        assert_eq!(super::base64_encode(b"abc"), "YWJj");
+        assert_eq!(super::base64_encode(b"echo hello world"), "ZWNobyBoZWxsbyB3b3JsZA==");
     }
 }

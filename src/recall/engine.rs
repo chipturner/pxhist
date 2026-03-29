@@ -9,6 +9,7 @@ use super::command::{FilterMode, HostFilter};
 /// A history entry with its metadata
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
+    pub id: i64,
     pub command: String,
     pub timestamp: Option<i64>,
     pub working_directory: Option<BString>,
@@ -98,7 +99,7 @@ impl SearchEngine {
 
         let sql = format!(
             r#"
-SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
+SELECT c.id, c.full_command, c.start_unix_timestamp, c.working_directory,
        c.hostname, c.exit_status,
        CASE WHEN c.end_unix_timestamp IS NOT NULL
             THEN c.end_unix_timestamp - c.start_unix_timestamp
@@ -128,13 +129,15 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
     }
 
     fn row_to_entry(&self, row: &rusqlite::Row) -> rusqlite::Result<HistoryEntry> {
-        let command: Vec<u8> = row.get(0)?;
-        let timestamp: Option<i64> = row.get(1)?;
-        let working_directory: Option<Vec<u8>> = row.get(2)?;
-        let hostname: Option<Vec<u8>> = row.get(3)?;
-        let exit_status: Option<i32> = row.get(4)?;
-        let duration_secs: Option<i64> = row.get(5)?;
+        let id: i64 = row.get(0)?;
+        let command: Vec<u8> = row.get(1)?;
+        let timestamp: Option<i64> = row.get(2)?;
+        let working_directory: Option<Vec<u8>> = row.get(3)?;
+        let hostname: Option<Vec<u8>> = row.get(4)?;
+        let exit_status: Option<i32> = row.get(5)?;
+        let duration_secs: Option<i64> = row.get(6)?;
         Ok(HistoryEntry {
+            id,
             command: String::from_utf8_lossy(&command).to_string(),
             timestamp,
             working_directory: working_directory.map(BString::from),
@@ -173,7 +176,7 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
 
         let sql = format!(
             r#"
-SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
+SELECT c.id, c.full_command, c.start_unix_timestamp, c.working_directory,
        c.hostname, c.exit_status,
        CASE WHEN c.end_unix_timestamp IS NOT NULL
             THEN c.end_unix_timestamp - c.start_unix_timestamp
@@ -200,6 +203,12 @@ SELECT c.full_command, c.start_unix_timestamp, c.working_directory,
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(entries)
+    }
+
+    /// Delete a single history entry by its database ID.
+    pub fn delete_entry(&self, id: i64) -> Result<usize, Box<dyn std::error::Error>> {
+        let deleted = self.conn.execute("DELETE FROM command_history WHERE id = ?", [id])?;
+        Ok(deleted)
     }
 
     /// Get the working directory for display
