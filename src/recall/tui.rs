@@ -280,6 +280,7 @@ pub struct RecallTui {
     shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     status_message: Option<(String, Instant)>,
+    needs_redraw: bool,
     #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
 }
@@ -357,6 +358,7 @@ impl RecallTui {
             shell_mode,
             flash_until: None,
             status_message: None,
+            needs_redraw: true,
             #[cfg(not(target_os = "windows"))]
             keyboard_enhanced,
         };
@@ -517,37 +519,60 @@ impl RecallTui {
 
     pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
         loop {
-            self.draw()?;
+            // Check if timed effects have expired
+            if let Some((_, until)) = self.status_message
+                && Instant::now() >= until
+            {
+                self.status_message = None;
+                self.needs_redraw = true;
+            }
+            if let Some(until) = self.flash_until
+                && Instant::now() >= until
+            {
+                self.flash_until = None;
+                self.needs_redraw = true;
+            }
 
-            // Poll with timeout for responsive cancellation and future async features
+            if self.needs_redraw {
+                self.draw()?;
+                self.needs_redraw = false;
+            }
+
             if !event::poll(Duration::from_millis(100))? {
                 continue;
             }
 
-            if let Event::Key(key) = event::read()? {
-                let action = self.handle_key(key)?;
-                match action {
-                    KeyAction::Continue => continue,
-                    KeyAction::Select | KeyAction::Edit | KeyAction::EditBeginning => {
-                        self.cleanup()?;
-                        if !self.shell_mode {
-                            self.print_entry_details();
+            match event::read()? {
+                Event::Key(key) => {
+                    self.needs_redraw = true;
+                    let action = self.handle_key(key)?;
+                    match action {
+                        KeyAction::Continue => continue,
+                        KeyAction::Select | KeyAction::Edit | KeyAction::EditBeginning => {
+                            self.cleanup()?;
+                            if !self.shell_mode {
+                                self.print_entry_details();
+                                return Ok(None);
+                            }
+                            let prefix = match action {
+                                KeyAction::Select => "run",
+                                KeyAction::EditBeginning => "edit-a",
+                                _ => "edit",
+                            };
+                            let result =
+                                self.get_selected_command().map(|cmd| format!("{prefix}:{cmd}"));
+                            return Ok(result);
+                        }
+                        KeyAction::Cancel => {
+                            self.cleanup()?;
                             return Ok(None);
                         }
-                        let prefix = match action {
-                            KeyAction::Select => "run",
-                            KeyAction::EditBeginning => "edit-a",
-                            _ => "edit",
-                        };
-                        let result =
-                            self.get_selected_command().map(|cmd| format!("{prefix}:{cmd}"));
-                        return Ok(result);
-                    }
-                    KeyAction::Cancel => {
-                        self.cleanup()?;
-                        return Ok(None);
                     }
                 }
+                Event::Resize(_, _) => {
+                    self.needs_redraw = true;
+                }
+                _ => {}
             }
         }
     }
