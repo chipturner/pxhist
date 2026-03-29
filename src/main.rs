@@ -89,6 +89,8 @@ enum Commands {
     Maintenance(MaintenanceCommand),
     #[clap(about = "scan history for potential secrets and sensitive data")]
     Scan(ScanCommand),
+    #[clap(about = "generate shell completions")]
+    Completions(CompletionsCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -295,6 +297,12 @@ struct ShellConfigCommand {
 struct AutosuggestCommand {
     #[clap(help = "prefix to match against command history")]
     prefix: OsString,
+}
+
+#[derive(Parser, Debug)]
+struct CompletionsCommand {
+    #[clap(help = "shell to generate completions for (bash, zsh, fish, elvish, powershell)")]
+    shell: clap_complete::Shell,
 }
 
 #[derive(Parser, Debug)]
@@ -2250,6 +2258,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Install(cmd) => {
             cmd.go()?;
+        }
+        Commands::Completions(cmd) => {
+            clap_complete::generate(cmd.shell, &mut PxhArgs::command(), "pxh", &mut io::stdout());
         }
         Commands::Import(cmd) => {
             cmd.go(make_conn()?)?;

@@ -43,6 +43,7 @@ nucleo = "0.5"
 toml = "1.0"
 unicode-width = "0.2"
 toml_edit = "0.25.5"
+clap_complete = "4"
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }
