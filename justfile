@@ -32,3 +32,7 @@ coverage-clean:
 	rm -rf coverage/
 	rm -f lcov.info coverage.json coverage.xml
 	rm -f **/*.profraw(N) **/*.profdata(N)
+
+docker-e2e:
+	docker build -t pxh-e2e -f tests/docker/Dockerfile .
+	docker run --rm pxh-e2e

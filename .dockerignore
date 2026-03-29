@@ -1,0 +1,5 @@
+target/
+.git/
+*.profraw
+*.profdata
+coverage/

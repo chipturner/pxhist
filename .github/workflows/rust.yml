@@ -51,6 +51,19 @@ jobs:
       if: runner.os == 'Linux'
       run: cargo publish --locked --dry-run
 
+  docker-e2e:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+
+    - name: Build and run Docker e2e test
+      run: |
+        docker build -t pxh-e2e -f tests/docker/Dockerfile .
+        docker run --rm pxh-e2e
+
   msrv:
     runs-on: ubuntu-latest
 

@@ -230,7 +230,7 @@ pub fn initialize_base_schema(conn: &Connection) -> Result<(), Box<dyn std::erro
 }
 
 /// Run versioned schema migrations tracked via PRAGMA user_version.
-fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
 
     if version < 1 {
@@ -723,6 +723,7 @@ pub fn atomically_remove_lines_from_file(
     input_filepath: &PathBuf,
     contraband: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let original_perms = std::fs::metadata(input_filepath)?.permissions();
     let input_file = File::open(input_filepath)?;
     let mut input_reader = BufReader::new(input_file);
 
@@ -740,6 +741,7 @@ pub fn atomically_remove_lines_from_file(
     output_writer.flush()?;
     drop(output_writer);
     temp_file.persist(input_filepath)?;
+    std::fs::set_permissions(input_filepath, original_perms)?;
     Ok(())
 }
 
@@ -751,6 +753,7 @@ pub fn atomically_remove_matching_lines_from_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashSet;
 
+    let original_perms = std::fs::metadata(input_filepath)?.permissions();
     let contraband_set: HashSet<&str> = contraband_items.iter().copied().collect();
 
     let input_file = File::open(input_filepath)?;
@@ -772,6 +775,7 @@ pub fn atomically_remove_matching_lines_from_file(
     output_writer.flush()?;
     drop(output_writer);
     temp_file.persist(input_filepath)?;
+    std::fs::set_permissions(input_filepath, original_perms)?;
     Ok(())
 }
 

@@ -42,6 +42,22 @@ fn atomic_line_remove() {
 }
 
 #[test]
+fn atomic_line_remove_preserves_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut tmpfile = NamedTempFile::new().unwrap();
+    write!(tmpfile, "line1\nline2\nline3\n").unwrap();
+
+    let (_, path) = tmpfile.keep().unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+    pxh::atomically_remove_lines_from_file(&path, "line2").unwrap();
+
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "permissions should be preserved after atomic rewrite");
+}
+
+#[test]
 fn test_determine_is_pxhs() {
     // Test normal pxh invocation
     assert!(!helpers::determine_is_pxhs(&["/usr/bin/pxh".to_string()]));

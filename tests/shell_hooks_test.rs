@@ -530,3 +530,50 @@ fn test_concurrent_sessions() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_working_directory_with_newline() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path().join("pxh.db");
+    let weird_dir = temp_dir.path().join("has\nnewline");
+    fs::create_dir_all(&weird_dir)?;
+
+    let session_id = "99999";
+    let hostname = "testhost";
+    let username = "testuser";
+    let ts = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs().to_string();
+
+    let output = pxh_command()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "insert",
+            "--working-directory",
+            weird_dir.to_str().unwrap(),
+            "--hostname",
+            hostname,
+            "--shellname",
+            "bash",
+            "--username",
+            username,
+            "--session-id",
+            session_id,
+            "--start-unix-timestamp",
+            &ts,
+            "echo hello",
+        ])
+        .output()?;
+    assert!(output.status.success(), "insert failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Verify the working directory roundtrips correctly via direct SQLite query
+    let conn = rusqlite::Connection::open(&db_path)?;
+    let wd: Vec<u8> =
+        conn.query_row("SELECT working_directory FROM command_history LIMIT 1", [], |row| {
+            row.get(0)
+        })?;
+    let wd_str = String::from_utf8_lossy(&wd);
+    assert!(wd_str.contains('\n'), "working directory should contain newline, got: {:?}", wd_str);
+    assert_eq!(wd, weird_dir.to_str().unwrap().as_bytes());
+
+    Ok(())
+}

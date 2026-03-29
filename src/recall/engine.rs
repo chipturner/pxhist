@@ -319,7 +319,112 @@ pub fn format_relative_time(timestamp: Option<i64>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use bstr::BString;
+    use rusqlite::Connection;
+
     use super::*;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::initialize_base_schema(&conn).unwrap();
+        crate::run_schema_migrations(&conn).unwrap();
+        conn
+    }
+
+    fn insert_command(conn: &Connection, cmd: &str, hostname: &str, dir: &str, ts: i64) {
+        conn.execute(
+            "INSERT INTO command_history (session_id, full_command, shellname, hostname, working_directory, start_unix_timestamp)
+             VALUES (1, CAST(? AS blob), 'bash', CAST(? AS blob), CAST(? AS blob), ?)",
+            rusqlite::params![cmd, hostname, dir, ts],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_engine_host_filter() {
+        let conn = test_db();
+        insert_command(&conn, "alpha-cmd", "alpha", "/tmp", 1000);
+        insert_command(&conn, "beta-cmd", "beta", "/tmp", 2000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("alpha")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::ThisHost, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "alpha-cmd");
+
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_engine_directory_filter() {
+        let conn = test_db();
+        insert_command(&conn, "in-project", "host1", "/home/user/project", 1000);
+        insert_command(&conn, "in-other", "host1", "/home/user/other", 2000);
+
+        let engine = SearchEngine::new(
+            conn,
+            PathBuf::from("/home/user/project"),
+            vec![BString::from("host1")],
+            100,
+        );
+        let entries =
+            engine.load_entries(FilterMode::Directory, HostFilter::AllHosts, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "in-project");
+    }
+
+    #[test]
+    fn test_engine_dedup_keeps_latest() {
+        let conn = test_db();
+        insert_command(&conn, "ls -la", "host1", "/tmp", 1000);
+        insert_command(&conn, "ls -la", "host1", "/tmp", 2000);
+        insert_command(&conn, "pwd", "host1", "/tmp", 1500);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        assert_eq!(entries.len(), 2);
+
+        let ls_entry = entries.iter().find(|e| e.command == "ls -la").unwrap();
+        assert_eq!(ls_entry.timestamp, Some(2000));
+    }
+
+    #[test]
+    fn test_engine_fuzzy_normalization_dashes() {
+        let conn = test_db();
+        insert_command(&conn, "cargo build --release", "host1", "/tmp", 1000);
+        insert_command(&conn, "echo hello", "host1", "/tmp", 2000);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        let filtered = engine.filter_entries(&entries, "release");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].0.command, "cargo build --release");
+
+        let filtered = engine.filter_entries(&entries, "--release");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].0.command, "cargo build --release");
+    }
+
+    #[test]
+    fn test_engine_fuzzy_normalization_asterisks() {
+        let conn = test_db();
+        insert_command(&conn, "find . -name '*.rs'", "host1", "/tmp", 1000);
+        insert_command(&conn, "echo hello", "host1", "/tmp", 2000);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        let filtered = engine.filter_entries(&entries, "*.rs");
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered[0].0.command.contains("*.rs"));
+    }
 
     #[test]
     fn test_format_relative_time_none() {
