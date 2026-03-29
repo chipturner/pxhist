@@ -154,7 +154,7 @@ pxh supports a TOML configuration file at `~/.pxh/config.toml` for customizing t
 - **`[recall]`** section:
   - `keymap_mode`: "emacs" (default) or "vim"
   - `show_preview`: boolean to show/hide preview pane
-  - `result_limit`: max number of results to load (default: 1000)
+  - `result_limit`: max number of results to load (default: 5000)
 - **`[recall.preview]`** section:
   - `show_directory`, `show_timestamp`, `show_exit_status`, `show_duration`, `show_hostname`: booleans to control preview pane fields
 
