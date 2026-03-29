@@ -100,7 +100,7 @@ impl RecallConfig {
 }
 
 impl Config {
-    /// Load configuration from the default path (~/.pxh/config.toml)
+    /// Load configuration from the default path.
     pub fn load() -> Self {
         Self::load_from_default_path().unwrap_or_default()
     }
@@ -110,9 +110,8 @@ impl Config {
         Self::load_from_path(&config_path)
     }
 
-    fn default_config_path() -> Option<PathBuf> {
-        let home = home::home_dir()?;
-        Some(home.join(".pxh").join("config.toml"))
+    pub fn default_config_path() -> Option<PathBuf> {
+        Some(crate::pxh_config_dir()?.join("config.toml"))
     }
 
     pub fn load_from_path(path: &PathBuf) -> Option<Self> {

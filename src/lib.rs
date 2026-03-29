@@ -165,6 +165,37 @@ fn migrate_host_settings(conn: &Connection) {
         let _ = conn.execute("DELETE FROM settings WHERE key = 'original_hostname'", []);
     }
 }
+/// Return the pxh data directory. Uses `~/.pxh` if it exists (backward compat),
+/// otherwise `$XDG_DATA_HOME/pxh` (defaulting to `~/.local/share/pxh`).
+pub fn pxh_data_dir() -> Option<PathBuf> {
+    let home = home::home_dir()?;
+    let legacy = home.join(".pxh");
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    let xdg_data =
+        env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share"));
+    Some(xdg_data.join("pxh"))
+}
+
+/// Return the pxh config directory. Uses `~/.pxh` if it exists (backward compat),
+/// otherwise `$XDG_CONFIG_HOME/pxh` (defaulting to `~/.config/pxh`).
+pub fn pxh_config_dir() -> Option<PathBuf> {
+    let home = home::home_dir()?;
+    let legacy = home.join(".pxh");
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    let xdg_config =
+        env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".config"));
+    Some(xdg_config.join("pxh"))
+}
+
+/// Return the default database path (`pxh_data_dir()/pxh.db`).
+pub fn default_db_path() -> Option<PathBuf> {
+    Some(pxh_data_dir()?.join("pxh.db"))
+}
+
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     if let Some(parent) = path.parent() {

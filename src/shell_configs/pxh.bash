@@ -61,7 +61,13 @@ _pxh_check_run() {
 _pxh_init() {
     PXH_SESSION_ID=$(_pxh_random)
     PXH_HOSTNAME=$(hostname -s)
-    export PXH_DB_PATH=${PXH_DB_PATH:-$HOME/.pxh/pxh.db}
+    if [ -z "${PXH_DB_PATH:-}" ]; then
+        if [ -d "$HOME/.pxh" ]; then
+            export PXH_DB_PATH="$HOME/.pxh/pxh.db"
+        else
+            export PXH_DB_PATH="${XDG_DATA_HOME:-$HOME/.local/share}/pxh/pxh.db"
+        fi
+    fi
 
     [ ! -d "$(dirname "$PXH_DB_PATH")" ] && mkdir -p -m 0700 "$(dirname "$PXH_DB_PATH")"
 
