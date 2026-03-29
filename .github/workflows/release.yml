@@ -102,41 +102,70 @@ jobs:
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Get source tarball SHA256
-        id: sha
+      - name: Download SHA256SUMS from release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${GITHUB_REF_NAME}" --pattern SHA256SUMS
+
+      - name: Parse checksums
+        id: sums
         run: |
-          url="https://github.com/chipturner/pxhist/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
-          sha=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
-          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+          extract() { grep "$1" SHA256SUMS | cut -d' ' -f1; }
+          echo "aarch64_apple=$(extract aarch64-apple-darwin)" >> "$GITHUB_OUTPUT"
+          echo "x86_64_apple=$(extract x86_64-apple-darwin)" >> "$GITHUB_OUTPUT"
+          echo "aarch64_linux=$(extract aarch64-unknown-linux-gnu)" >> "$GITHUB_OUTPUT"
+          echo "x86_64_linux=$(extract x86_64-unknown-linux-gnu)" >> "$GITHUB_OUTPUT"
 
       - name: Update formula and push to tap
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          SHA256: ${{ steps.sha.outputs.sha256 }}
+          SHA_AARCH64_APPLE: ${{ steps.sums.outputs.aarch64_apple }}
+          SHA_X86_64_APPLE: ${{ steps.sums.outputs.x86_64_apple }}
+          SHA_AARCH64_LINUX: ${{ steps.sums.outputs.aarch64_linux }}
+          SHA_X86_64_LINUX: ${{ steps.sums.outputs.x86_64_linux }}
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/chipturner/homebrew-pxh.git" homebrew-tap
           cd homebrew-tap
           mkdir -p Formula
-          cat > Formula/pxh.rb << EOF
+          cat > Formula/pxh.rb << FORMULA
           class Pxh < Formula
             desc "Fast, cross-shell history mining tool with interactive fuzzy search and sync"
             homepage "https://github.com/chipturner/pxhist"
-            url "https://github.com/chipturner/pxhist/archive/refs/tags/v${VERSION}.tar.gz"
-            sha256 "${SHA256}"
+            version "${VERSION}"
             license "MIT"
 
-            depends_on "rust" => :build
+            on_macos do
+              on_arm do
+                url "https://github.com/chipturner/pxhist/releases/download/v#{version}/pxh-aarch64-apple-darwin.tar.gz"
+                sha256 "${SHA_AARCH64_APPLE}"
+              end
+              on_intel do
+                url "https://github.com/chipturner/pxhist/releases/download/v#{version}/pxh-x86_64-apple-darwin.tar.gz"
+                sha256 "${SHA_X86_64_APPLE}"
+              end
+            end
+
+            on_linux do
+              on_arm do
+                url "https://github.com/chipturner/pxhist/releases/download/v#{version}/pxh-aarch64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_AARCH64_LINUX}"
+              end
+              on_intel do
+                url "https://github.com/chipturner/pxhist/releases/download/v#{version}/pxh-x86_64-unknown-linux-gnu.tar.gz"
+                sha256 "${SHA_X86_64_LINUX}"
+              end
+            end
 
             def install
-              system "cargo", "install", *std_cargo_args
+              bin.install "pxh"
             end
 
             test do
               system bin/"pxh", "--version"
             end
           end
-          EOF
+          FORMULA
           sed -i 's/^          //' Formula/pxh.rb
           git add Formula/pxh.rb
           git config user.name "github-actions[bot]"
