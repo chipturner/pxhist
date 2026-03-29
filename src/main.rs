@@ -1437,12 +1437,14 @@ impl SyncCommand {
             // Parse SSH command and arguments
             let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
 
-            let remote_db_path =
-                self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
+            let remote_db_path = self
+                .remote_db
+                .as_ref()
+                .map_or_else(pxh::helpers::default_remote_db_expr, |p| p.display().to_string());
 
             // Build remote pxh command with candidate path probing
             let since_arg = self.since.map_or(String::new(), |d| format!(" --since {d}"));
-            let pxh_args = format!("--db {} sync --server{since_arg}", remote_db_path.display());
+            let pxh_args = format!("--db {remote_db_path} sync --server{since_arg}");
             let remote_command =
                 pxh::helpers::build_remote_pxh_command(&self.remote_pxh, &pxh_args);
 
@@ -2070,14 +2072,16 @@ impl ScrubCommand {
 
         let configured_path = self.remote_pxh.as_deref().unwrap_or("pxh");
 
-        let remote_db_path =
-            self.remote_db.clone().unwrap_or_else(|| PathBuf::from("~/.pxh/pxh.db"));
+        let remote_db_path = self
+            .remote_db
+            .as_ref()
+            .map_or_else(pxh::helpers::default_remote_db_expr, |p| p.display().to_string());
 
         // Parse SSH command
         let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
 
         // Build remote command - v2 protocol for scrub
-        let pxh_args = format!("--db {} sync --server", remote_db_path.display());
+        let pxh_args = format!("--db {remote_db_path} sync --server");
         let remote_command = pxh::helpers::build_remote_pxh_command(configured_path, &pxh_args);
 
         let mut cmd = std::process::Command::new(&ssh_cmd);

@@ -892,6 +892,12 @@ pub mod helpers {
         exe.strip_prefix(&home).ok().map(|path| path.to_string_lossy().to_string())
     }
 
+    /// Return a shell expression that resolves the pxh database path on a remote host.
+    /// Checks XDG path first, falls back to legacy ~/.pxh.
+    pub fn default_remote_db_expr() -> String {
+        r#"$(if [ -d "${XDG_DATA_HOME:-$HOME/.local/share}/pxh" ]; then echo "${XDG_DATA_HOME:-$HOME/.local/share}/pxh/pxh.db"; elif [ -d "$HOME/.pxh" ]; then echo "$HOME/.pxh/pxh.db"; else echo "${XDG_DATA_HOME:-$HOME/.local/share}/pxh/pxh.db"; fi)"#.to_string()
+    }
+
     /// Determine if the executable is being invoked as pxhs (shorthand for pxh show)
     pub fn determine_is_pxhs(args: &[String]) -> bool {
         args.first()

@@ -87,6 +87,16 @@ fn test_build_remote_pxh_command_default() {
 }
 
 #[test]
+fn test_default_remote_db_expr() {
+    let expr = helpers::default_remote_db_expr();
+    // Should be a shell $(...) expression that probes XDG vs legacy paths
+    assert!(expr.starts_with("$("), "expected shell subst expression, got: {expr}");
+    assert!(expr.contains("XDG_DATA_HOME"), "should reference XDG_DATA_HOME");
+    assert!(expr.contains(".local/share"), "should reference XDG default");
+    assert!(expr.contains(".pxh/pxh.db"), "should fall back to legacy path");
+}
+
+#[test]
 fn test_sqlite_connection_creates_parent_dirs() {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("nested").join("subdir").join("pxh.db");
