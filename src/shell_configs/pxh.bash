@@ -30,24 +30,31 @@ _pxh_random() {
     od -An -N6 -tu8 < /dev/urandom | tr -d '\n '
 }
 
+__pxh_should_run=""
+
 _pxh_recall() {
+    __pxh_should_run=""
     local selected
     selected=$(pxh --db "$PXH_DB_PATH" recall --shell-mode --query "$READLINE_LINE" 2>/dev/null)
     if [[ "$selected" == run:* ]]; then
-        # Execute immediately
         READLINE_LINE="${selected#run:}"
         READLINE_POINT=${#READLINE_LINE}
-        # Simulate pressing Enter by accepting the line
-        # Note: bind -x functions can't directly execute, so we rely on
-        # the user pressing Enter or we could use READLINE_LINE and accept-line
+        __pxh_should_run=1
     elif [[ "$selected" == edit-a:* ]]; then
-        # Place in buffer for editing, cursor at beginning
         READLINE_LINE="${selected#edit-a:}"
         READLINE_POINT=0
     elif [[ "$selected" == edit:* ]]; then
-        # Place in buffer for editing, cursor at end
         READLINE_LINE="${selected#edit:}"
         READLINE_POINT=${#READLINE_LINE}
+    fi
+}
+
+_pxh_check_run() {
+    if [[ "$__pxh_should_run" == 1 ]]; then
+        __pxh_should_run=""
+        bind '"\C-x3": accept-line'
+    else
+        bind '"\C-x3": ""'
     fi
 }
 
@@ -58,8 +65,13 @@ _pxh_init() {
 
     [ ! -d "$(dirname "$PXH_DB_PATH")" ] && mkdir -p -m 0700 "$(dirname "$PXH_DB_PATH")"
 
-    # Bind Ctrl-R to pxh recall # PXH_CTRL_R_BINDING
-    bind -x '"\C-r": _pxh_recall' # PXH_CTRL_R_BINDING
+    # Bind Ctrl-R to pxh recall via macro chain: # PXH_CTRL_R_BINDING
+    # \C-x1 runs recall, \C-x2 checks if we should execute, # PXH_CTRL_R_BINDING
+    # \C-x3 is dynamically bound to accept-line or no-op # PXH_CTRL_R_BINDING
+    bind -x '"\C-x1": _pxh_recall' # PXH_CTRL_R_BINDING
+    bind -x '"\C-x2": _pxh_check_run' # PXH_CTRL_R_BINDING
+    bind '"\C-x3": ""' # PXH_CTRL_R_BINDING
+    bind '"\C-r": "\C-x1\C-x2\C-x3"' # PXH_CTRL_R_BINDING
 }
 
 _pxh_init
