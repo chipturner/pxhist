@@ -90,3 +90,55 @@ jobs:
           files: |
             pxh-*.tar.gz
             SHA256SUMS
+
+  update-homebrew:
+    name: Update Homebrew formula
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Get source tarball SHA256
+        id: sha
+        run: |
+          url="https://github.com/chipturner/pxhist/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz"
+          sha=$(curl -sL "$url" | sha256sum | cut -d' ' -f1)
+          echo "sha256=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Update formula and push to tap
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          SHA256: ${{ steps.sha.outputs.sha256 }}
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/chipturner/homebrew-pxh.git" homebrew-tap
+          cd homebrew-tap
+          mkdir -p Formula
+          cat > Formula/pxh.rb << EOF
+          class Pxh < Formula
+            desc "Fast, cross-shell history mining tool with interactive fuzzy search and sync"
+            homepage "https://github.com/chipturner/pxhist"
+            url "https://github.com/chipturner/pxhist/archive/refs/tags/v${VERSION}.tar.gz"
+            sha256 "${SHA256}"
+            license "MIT"
+
+            depends_on "rust" => :build
+
+            def install
+              system "cargo", "install", *std_cargo_args
+            end
+
+            test do
+              system bin/"pxh", "--version"
+            end
+          end
+          EOF
+          sed -i 's/^          //' Formula/pxh.rb
+          git add Formula/pxh.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git diff --cached --quiet || git commit -m "Update pxh to ${VERSION}" && git push
