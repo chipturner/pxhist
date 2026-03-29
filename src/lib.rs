@@ -211,6 +211,41 @@ pub fn default_db_path() -> Option<PathBuf> {
     Some(pxh_data_dir()?.join("pxh.db"))
 }
 
+/// Initialize base schema and register custom functions on a connection.
+/// Safe to call on foreign databases (scan/scrub --dir) -- all DDL is idempotent
+/// and the memdb ATTACH is per-connection only.
+pub fn initialize_base_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    conn.execute_batch(include_str!("base_schema.sql"))?;
+    conn.create_scalar_function("regexp", 2, FunctionFlags::SQLITE_DETERMINISTIC, move |ctx| {
+        assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
+        let regexp: Arc<Regex> = ctx
+            .get_or_create_aux(0, |vr| -> Result<_, BoxError> { Ok(Regex::new(vr.as_str()?)?) })?;
+        let is_match = {
+            let text = ctx.get_raw(1).as_bytes().map_err(|e| Error::UserFunctionError(e.into()))?;
+            regexp.is_match(text)
+        };
+        Ok(is_match)
+    })?;
+    Ok(())
+}
+
+/// Run versioned schema migrations tracked via PRAGMA user_version.
+fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+
+    if version < 1 {
+        // Column may already exist on databases created before version tracking.
+        match conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []) {
+            Ok(_) => {}
+            Err(e) if e.to_string().contains("duplicate column name") => {}
+            Err(e) => return Err(e.into()),
+        }
+        conn.pragma_update(None, "user_version", 1)?;
+    }
+
+    Ok(())
+}
+
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     if let Some(parent) = path.parent() {
@@ -236,26 +271,8 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
     conn.pragma_update(None, "cache_size", "16777216")?;
     conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-    let schema = include_str!("base_schema.sql");
-    conn.execute_batch(schema)?;
-
-    // From rusqlite::functions example but adapted for non-utf8
-    // regexps.
-    conn.create_scalar_function("regexp", 2, FunctionFlags::SQLITE_DETERMINISTIC, move |ctx| {
-        assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
-        let regexp: Arc<Regex> = ctx
-            .get_or_create_aux(0, |vr| -> Result<_, BoxError> { Ok(Regex::new(vr.as_str()?)?) })?;
-        let is_match = {
-            let text = ctx.get_raw(1).as_bytes().map_err(|e| Error::UserFunctionError(e.into()))?;
-
-            regexp.is_match(text)
-        };
-
-        Ok(is_match)
-    })?;
-
-    // Add machine_id column if not present (idempotent migration)
-    let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+    initialize_base_schema(&conn)?;
+    run_schema_migrations(&conn)?;
 
     Ok(conn)
 }
@@ -1072,11 +1089,17 @@ pub mod test_utils {
 mod tests {
     use super::*;
 
+    /// Create an in-memory database with full schema and migrations applied.
+    fn test_connection() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        initialize_base_schema(&conn).unwrap();
+        run_schema_migrations(&conn).unwrap();
+        conn
+    }
+
     #[test]
     fn test_resolve_hostname_from_config() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
-        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+        let conn = test_connection();
 
         let mut config = recall::config::Config::default();
         config.host.hostname = Some("from-config".to_string());
@@ -1088,9 +1111,7 @@ mod tests {
 
     #[test]
     fn test_resolve_hostname_from_db() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
-        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+        let conn = test_connection();
 
         let config = recall::config::Config::default();
         set_setting(&conn, "original_hostname", &BString::from("from-db")).unwrap();
@@ -1101,9 +1122,7 @@ mod tests {
 
     #[test]
     fn test_resolve_hostname_live_fallback() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
-        let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
+        let conn = test_connection();
 
         let config = recall::config::Config::default();
         let result = resolve_hostname(&config, &conn);
@@ -1135,5 +1154,53 @@ mod tests {
         config.host.aliases = vec![current, "other".to_string()];
         let hosts = effective_host_set(&config);
         assert_eq!(hosts.len(), 2);
+    }
+
+    #[test]
+    fn test_migration_fresh_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 0);
+
+        run_schema_migrations(&conn).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 1);
+
+        // machine_id column should exist
+        conn.execute(
+            "INSERT INTO command_history (session_id, full_command, shellname, machine_id) VALUES (1, X'6C73', 'bash', 42)",
+            [],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn test_migration_idempotent() {
+        let conn = test_connection();
+        // Run migrations again -- should be a no-op
+        run_schema_migrations(&conn).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 1);
+    }
+
+    #[test]
+    fn test_migration_legacy_database_with_machine_id() {
+        // Simulate a database that was used with post-machine_id pxh but has no version tracking
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(include_str!("base_schema.sql")).unwrap();
+        conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 0);
+
+        // Should handle the duplicate column gracefully and bump version
+        run_schema_migrations(&conn).unwrap();
+
+        let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
+        assert_eq!(version, 1);
     }
 }

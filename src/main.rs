@@ -968,9 +968,7 @@ impl ScanCommand {
                 }
             };
 
-            // Initialize schema if needed
-            let schema = include_str!("base_schema.sql");
-            if let Err(e) = conn.execute_batch(schema) {
+            if let Err(e) = pxh::initialize_base_schema(&conn) {
                 eprintln!("Warning: Failed to initialize schema for {}: {e}", path.display());
                 skipped_files += 1;
                 continue;
@@ -1946,9 +1944,7 @@ impl ScrubCommand {
                 }
             };
 
-            // Initialize schema if needed
-            let schema = include_str!("base_schema.sql");
-            if let Err(e) = conn.execute_batch(schema) {
+            if let Err(e) = pxh::initialize_base_schema(&conn) {
                 eprintln!(" schema error: {e}");
                 skipped_files += 1;
                 continue;

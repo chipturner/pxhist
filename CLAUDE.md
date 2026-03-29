@@ -28,8 +28,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 ### Core Components
 - **`src/main.rs`**: CLI interface using clap with subcommands (Show, Sync, Import, Install, Recall, Scan, etc.)
 - **`src/lib.rs`**: Core business logic including database operations, history parsing, shell integration, and the `helpers` and `test_utils` modules
-- **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates
-- **`src/schema_migration.sql`**: Migration script for schema changes (deduplication with COALESCE-based unique index)
+- **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates. Runs every connection (idempotent via `IF NOT EXISTS`); also sets up per-connection in-memory `memdb` tables. Schema migrations are version-tracked via `PRAGMA user_version` in `run_schema_migrations()` in `lib.rs`.
 - **`src/secrets_patterns.rs`**: Built-in regex patterns for detecting secrets in command history (used by Scan/Scrub)
 - **`src/shell_configs/`**: Shell integration scripts for bash (`pxh.bash`) and zsh (`pxh.zsh`) using preexec hooks
 - **`src/recall/`**: Interactive TUI history search module
