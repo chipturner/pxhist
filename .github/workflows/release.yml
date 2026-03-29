@@ -125,7 +125,7 @@ jobs:
           SHA_X86_64_LINUX: ${{ steps.sums.outputs.x86_64_linux }}
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          git clone "https://x-access-token:${TAP_TOKEN}@github.com/chipturner/homebrew-pxh.git" homebrew-tap
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/chipturner/homebrew-tap.git" homebrew-tap
           cd homebrew-tap
           mkdir -p Formula
           cat > Formula/pxh.rb << FORMULA

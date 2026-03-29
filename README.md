@@ -20,6 +20,12 @@ $ pxh s ffmpeg
 
 ## Install
 
+**Homebrew** (macOS and Linux):
+
+```bash
+brew install chipturner/tap/pxh
+```
+
 **Prebuilt binaries** (Linux x86_64/ARM64, macOS x86_64/ARM64):
 
 ```bash
@@ -170,12 +176,16 @@ pxh scrub --remote myserver "secret"           # Scrub from remote machine
 Import history from existing shell history files:
 
 ```bash
-pxh import --shellname zsh --histfile ~/.zsh_history
-pxh import --shellname bash --histfile ~/.bash_history
+pxh import --shellname zsh                # defaults to ~/.zsh_history
+pxh import --shellname bash               # defaults to ~/.bash_history
+pxh import --shellname zsh -n             # dry-run: show count without importing
 
 # Import from another machine
 pxh import --shellname zsh --histfile <(ssh server cat ~/.zsh_history) \
     --hostname server --username root
+
+# Import from Atuin
+contrib/atuin-to-pxh | pxh import --shellname json --histfile /dev/stdin
 ```
 
 #### Export
@@ -221,6 +231,12 @@ show_exit_status = true
 show_duration = true
 show_hostname = false  # Useful if syncing across machines
 
+[host]
+# Override the detected hostname
+hostname = "my-laptop"
+# Previous hostnames for this machine (history from these is treated as local)
+aliases = ["old-laptop", "work-mac"]
+
 [shell]
 # Disable Ctrl-R binding (use pxh recall directly instead)
 disable_ctrl_r = false
@@ -264,6 +280,10 @@ pxh s --session $PXH_SESSION_ID  # Current session
 - **Real-time sync:** Run `pxh sync --remote server` periodically via cron
 - **Shared folder:** Just run `pxh sync ~/Dropbox/pxh/` occasionally on each machine
 - **Backup:** The database is a single SQLite file - `cp ~/.pxh/pxh.db backup/`
+
+### zsh-autosuggestions
+
+If you use [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions), pxh automatically registers itself as a suggestion strategy. Suggestions come from your full cross-machine history database, not just the local zsh history file.
 
 ### Privacy
 
