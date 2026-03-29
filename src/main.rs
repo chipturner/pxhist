@@ -2426,11 +2426,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Install(cmd) => {
             cmd.go()?;
+            // Migrate host settings on install (not on every command)
+            if let Ok(conn) = make_conn() {
+                pxh::migrate_host_settings(&conn);
+            }
         }
         Commands::Completions(cmd) => {
             clap_complete::generate(cmd.shell, &mut PxhArgs::command(), "pxh", &mut io::stdout());
         }
         Commands::Config(cmd) => {
+            // Migrate host settings before editing config
+            if let Ok(conn) = make_conn() {
+                pxh::migrate_host_settings(&conn);
+            }
             cmd.go()?;
         }
         Commands::Import(cmd) => {

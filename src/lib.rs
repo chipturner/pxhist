@@ -115,11 +115,14 @@ pub fn effective_host_set(config: &recall::config::Config) -> Vec<BString> {
     hosts
 }
 
-/// Migrate host settings to config file on startup.
+/// Migrate host settings from DB legacy storage to config file.
+/// Called from install and config commands, not on every connection.
+///
 /// - If config lacks hostname, read from DB (legacy "original_hostname"), then delete from DB.
 /// - If config hostname doesn't match live hostname, move old to aliases and update.
 /// - If config lacks machine_id, generate one.
-fn migrate_host_settings(conn: &Connection) {
+// TODO: also call from future `pxh doctor` command
+pub fn migrate_host_settings(conn: &Connection) {
     let config = recall::config::Config::load();
     let mut updates: Vec<(&str, toml_edit::Item)> = Vec::new();
     let live_hostname = get_hostname();
@@ -253,9 +256,6 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
 
     // Add machine_id column if not present (idempotent migration)
     let _ = conn.execute("ALTER TABLE command_history ADD COLUMN machine_id INTEGER", []);
-
-    // Migrate host settings from DB to config file
-    migrate_host_settings(&conn);
 
     Ok(conn)
 }
