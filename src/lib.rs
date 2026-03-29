@@ -165,30 +165,38 @@ fn migrate_host_settings(conn: &Connection) {
         let _ = conn.execute("DELETE FROM settings WHERE key = 'original_hostname'", []);
     }
 }
-/// Return the pxh data directory. Uses `~/.pxh` if it exists (backward compat),
-/// otherwise `$XDG_DATA_HOME/pxh` (defaulting to `~/.local/share/pxh`).
+/// Return the pxh data directory. Prefers XDG, falls back to `~/.pxh` if it exists.
+/// New installs default to `$XDG_DATA_HOME/pxh` (`~/.local/share/pxh`).
 pub fn pxh_data_dir() -> Option<PathBuf> {
     let home = home::home_dir()?;
-    let legacy = home.join(".pxh");
-    if legacy.exists() {
-        return Some(legacy);
-    }
     let xdg_data =
         env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share"));
-    Some(xdg_data.join("pxh"))
-}
-
-/// Return the pxh config directory. Uses `~/.pxh` if it exists (backward compat),
-/// otherwise `$XDG_CONFIG_HOME/pxh` (defaulting to `~/.config/pxh`).
-pub fn pxh_config_dir() -> Option<PathBuf> {
-    let home = home::home_dir()?;
+    let xdg_dir = xdg_data.join("pxh");
+    if xdg_dir.exists() {
+        return Some(xdg_dir);
+    }
     let legacy = home.join(".pxh");
     if legacy.exists() {
         return Some(legacy);
     }
+    Some(xdg_dir)
+}
+
+/// Return the pxh config directory. Prefers XDG, falls back to `~/.pxh` if it exists.
+/// New installs default to `$XDG_CONFIG_HOME/pxh` (`~/.config/pxh`).
+pub fn pxh_config_dir() -> Option<PathBuf> {
+    let home = home::home_dir()?;
     let xdg_config =
         env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".config"));
-    Some(xdg_config.join("pxh"))
+    let xdg_dir = xdg_config.join("pxh");
+    if xdg_dir.exists() {
+        return Some(xdg_dir);
+    }
+    let legacy = home.join(".pxh");
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    Some(xdg_dir)
 }
 
 /// Return the default database path (`pxh_data_dir()/pxh.db`).
