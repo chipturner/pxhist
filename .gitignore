@@ -18,3 +18,5 @@ lcov.info
 *.profdata
 coverage.json
 coverage.xml
+
+docs/superpowers/
