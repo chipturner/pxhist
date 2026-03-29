@@ -314,8 +314,6 @@ struct StatsCommand {}
 
 #[derive(Parser, Debug)]
 struct ConfigCommand {
-    #[clap(long, help = "write default configuration file")]
-    init: bool,
     #[clap(long, help = "print the config file path")]
     path: bool,
 }
@@ -760,33 +758,30 @@ impl ConfigCommand {
     fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
         use pxh::recall::config::Config;
 
+        let path = Config::default_config_path().ok_or("could not determine config path")?;
+
         if self.path {
-            match Config::default_config_path() {
-                Some(p) => println!("{}", p.display()),
-                None => return Err("could not determine config path".into()),
-            }
+            println!("{}", path.display());
             return Ok(());
         }
 
-        if self.init {
-            let path = Config::default_config_path().ok_or("could not determine config path")?;
-            if path.exists() {
-                return Err(format!("config file already exists: {}", path.display()).into());
-            }
+        // Create default config if it doesn't exist
+        if !path.exists() {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
             let default_config = Config::default();
-            let toml = toml::to_string_pretty(&default_config)?;
-            fs::write(&path, toml)?;
-            println!("Wrote default config to {}", path.display());
-            return Ok(());
+            let toml_str = toml::to_string_pretty(&default_config)?;
+            fs::write(&path, toml_str)?;
         }
 
-        // Default: show effective config
-        let config = Config::load();
-        let toml = toml::to_string_pretty(&config)?;
-        print!("{toml}");
+        // Open in $EDITOR
+        let editor =
+            env::var("VISUAL").or_else(|_| env::var("EDITOR")).unwrap_or_else(|_| "vi".to_string());
+        let status = std::process::Command::new(&editor).arg(&path).status()?;
+        if !status.success() {
+            return Err(format!("{editor} exited with {status}").into());
+        }
         Ok(())
     }
 }
