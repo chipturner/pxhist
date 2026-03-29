@@ -957,6 +957,7 @@ dependencies = [
  "home",
  "hostname",
  "itertools",
+ "libc",
  "log",
  "nucleo",
  "predicates",
