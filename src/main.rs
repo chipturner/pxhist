@@ -91,6 +91,8 @@ enum Commands {
     Scan(ScanCommand),
     #[clap(about = "generate shell completions")]
     Completions(CompletionsCommand),
+    #[clap(about = "show history statistics")]
+    Stats(StatsCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -304,6 +306,9 @@ struct CompletionsCommand {
     #[clap(help = "shell to generate completions for (bash, zsh, fish, elvish, powershell)")]
     shell: clap_complete::Shell,
 }
+
+#[derive(Parser, Debug)]
+struct StatsCommand {}
 
 #[derive(Parser, Debug)]
 struct ExportCommand {}
@@ -739,6 +744,85 @@ struct ScanMatch {
     rowid: i64,
     #[serde(skip)]
     original_line: Option<String>,
+}
+
+impl StatsCommand {
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        let (total, unique): (i64, i64) = conn.query_row(
+            "SELECT COUNT(*), COUNT(DISTINCT full_command) FROM command_history",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        let sessions: i64 =
+            conn.query_row("SELECT COUNT(DISTINCT session_id) FROM command_history", [], |r| {
+                r.get(0)
+            })?;
+
+        let (min_ts, max_ts): (Option<i64>, Option<i64>) = conn.query_row(
+            "SELECT MIN(start_unix_timestamp), MAX(start_unix_timestamp) FROM command_history",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        let (success, with_status): (i64, i64) = conn.query_row(
+            "SELECT COUNT(CASE WHEN exit_status = 0 THEN 1 END), COUNT(exit_status) FROM command_history",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+
+        println!("Commands:   {total} total, {unique} unique");
+        println!("Sessions:   {sessions}");
+
+        if let (Some(min), Some(max)) = (min_ts, max_ts) {
+            let min_date = Local.timestamp_opt(min, 0).unwrap();
+            let max_date = Local.timestamp_opt(max, 0).unwrap();
+            let days = (max - min) / 86400;
+            println!(
+                "Period:     {} to {} ({days} days)",
+                min_date.format("%Y-%m-%d"),
+                max_date.format("%Y-%m-%d"),
+            );
+        }
+
+        if with_status > 0 {
+            let pct = 100.0 * success as f64 / with_status as f64;
+            println!("Success:    {pct:.1}% (of {with_status} commands with exit status)");
+        }
+
+        // Shells
+        let mut stmt = conn.prepare(
+            "SELECT shellname, COUNT(*) as cnt FROM command_history GROUP BY shellname ORDER BY cnt DESC",
+        )?;
+        let shells: Vec<(String, i64)> =
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        if !shells.is_empty() {
+            let shell_str: Vec<String> =
+                shells.iter().map(|(name, cnt)| format!("{name}: {cnt}")).collect();
+            println!("Shells:     {}", shell_str.join("  "));
+        }
+
+        // Top commands
+        let mut stmt = conn.prepare(
+            "SELECT full_command, COUNT(*) as cnt FROM command_history GROUP BY full_command ORDER BY cnt DESC LIMIT 10",
+        )?;
+        let top: Vec<(Vec<u8>, i64)> =
+            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+        if !top.is_empty() {
+            println!("\nTop commands:");
+            for (cmd_bytes, cnt) in &top {
+                let cmd = BString::new(cmd_bytes.clone());
+                let display = if cmd.len() > 60 {
+                    format!("{}...", &cmd[..60].to_str_lossy())
+                } else {
+                    cmd.to_str_lossy().into_owned()
+                };
+                println!("  {cnt:>6}  {display}");
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl ScanCommand {
@@ -2293,6 +2377,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Autosuggest(cmd) => {
+            cmd.go(make_conn()?)?;
+        }
+        Commands::Stats(cmd) => {
             cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {
