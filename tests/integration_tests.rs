@@ -1314,3 +1314,39 @@ fn insert_records_when_ignore_patterns_empty() {
 
     assert_eq!(count_commands(&caller), 1, "ls should be recorded with empty ignore_patterns");
 }
+
+#[test]
+fn stats_command() {
+    let caller = PxhTestHelper::new();
+    let output = caller.command_with_args(&["stats"]).output().unwrap();
+    assert!(output.status.success(), "stats should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.is_empty(), "stats should produce output");
+}
+
+#[test]
+fn completions_command_bash() {
+    let caller = PxhTestHelper::new();
+    let output = caller.command_with_args(&["completions", "bash"]).output().unwrap();
+    assert!(output.status.success(), "completions bash should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.is_empty(), "bash completions should produce output");
+}
+
+#[test]
+fn completions_command_zsh() {
+    let caller = PxhTestHelper::new();
+    let output = caller.command_with_args(&["completions", "zsh"]).output().unwrap();
+    assert!(output.status.success(), "completions zsh should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(!stdout.is_empty(), "zsh completions should produce output");
+}
+
+#[test]
+fn config_command_prints_path() {
+    let caller = PxhTestHelper::new();
+    let output = caller.command_with_args(&["config", "--path"]).output().unwrap();
+    assert!(output.status.success(), "config --path should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("config.toml"), "should print config path");
+}
