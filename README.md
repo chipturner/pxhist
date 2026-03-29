@@ -40,7 +40,7 @@ cargo install pxh        # requires Rust 1.88+
 
 ### Shell setup
 
-After installing, set up shell integration and import your existing history:
+After installing, set up shell integration (including tab completions) and import your existing history:
 
 ```bash
 pxh install bash  # or: pxh install zsh
@@ -70,7 +70,7 @@ pxh recall --here    # Limit to current directory
 pxh recall -q "git"  # Start with a pre-filled query
 ```
 
-Supports both emacs (default) and vim keybindings -- set `keymap = "vim"` in `~/.pxh/config.toml`.
+Supports both emacs (default) and vim keybindings -- set `keymap = "vim"` in `~/.config/pxh/config.toml`.
 
 ### Searching History (pxh show)
 
@@ -208,9 +208,29 @@ pxh maintenance           # ANALYZE and VACUUM the database
 pxh maintenance other.db  # Operate on a specific database file
 ```
 
+#### Shell Completions
+
+Generate tab-completion scripts for your shell:
+
+```bash
+pxh completions bash    # also: zsh, fish, elvish, powershell
+```
+
+`pxh install` sets up completions automatically. For manual setup:
+
+```bash
+# bash (add to ~/.bashrc)
+eval "$(pxh completions bash)"
+
+# zsh (add to ~/.zshrc)
+eval "$(pxh completions zsh)"
+```
+
 ## Configuration
 
-pxh reads configuration from `~/.pxh/config.toml`. All settings are optional with sensible defaults.
+pxh reads configuration from `~/.config/pxh/config.toml`. All settings are optional with sensible defaults.
+
+> **Note:** If `~/.pxh` exists from a previous installation, pxh uses it as a fallback for both config and data. New installations use XDG paths by default (`~/.config/pxh/` for config, `~/.local/share/pxh/` for data). Override with `XDG_CONFIG_HOME` and `XDG_DATA_HOME`.
 
 **Example configuration:**
 
@@ -248,7 +268,7 @@ disable_ctrl_r = false
 
 pxh contains **zero networking code**. Sync works by invoking your SSH client or reading/writing files on a shared filesystem. No accounts, no cloud services, no ports, no attack surface. Your history stays on machines you control.
 
-All data lives in a local SQLite database (`~/.pxh/pxh.db`). There's no central server. The binary is statically linked with no runtime dependencies beyond libc -- consistent behavior across bash and zsh, proper handling of edge cases (quoting, binary data, concurrent access), and fast enough that you never notice it.
+All data lives in a local SQLite database (`~/.local/share/pxh/pxh.db`). There's no central server. The binary is statically linked with no runtime dependencies beyond libc -- consistent behavior across bash and zsh, proper handling of edge cases (quoting, binary data, concurrent access), and fast enough that you never notice it.
 
 ## Tips and Tricks
 
@@ -281,7 +301,7 @@ pxh s --session $PXH_SESSION_ID  # Current session
 
 - **Real-time sync:** Run `pxh sync --remote server` periodically via cron
 - **Shared folder:** Just run `pxh sync ~/Dropbox/pxh/` occasionally on each machine
-- **Backup:** The database is a single SQLite file - `cp ~/.pxh/pxh.db backup/`
+- **Backup:** The database is a single SQLite file - `cp ~/.local/share/pxh/pxh.db backup/`
 
 ### zsh-autosuggestions
 
@@ -303,7 +323,7 @@ If you prefer to keep your shell's default Ctrl-R behavior:
 source <(pxh shell-config zsh --no-ctrl-r)
 ```
 
-**Option 2: Config file** (`~/.pxh/config.toml`)
+**Option 2: Config file** (`~/.config/pxh/config.toml`)
 ```toml
 [shell]
 disable_ctrl_r = true
@@ -321,8 +341,8 @@ pxh hooks into your shell via preexec/precmd functions to capture each command w
 
 Commands are stored as BLOBs (to handle non-UTF8 data) in SQLite with WAL mode and a 5-second busy timeout, so multiple shells can record simultaneously. A unique index prevents duplicates. Secret scanning uses patterns from [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db), categorized by confidence level.
 
-**Database location:** `~/.pxh/pxh.db` (override with `--db` or `PXH_DB_PATH`)
+**Database location:** `~/.local/share/pxh/pxh.db` (override with `--db` or `PXH_DB_PATH`)
 
 ```bash
-sqlite3 ~/.pxh/pxh.db "SELECT * FROM command_history LIMIT 10"
+sqlite3 ~/.local/share/pxh/pxh.db "SELECT * FROM command_history LIMIT 10"
 ```

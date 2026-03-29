@@ -4,7 +4,7 @@ use std::{
     fs,
     fs::{File, OpenOptions},
     io,
-    io::{BufRead, BufReader, Read, Write},
+    io::{Read, Write},
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     str,
@@ -474,16 +474,33 @@ impl InstallCommand {
         let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
         pb.push(rc_file);
 
-        // Skip installationif "pxh shell-config" is present in the
-        // current RC file.
-        let file = File::open(&pb)?;
-        let reader = BufReader::new(&file);
-        for line in reader.lines() {
-            let line = line.unwrap();
-            if line.contains("pxh shell-config") {
-                println!("Shell config already present in {}; taking no action.", pb.display());
-                return Ok(());
+        // Check what's already installed in the RC file.
+        let contents = std::fs::read_to_string(&pb)?;
+        let has_shell_config = contents.contains("pxh shell-config");
+        let has_completions = contents.contains("pxh completions");
+
+        if has_shell_config && has_completions {
+            println!("Shell config already present in {}; taking no action.", pb.display());
+            return Ok(());
+        }
+
+        if has_shell_config && !has_completions {
+            // Upgrade: add completions to existing installation
+            let mut new_contents = String::new();
+            for line in contents.lines() {
+                new_contents.push_str(line);
+                new_contents.push('\n');
+                if line.contains("pxh shell-config") {
+                    let indent = &line[..line.len() - line.trim_start().len()];
+                    new_contents.push_str(indent);
+                    new_contents.push_str(&format!("eval \"$(pxh completions {shellname})\"\n"));
+                }
             }
+            std::fs::write(&pb, new_contents)?;
+            println!("Shell completions added to existing config in {}.", pb.display());
+            println!("Completions will be active for new sessions.  To activate now, run:");
+            println!("  eval \"$(pxh completions {shellname})\"");
+            return Ok(());
         }
 
         let mut file = OpenOptions::new().append(true).open(&pb)?;
@@ -494,13 +511,16 @@ impl InstallCommand {
             r#"
 if command -v pxh &> /dev/null; then
     eval "$(pxh shell-config {shellname})"
+    eval "$(pxh completions {shellname})"
 fi"#
         )?;
         println!("Shell config successfully added to {}.", pb.display());
         println!(
             "pxh will be active for all new shell sessions.  To activate for this session, run:"
         );
-        println!("  source <(pxh shell-config {shellname})");
+        println!(
+            "  source <(pxh shell-config {shellname}) && eval \"$(pxh completions {shellname})\""
+        );
         Ok(())
     }
 }
