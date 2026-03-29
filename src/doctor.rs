@@ -312,15 +312,8 @@ impl DoctorCommand {
             }
         }
 
-        if std::env::var("PXH_SESSION_ID").is_ok() {
-            results.push(CheckResult::ok("PXH_SESSION_ID is set (hooks active in this session)"));
-        } else {
-            results.push(CheckResult::warn(
-                "PXH_SESSION_ID not set",
-                "Shell hooks did not load in this session",
-            ));
-        }
-
+        // PXH_DB_PATH is the only exported env var; SESSION_ID and HOSTNAME
+        // are shell-local variables used by the hooks, invisible to child processes.
         if let (Ok(env_path), Some(actual)) = (std::env::var("PXH_DB_PATH"), db_path) {
             let env_pb = PathBuf::from(&env_path);
             if env_pb != *actual {
@@ -333,15 +326,6 @@ impl DoctorCommand {
                     "Commands may be recorded to different databases",
                 ));
             }
-        }
-
-        if std::env::var("PXH_HOSTNAME").is_ok() {
-            results.push(CheckResult::ok("PXH_HOSTNAME is set"));
-        } else {
-            results.push(CheckResult::warn(
-                "PXH_HOSTNAME not set",
-                "Will be detected live; may vary if hostname changes",
-            ));
         }
 
         results
@@ -600,11 +584,6 @@ impl DoctorCommand {
 
         let db_env = std::env::var("PXH_DB_PATH").unwrap_or_else(|_| "(not set)".to_string());
         println!("PXH_DB_PATH:     {db_env}");
-        let session = if std::env::var("PXH_SESSION_ID").is_ok() { "set" } else { "not set" };
-        println!("PXH_SESSION_ID:  {session}");
-        let hostname_env =
-            std::env::var("PXH_HOSTNAME").unwrap_or_else(|_| "(not set)".to_string());
-        println!("PXH_HOSTNAME:    {hostname_env}");
 
         if let Some(c) = conn {
             let last_ts: Option<i64> = c
