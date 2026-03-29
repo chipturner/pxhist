@@ -2391,6 +2391,12 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Reset SIGPIPE to default OS behavior so piping to head/grep exits cleanly
+    // instead of producing a BrokenPipe error.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     env_logger::init();
 
     // Check if binary was invoked as "pxhs", which is a shorthand for "pxh show"
