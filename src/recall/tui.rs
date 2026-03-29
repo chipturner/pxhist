@@ -55,29 +55,51 @@ fn sanitize_for_display(s: &str) -> String {
 
     while let Some(c) = chars.next() {
         match c {
-            // ESC - start of ANSI escape sequence
             '\x1b' => {
-                // Skip the escape sequence
-                if let Some(&next) = chars.peek()
-                    && next == '['
-                {
-                    chars.next(); // consume '['
-                    // Skip until we hit a letter (end of CSI sequence)
-                    while let Some(&c) = chars.peek() {
+                match chars.peek() {
+                    // CSI: \x1b[ ... letter
+                    Some(&'[') => {
                         chars.next();
-                        if c.is_ascii_alphabetic() {
-                            break;
+                        while let Some(&c) = chars.peek() {
+                            chars.next();
+                            if c.is_ascii_alphabetic() {
+                                break;
+                            }
                         }
                     }
+                    // OSC: \x1b] ... (BEL or ST)
+                    Some(&']') => {
+                        chars.next();
+                        while let Some(c) = chars.next() {
+                            if c == '\x07' {
+                                break;
+                            }
+                            if c == '\x1b' && chars.peek() == Some(&'\\') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                    // DCS: \x1bP ... ST (\x1b\\)
+                    Some(&'P') => {
+                        chars.next();
+                        while let Some(c) = chars.next() {
+                            if c == '\x1b' && chars.peek() == Some(&'\\') {
+                                chars.next();
+                                break;
+                            }
+                        }
+                    }
+                    // Any other ESC + char: skip one char (SS2, SS3, etc.)
+                    Some(_) => {
+                        chars.next();
+                    }
+                    None => {}
                 }
             }
-            // Newline, carriage return - would break row containment
             '\n' | '\r' => result.push(' '),
-            // Other control characters that could affect display
             '\x00'..='\x08' | '\x0b'..='\x0c' | '\x0e'..='\x1f' | '\x7f' => {}
-            // Tab - convert to space
             '\t' => result.push(' '),
-            // Everything else passes through
             _ => result.push(c),
         }
     }
@@ -1271,6 +1293,28 @@ mod tests {
         assert_eq!(sanitize_for_display("text\x1b"), "text");
         assert_eq!(sanitize_for_display("text\x1b["), "text");
         assert_eq!(sanitize_for_display("text\x1b[123"), "text");
+    }
+
+    #[test]
+    fn test_sanitize_strips_osc_sequences() {
+        // OSC title change: \x1b]0;title\x07
+        assert_eq!(sanitize_for_display("\x1b]0;My Title\x07visible"), "visible");
+        // OSC with ST terminator: \x1b]0;title\x1b\\
+        assert_eq!(sanitize_for_display("\x1b]2;Title\x1b\\visible"), "visible");
+        // OSC 52 clipboard: \x1b]52;c;base64\x07
+        assert_eq!(sanitize_for_display("\x1b]52;c;SGVsbG8=\x07after"), "after");
+    }
+
+    #[test]
+    fn test_sanitize_strips_dcs_sequences() {
+        assert_eq!(sanitize_for_display("\x1bPsome data\x1b\\visible"), "visible");
+    }
+
+    #[test]
+    fn test_sanitize_strips_other_esc_sequences() {
+        // SS2/SS3
+        assert_eq!(sanitize_for_display("\x1bNvisible"), "visible");
+        assert_eq!(sanitize_for_display("\x1bOvisible"), "visible");
     }
 
     #[test]
