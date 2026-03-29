@@ -149,7 +149,14 @@ impl Config {
 
     pub fn load_from_path(path: &PathBuf) -> Option<Self> {
         let content = fs::read_to_string(path).ok()?;
-        toml::from_str(&content).ok()
+        match toml::from_str(&content) {
+            Ok(config) => Some(config),
+            Err(e) => {
+                eprintln!("pxh: warning: failed to parse {}: {e}", path.display());
+                eprintln!("pxh: using default configuration");
+                None
+            }
+        }
     }
 
     /// Update the config file at the default path, preserving existing content.
@@ -364,6 +371,22 @@ keymap = "vim"
         let config = HistoryConfig::default();
         let set = regex::RegexSet::new(&config.ignore_patterns);
         assert!(set.is_ok(), "default patterns should all be valid regexes");
+    }
+
+    #[test]
+    fn test_invalid_toml_returns_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "this is not valid [[ toml").unwrap();
+        assert!(Config::load_from_path(&path).is_none());
+    }
+
+    #[test]
+    fn test_wrong_type_returns_none() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("bad_type.toml");
+        std::fs::write(&path, "[recall]\nresult_limit = \"not a number\"\n").unwrap();
+        assert!(Config::load_from_path(&path).is_none());
     }
 
     #[test]
