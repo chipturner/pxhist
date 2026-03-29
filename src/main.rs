@@ -2470,10 +2470,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Insert(cmd) => {
-            let mut conn = make_conn()?;
+            // Load config before make_conn() since migrate_host_settings
+            // (called during connection setup) may modify the config file
             let config = pxh::recall::config::Config::load();
+            let mut conn = make_conn()?;
+
+            // Check if command matches any ignore pattern
+            let command_str = cmd.command.join(OsStr::new(" "));
+            let command_lossy = command_str.to_string_lossy();
+            if !config.history.ignore_patterns.is_empty()
+                && let Ok(set) = regex::RegexSet::new(&config.history.ignore_patterns)
+                && set.is_match(&command_lossy)
+            {
+                return Ok(());
+            }
+
             let invocation = pxh::Invocation {
-                command: cmd.command.join(OsStr::new(" ")).as_bytes().into(),
+                command: command_str.as_bytes().into(),
                 shellname: cmd.shellname.clone(),
                 working_directory: cmd
                     .working_directory

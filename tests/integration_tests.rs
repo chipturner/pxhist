@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 mod common;
-use common::PxhCaller;
+use common::{PxhCaller, PxhTestHelper};
 
 fn count_lines(bytes: &[u8]) -> usize {
     bytes.iter().filter(|&ch| *ch == b'\n').count()
@@ -1167,4 +1167,150 @@ fn show_working_directory_implies_here() {
     let output =
         pc.call("show --suppress-headers --working-directory /nonexistent").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
+}
+
+fn count_commands(helper: &PxhTestHelper) -> usize {
+    let output = helper.command_with_args(&["show", "--suppress-headers"]).output().unwrap();
+    if !output.status.success() || output.stdout.is_empty() {
+        return 0;
+    }
+    String::from_utf8_lossy(&output.stdout).lines().count()
+}
+
+#[test]
+fn insert_ignores_configured_patterns() {
+    let caller = PxhTestHelper::new();
+
+    // Write config with ignore patterns
+    let config_path = caller.home_dir().join(".pxh/config.toml");
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &config_path,
+        r#"
+[history]
+ignore_patterns = ["^ls$", "^cd( .)?$", "^pwd$"]
+"#,
+    )
+    .unwrap();
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+
+    // Insert an ignored command (ls)
+    let output = caller
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            &caller.hostname,
+            "--username",
+            "testuser",
+            "--session-id",
+            "12345",
+            "--start-unix-timestamp",
+            &now.to_string(),
+            "--working-directory",
+            "/tmp",
+            "ls",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Insert a non-ignored command (ls -la)
+    let output = caller
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            &caller.hostname,
+            "--username",
+            "testuser",
+            "--session-id",
+            "12345",
+            "--start-unix-timestamp",
+            &(now + 1).to_string(),
+            "--working-directory",
+            "/tmp",
+            "--",
+            "ls",
+            "-la",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    // Only the non-ignored command should be recorded
+    assert_eq!(count_commands(&caller), 1);
+    let output = caller.command_with_args(&["show", "-l", "0"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("ls -la"), "Non-ignored command should be present");
+}
+
+#[test]
+fn insert_filters_with_default_patterns() {
+    let caller = PxhTestHelper::new();
+
+    // Remove the test config so default ignore patterns apply
+    let _ = std::fs::remove_file(caller.home_dir().join(".pxh/config.toml"));
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+
+    let output = caller
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            &caller.hostname,
+            "--username",
+            "testuser",
+            "--session-id",
+            "12345",
+            "--start-unix-timestamp",
+            &now.to_string(),
+            "--working-directory",
+            "/tmp",
+            "ls",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    assert_eq!(count_commands(&caller), 0, "ls should be filtered by default patterns");
+}
+
+#[test]
+fn insert_records_when_ignore_patterns_empty() {
+    let caller = PxhTestHelper::new();
+
+    // Explicit empty ignore list disables filtering
+    let config_dir = caller.home_dir().join(".pxh");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(config_dir.join("config.toml"), "[history]\nignore_patterns = []\n").unwrap();
+
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+
+    let output = caller
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            &caller.hostname,
+            "--username",
+            "testuser",
+            "--session-id",
+            "12345",
+            "--start-unix-timestamp",
+            &now.to_string(),
+            "--working-directory",
+            "/tmp",
+            "ls",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    assert_eq!(count_commands(&caller), 1, "ls should be recorded with empty ignore_patterns");
 }

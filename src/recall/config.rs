@@ -4,6 +4,37 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+/// Configuration for history recording
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default)]
+pub struct HistoryConfig {
+    /// Regex patterns for commands to ignore (not record).
+    /// Set to [] to disable.
+    pub ignore_patterns: Vec<String>,
+}
+
+fn default_ignore_patterns() -> Vec<String> {
+    vec![
+        "^ls$".into(),
+        "^cd( .)?$".into(),
+        "^pwd$".into(),
+        "^exit$".into(),
+        "^clear$".into(),
+        "^fg$".into(),
+        "^bg$".into(),
+        "^jobs$".into(),
+        "^history$".into(),
+        "^true$".into(),
+        "^false$".into(),
+    ]
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        HistoryConfig { ignore_patterns: default_ignore_patterns() }
+    }
+}
+
 /// Main configuration struct
 #[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Config {
@@ -13,6 +44,8 @@ pub struct Config {
     pub recall: RecallConfig,
     #[serde(default)]
     pub shell: ShellConfig,
+    #[serde(default)]
+    pub history: HistoryConfig,
 }
 
 /// Configuration for host identity
@@ -174,6 +207,8 @@ mod tests {
         assert!(config.recall.preview.show_exit_status);
         assert!(!config.recall.preview.show_hostname);
         assert!(config.recall.preview.show_duration);
+        assert!(!config.history.ignore_patterns.is_empty());
+        assert!(config.history.ignore_patterns.contains(&"^ls$".to_string()));
     }
 
     #[test]
@@ -291,6 +326,44 @@ keymap = "vim"
         assert!(config.host.hostname.is_none());
         assert!(config.host.aliases.is_empty());
         assert_eq!(config.recall.keymap, "vim");
+    }
+
+    #[test]
+    fn test_parse_history_config() {
+        let toml = r#"
+[history]
+ignore_patterns = ["^secret$", "^rm -rf"]
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert_eq!(config.history.ignore_patterns, vec!["^secret$", "^rm -rf"]);
+    }
+
+    #[test]
+    fn test_parse_empty_history_ignore_patterns() {
+        let toml = r#"
+[history]
+ignore_patterns = []
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.history.ignore_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_missing_history_section_uses_defaults() {
+        let toml = r#"
+[recall]
+keymap = "vim"
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(!config.history.ignore_patterns.is_empty());
+        assert!(config.history.ignore_patterns.contains(&"^ls$".to_string()));
+    }
+
+    #[test]
+    fn test_default_ignore_patterns_are_valid_regexes() {
+        let config = HistoryConfig::default();
+        let set = regex::RegexSet::new(&config.ignore_patterns);
+        assert!(set.is_ok(), "default patterns should all be valid regexes");
     }
 
     #[test]

@@ -150,6 +150,10 @@ fn migrate_host_settings(conn: &Connection) {
     // Step 3: Generate machine_id if missing
     if config.host.machine_id.is_none() {
         let id = rand::random::<u64>();
+        // Mask to 63 bits so the value stays positive in TOML (signed i64).
+        // A negative i64 can't deserialize into Option<u64>, which would cause
+        // the entire config file to fail to parse.
+        let id = id & i64::MAX as u64;
         updates.push(("host.machine_id", toml_edit::value(id as i64)));
     }
 
@@ -963,6 +967,13 @@ pub mod test_utils {
             let tmpdir = TempDir::new().unwrap();
             let home_dir = tmpdir.path().to_path_buf();
             let db_path = home_dir.join(".pxh/pxh.db");
+
+            // Create .pxh dir and a config with empty ignore_patterns so tests
+            // aren't affected by default ignore patterns filtering trivial commands.
+            let pxh_dir = home_dir.join(".pxh");
+            std::fs::create_dir_all(&pxh_dir).unwrap();
+            std::fs::write(pxh_dir.join("config.toml"), "[history]\nignore_patterns = []\n")
+                .unwrap();
 
             PxhTestHelper {
                 _tmpdir: tmpdir,
