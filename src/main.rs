@@ -17,6 +17,8 @@ use regex::bytes::Regex;
 use rusqlite::{Connection, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
 
+mod doctor;
+
 // Type alias for secret pattern matching results
 type SecretPatterns = (Vec<(&'static str, &'static str)>, regex::bytes::RegexSet);
 
@@ -47,8 +49,16 @@ const REGEX_SIZE_LIMIT_ALL: usize = 100 * 1024 * 1024; // 100MB for combined pat
 // Maximum database size accepted during sync (1 GB)
 const MAX_SYNC_DB_SIZE: u64 = 1024 * 1024 * 1024;
 
+fn version_string() -> &'static str {
+    use std::sync::LazyLock;
+    static VERSION: LazyLock<String> = LazyLock::new(|| {
+        format!("{} (SQLite {}, schema v1)", env!("CARGO_PKG_VERSION"), rusqlite::version())
+    });
+    &VERSION
+}
+
 #[derive(Parser, Debug)]
-#[clap(author, version, about, long_about = None)]
+#[clap(author, version = version_string(), about, long_about = None)]
 struct PxhArgs {
     #[clap(long, env = "PXH_DB_PATH")]
     db: Option<PathBuf>,
@@ -95,6 +105,8 @@ enum Commands {
     Stats(StatsCommand),
     #[clap(visible_alias = "cfg", about = "show or initialize configuration")]
     Config(ConfigCommand),
+    #[clap(about = "diagnose common issues and produce diagnostic reports")]
+    Doctor(doctor::DoctorCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -769,7 +781,7 @@ impl MaintenanceCommand {
 }
 
 #[derive(Clone, serde::Serialize)]
-struct ScanMatch {
+pub struct ScanMatch {
     command: String,
     pattern: String,
     timestamp: Option<i64>,
@@ -1066,7 +1078,9 @@ impl ScanCommand {
 
 // Shared scanning utilities
 
-fn build_secret_patterns(confidence: &str) -> Result<SecretPatterns, Box<dyn std::error::Error>> {
+pub fn build_secret_patterns(
+    confidence: &str,
+) -> Result<SecretPatterns, Box<dyn std::error::Error>> {
     use pxh::secrets_patterns::{PATTERNS_CRITICAL, PATTERNS_HIGH, PATTERNS_LOW};
     use regex::bytes::RegexSetBuilder;
 
@@ -1125,7 +1139,7 @@ fn detect_shell_format(content: &[u8]) -> String {
     "bash".to_string()
 }
 
-fn scan_database(
+pub fn scan_database(
     conn: &Connection,
     regex_set: &regex::bytes::RegexSet,
     patterns: &[(&str, &str)],
@@ -2513,6 +2527,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
             invocation.insert(&tx)?;
             tx.commit()?;
+        }
+        Commands::Doctor(cmd) => {
+            let conn = make_conn().ok();
+            cmd.go(conn, &args.db)?;
         }
     }
     Ok(())

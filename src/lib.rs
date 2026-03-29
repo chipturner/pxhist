@@ -121,7 +121,6 @@ pub fn effective_host_set(config: &recall::config::Config) -> Vec<BString> {
 /// - If config lacks hostname, read from DB (legacy "original_hostname"), then delete from DB.
 /// - If config hostname doesn't match live hostname, move old to aliases and update.
 /// - If config lacks machine_id, generate one.
-// TODO: also call from future `pxh doctor` command
 pub fn migrate_host_settings(conn: &Connection) {
     let config = recall::config::Config::load();
     let mut updates: Vec<(&str, toml_edit::Item)> = Vec::new();

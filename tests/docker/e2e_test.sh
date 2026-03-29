@@ -167,6 +167,11 @@ fi
 step "Maintenance"
 check "maintenance runs" pxh --db "${PXH_DB_PATH}" maintenance
 
+# -- Doctor ----------------------------------------------------------------
+step "Doctor"
+check "doctor runs" pxh --db "${PXH_DB_PATH}" doctor --verbose
+check_output "doctor report format" "<details>" pxh --db "${PXH_DB_PATH}" doctor --report
+
 # -- 11. Sync (directory mode) ---------------------------------------------
 step "Sync (directory mode)"
 sync_dir=$(mktemp -d)
