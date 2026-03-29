@@ -540,8 +540,8 @@ pub fn json_export(rows: &[Invocation]) -> Result<(), Box<dyn std::error::Error>
 
 struct QueryResultColumnDisplayer {
     header: &'static str,
-    style: &'static str,
-    displayer: Box<dyn Fn(&Invocation) -> String>,
+    header_style: &'static str,
+    displayer: Box<dyn Fn(&Invocation) -> prettytable::Cell>,
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
@@ -563,47 +563,57 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "command",
         QueryResultColumnDisplayer {
             header: "Command",
-            style: "Fw",
-            displayer: Box::new(|row| binary_display_helper(&row.command)),
+            header_style: "Fw",
+            displayer: Box::new(|row| {
+                prettytable::Cell::new(&binary_display_helper(&row.command)).style_spec("Fw")
+            }),
         },
     );
     ret.insert(
         "start_time",
         QueryResultColumnDisplayer {
             header: "Start",
-            style: "Fg",
-            displayer: Box::new(|row| time_display_helper(row.start_unix_timestamp)),
+            header_style: "Fg",
+            displayer: Box::new(|row| {
+                prettytable::Cell::new(&time_display_helper(row.start_unix_timestamp))
+                    .style_spec("Fg")
+            }),
         },
     );
     ret.insert(
         "end_time",
         QueryResultColumnDisplayer {
             header: "End",
-            style: "Fg",
-            displayer: Box::new(|row| time_display_helper(row.end_unix_timestamp)),
+            header_style: "Fg",
+            displayer: Box::new(|row| {
+                prettytable::Cell::new(&time_display_helper(row.end_unix_timestamp))
+                    .style_spec("Fg")
+            }),
         },
     );
     ret.insert(
         "duration",
         QueryResultColumnDisplayer {
             header: "Duration",
-            style: "Fm",
-            displayer: Box::new(|row| match (row.start_unix_timestamp, row.end_unix_timestamp) {
-                (Some(start), Some(end)) => format!("{}s", end - start),
-                _ => "n/a".into(),
+            header_style: "Fm",
+            displayer: Box::new(|row| {
+                let text = match (row.start_unix_timestamp, row.end_unix_timestamp) {
+                    (Some(start), Some(end)) => format!("{}s", end - start),
+                    _ => "n/a".into(),
+                };
+                prettytable::Cell::new(&text).style_spec("Fm")
             }),
         },
     );
-    // TODO: Move the style into the displayer (which would return a
-    // Cell) to allow for color based on per-column values, like red
-    // for non-zero exit statuses.
     ret.insert(
         "status",
         QueryResultColumnDisplayer {
             header: "Status",
-            style: "Fr",
-            displayer: Box::new(|row| {
-                row.exit_status.map_or_else(|| "n/a".into(), |s| s.to_string())
+            header_style: "Fr",
+            displayer: Box::new(|row| match row.exit_status {
+                Some(0) => prettytable::Cell::new("0").style_spec("Fg"),
+                Some(s) => prettytable::Cell::new(&s.to_string()).style_spec("Fr"),
+                None => prettytable::Cell::new("n/a").style_spec("Fd"),
             }),
         },
     );
@@ -613,8 +623,10 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "session",
         QueryResultColumnDisplayer {
             header: "Session",
-            style: "Fc",
-            displayer: Box::new(|row| format!("{:x}", row.session_id)),
+            header_style: "Fc",
+            displayer: Box::new(|row| {
+                prettytable::Cell::new(&format!("{:x}", row.session_id)).style_spec("Fc")
+            }),
         },
     );
     // Print context specially; the full output is $HOST:$PATH but if
@@ -624,7 +636,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "context",
         QueryResultColumnDisplayer {
             header: "Context",
-            style: "bFb",
+            header_style: "bFb",
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
                 let row_hostname = row.hostname.clone().unwrap_or_default();
@@ -638,7 +650,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
                     if v == current_directory.to_string_lossy() { String::from(".") } else { v }
                 }));
 
-                ret
+                prettytable::Cell::new(&ret).style_spec("bFb")
             }),
         },
     );
@@ -662,18 +674,21 @@ pub fn present_results_human_readable(
                 return Err(Box::from(format!("Invalid 'show' field: {field}")));
             };
 
-            title_row.add_cell(prettytable::Cell::new(d.header).style_spec("bFg"));
+            title_row.add_cell(prettytable::Cell::new(d.header).style_spec(d.header_style));
         }
         table.set_titles(title_row);
     }
 
     for row in rows.iter() {
+        let is_failed = matches!(row.exit_status, Some(s) if s != 0);
         let mut display_row = prettytable::Row::empty();
         for field in fields {
-            display_row.add_cell(
-                prettytable::Cell::new((displayers[field].displayer)(row).as_str())
-                    .style_spec(displayers[field].style),
-            );
+            let cell = (displayers[field].displayer)(row);
+            if is_failed {
+                display_row.add_cell(prettytable::Cell::new(&cell.get_content()).style_spec("Fr"));
+            } else {
+                display_row.add_cell(cell);
+            }
         }
         table.add_row(display_row);
     }

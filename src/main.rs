@@ -118,18 +118,25 @@ struct ShowCommand {
     verbose: bool,
     #[clap(long, help = "suppress headers")]
     suppress_headers: bool,
-    #[clap(long, help = "show entries that were populated while in the current working directory")]
+    #[clap(
+        short = 'H',
+        long,
+        help = "show entries that were populated while in the current working directory"
+    )]
     here: bool,
     #[clap(
         long,
-        help = "alters --here; instead of the current working directory, use the specified directory"
+        help = "alters --here; instead of the current working directory, use the specified directory (implies --here)"
     )]
     working_directory: Option<PathBuf>,
     #[clap(
+        short = 'S',
         long,
         help = "display only commands from the specified session (\"current\", \"last\", or a hex session ID)"
     )]
     session: Option<String>,
+    #[clap(short = 'F', long, help = "show only commands that exited with a non-zero status")]
+    failed: bool,
     #[clap(
         long,
         help = "if specified, list of patterns can be matched in any order against command lines"
@@ -1803,6 +1810,7 @@ trait PrintableCommand {
     fn verbose(&self) -> bool;
     fn suppress_headers(&self) -> bool;
     fn display_limit(&self) -> usize;
+    fn failed(&self) -> bool;
 
     fn extra_filter_step(
         &self,
@@ -1822,19 +1830,14 @@ ORDER BY ch_start_unix_timestamp DESC, ch_id DESC
         let rows: Result<Vec<pxh::Invocation>, _> =
             stmt.query_map([], pxh::Invocation::from_row)?.collect();
         let rows = self.extra_filter_step(rows?)?;
-        if self.verbose() {
-            pxh::present_results_human_readable(
-                &["start_time", "duration", "session", "context", "status", "command"],
-                &rows,
-                self.suppress_headers(),
-            )?;
+        let fields: &[&str] = if self.verbose() {
+            &["start_time", "duration", "session", "context", "status", "command"]
+        } else if self.failed() {
+            &["start_time", "status", "command"]
         } else {
-            pxh::present_results_human_readable(
-                &["start_time", "command"],
-                &rows,
-                self.suppress_headers(),
-            )?;
-        }
+            &["start_time", "command"]
+        };
+        pxh::present_results_human_readable(fields, &rows, self.suppress_headers())?;
         Ok(())
     }
 }
@@ -1850,6 +1853,10 @@ impl PrintableCommand for ScrubCommand {
 
     fn display_limit(&self) -> usize {
         0
+    }
+
+    fn failed(&self) -> bool {
+        false
     }
 
     fn extra_filter_step(
@@ -2278,6 +2285,9 @@ impl PrintableCommand for ShowCommand {
     fn display_limit(&self) -> usize {
         self.limit
     }
+    fn failed(&self) -> bool {
+        self.failed
+    }
 }
 
 impl ShowCommand {
@@ -2296,6 +2306,10 @@ impl ShowCommand {
             if self.ignore_case { format!("(?i){}", pattern.to_lowercase()) } else { pattern };
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
+
+        let here = self.here || self.working_directory.is_some();
+        let failed_clause =
+            if self.failed { " AND exit_status IS NOT NULL AND exit_status != 0" } else { "" };
 
         let working_directory = self.working_directory.as_ref().map_or_else(
             || {
@@ -2324,36 +2338,42 @@ impl ShowCommand {
             };
 
             conn.execute(
-                r#"
+                &format!(
+                    r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
- WHERE full_command REGEXP ? AND session_id = ?
+ WHERE full_command REGEXP ? AND session_id = ?{failed_clause}
 ORDER BY start_unix_timestamp DESC, id DESC
-LIMIT ?"#,
+LIMIT ?"#
+                ),
                 (pattern, session_id, self.display_limit() as i64),
             )?;
-        } else if self.here {
+        } else if here {
             conn.execute(
-                r#"
+                &format!(
+                    r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
  WHERE working_directory = CAST(? as blob)
-   AND full_command REGEXP ?
+   AND full_command REGEXP ?{failed_clause}
 ORDER BY start_unix_timestamp DESC, id DESC
-LIMIT ?"#,
+LIMIT ?"#
+                ),
                 (working_directory.to_string_lossy(), pattern, self.display_limit() as i64),
             )?;
         } else {
             conn.execute(
-                r#"
+                &format!(
+                    r#"
 INSERT INTO memdb.show_results (ch_rowid, ch_start_unix_timestamp, ch_id)
 SELECT rowid, start_unix_timestamp, id
   FROM command_history h
- WHERE full_command REGEXP ?
+ WHERE full_command REGEXP ?{failed_clause}
 ORDER BY start_unix_timestamp DESC, id DESC
-LIMIT ?"#,
+LIMIT ?"#
+                ),
                 (pattern, self.display_limit() as i64),
             )?;
         }

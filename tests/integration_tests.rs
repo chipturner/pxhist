@@ -1089,3 +1089,82 @@ fn test_autosuggest() {
     insert("g_t special", 500);
     assert_eq!(autosuggest("g_"), b"g_t special");
 }
+
+#[test]
+fn show_with_failed_flag() {
+    let pc = PxhCaller::new();
+
+    // Insert a successful command (exit_status = 0)
+    pc.call("insert --shellname zsh --hostname h --username u --session-id 1 --exit-status 0 success_cmd")
+        .assert()
+        .success();
+
+    // Insert a failed command (exit_status = 1)
+    pc.call("insert --shellname zsh --hostname h --username u --session-id 1 --exit-status 1 failed_cmd")
+        .assert()
+        .success();
+
+    // Insert a command with no exit status (unsealed)
+    pc.call("insert --shellname zsh --hostname h --username u --session-id 1 unsealed_cmd")
+        .assert()
+        .success();
+
+    // Without --failed, we see all three
+    let output = pc.call("show --suppress-headers").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 3);
+
+    // With --failed, we only see the failed one
+    let output = pc.call("show --suppress-headers --failed").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("failed_cmd"));
+
+    // Short flag -F works too
+    let output = pc.call("show --suppress-headers -F").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("failed_cmd"));
+}
+
+#[test]
+fn show_with_short_here_flag() {
+    let pc = PxhCaller::new();
+    let cwd = env::current_dir().unwrap_or_default();
+
+    pc.call(format!(
+        "insert --shellname s --hostname h --username u --session-id 1 --working-directory {} here_cmd",
+        cwd.to_string_lossy()
+    ))
+    .assert()
+    .success();
+
+    pc.call("insert --shellname s --hostname h --username u --session-id 1 --working-directory /other other_cmd")
+        .assert()
+        .success();
+
+    // -H should work the same as --here
+    let output = pc.call("show --suppress-headers -H").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("here_cmd"));
+}
+
+#[test]
+fn show_working_directory_implies_here() {
+    let pc = PxhCaller::new();
+
+    pc.call("insert --shellname s --hostname h --username u --session-id 1 --working-directory /mydir wd_cmd")
+        .assert()
+        .success();
+
+    pc.call("insert --shellname s --hostname h --username u --session-id 1 --working-directory /other other_cmd")
+        .assert()
+        .success();
+
+    // --working-directory without --here should still filter by directory
+    let output = pc.call("show --suppress-headers --working-directory /mydir").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("wd_cmd"));
+
+    // Nonexistent directory returns no results
+    let output =
+        pc.call("show --suppress-headers --working-directory /nonexistent").output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 0);
+}
