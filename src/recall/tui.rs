@@ -442,14 +442,17 @@ impl RecallTui {
                 let action = self.handle_key(key)?;
                 match action {
                     KeyAction::Continue => continue,
-                    KeyAction::Select | KeyAction::Edit => {
+                    KeyAction::Select | KeyAction::Edit | KeyAction::EditBeginning => {
                         self.cleanup()?;
                         if !self.shell_mode {
                             self.print_entry_details();
                             return Ok(None);
                         }
-                        let prefix =
-                            if matches!(action, KeyAction::Select) { "run" } else { "edit" };
+                        let prefix = match action {
+                            KeyAction::Select => "run",
+                            KeyAction::EditBeginning => "edit-a",
+                            _ => "edit",
+                        };
                         let result =
                             self.get_selected_command().map(|cmd| format!("{prefix}:{cmd}"));
                         return Ok(result);
@@ -611,6 +614,9 @@ impl RecallTui {
             }
             KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(KeyAction::Edit)
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(KeyAction::EditBeginning)
             }
             _ => None,
         }
@@ -1061,10 +1067,10 @@ impl RecallTui {
         }
         let help_text = match self.keymap_mode {
             KeymapMode::Emacs => {
-                "↑↓/^R Nav  Enter Select  Tab/→/^E Edit  ^G Dir  ^H Host  ^C/^D Quit  Alt-1-9"
+                "↑↓/^R Nav  Enter Run  ^A/^E Edit  ^G Dir  ^H Host  ^C/^D Quit  Alt-1-9"
             }
             KeymapMode::VimInsert | KeymapMode::VimNormal => {
-                "j/k Nav  Enter Select  Tab/→/^E Edit  ^G Dir  ^H Host  ^C/^D Quit  Esc Mode  Alt-1-9"
+                "j/k Nav  Enter Run  ^A/^E Edit  ^G Dir  ^H Host  ^C/^D Quit  Esc Mode  Alt-1-9"
             }
         };
         write!(w, "{help_text}")?;
@@ -1086,6 +1092,7 @@ enum KeyAction {
     Continue,
     Select,
     Edit,
+    EditBeginning,
     Cancel,
 }
 

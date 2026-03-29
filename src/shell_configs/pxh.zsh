@@ -38,8 +38,13 @@ _pxh_recall_widget() {
         # Execute immediately
         BUFFER="${selected#run:}"
         zle accept-line
+    elif [[ "$selected" == edit-a:* ]]; then
+        # Place in buffer for editing, cursor at beginning
+        BUFFER="${selected#edit-a:}"
+        CURSOR=0
+        zle reset-prompt
     elif [[ "$selected" == edit:* ]]; then
-        # Place in buffer for editing
+        # Place in buffer for editing, cursor at end
         BUFFER="${selected#edit:}"
         CURSOR=${#BUFFER}
         zle reset-prompt

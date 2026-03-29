@@ -40,8 +40,12 @@ _pxh_recall() {
         # Simulate pressing Enter by accepting the line
         # Note: bind -x functions can't directly execute, so we rely on
         # the user pressing Enter or we could use READLINE_LINE and accept-line
+    elif [[ "$selected" == edit-a:* ]]; then
+        # Place in buffer for editing, cursor at beginning
+        READLINE_LINE="${selected#edit-a:}"
+        READLINE_POINT=0
     elif [[ "$selected" == edit:* ]]; then
-        # Place in buffer for editing
+        # Place in buffer for editing, cursor at end
         READLINE_LINE="${selected#edit:}"
         READLINE_POINT=${#READLINE_LINE}
     fi
