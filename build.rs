@@ -80,7 +80,7 @@ fn main() {
 
     let yaml_content = fs::read_to_string(yaml_path).expect("Failed to read YAML file");
     let patterns_file: PatternsFile =
-        serde_yaml::from_str(&yaml_content).expect("Failed to parse YAML");
+        serde_yml::from_str(&yaml_content).expect("Failed to parse YAML");
 
     let mut critical_patterns = Vec::new();
     let mut high_patterns = Vec::new();
