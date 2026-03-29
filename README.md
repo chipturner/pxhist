@@ -72,6 +72,13 @@ pxh recall -q "git"  # Start with a pre-filled query
 
 Supports both emacs (default) and vim keybindings -- set `keymap = "vim"` in `~/.config/pxh/config.toml`.
 
+**Keybindings:**
+- `Ctrl-Y` / `Alt-W` -- Copy selected command to clipboard (via OSC 52)
+- `Ctrl-K` -- Delete selected entry from history
+- `Ctrl-H` -- Toggle host filter
+- `Ctrl-G` -- Toggle directory/global filter
+- `Alt-1` through `Alt-9` -- Quick-select visible entries
+
 ### Searching History (pxh show)
 
 The `show` command (alias: `s`) is the power-search interface:
@@ -85,7 +92,14 @@ pxh s --session $PXH_SESSION_ID  # Only commands from current shell session
 pxh s -v cargo build      # Verbose: show duration, session, directory
 pxh s -l 100 git          # Show up to 100 results (default: 50, 0 = unlimited)
 pxh s --loosen foo bar    # Match patterns in any order
+pxh s -F                  # Show commands that failed (non-zero exit)
+pxh s -F docker           # Failed docker commands
+pxh s -H                  # Short for --here (current directory only)
+pxh s -S current          # Short for --session current
+pxh s --working-directory ~/project  # Filter to a specific directory
 ```
+
+Failed commands are highlighted in red when the status column is visible (`-v` or `-F`).
 
 **Verbose output (`-v`):**
 ```
@@ -120,6 +134,8 @@ pxh sync --remote myserver --since 30  # Last 30 days only
 pxh sync --remote myserver --remote-db /custom/path/pxh.db
 pxh sync --remote myserver --remote-pxh /usr/local/bin/pxh
 ```
+
+> **Note:** Remote sync automatically detects whether the remote host uses XDG paths (`~/.local/share/pxh/`) or the legacy path (`~/.pxh/`). Use `--remote-db` to override if needed.
 
 #### Shared Directory Synchronization
 
@@ -262,6 +278,24 @@ aliases = ["old-laptop", "work-mac"]
 [shell]
 # Disable Ctrl-R binding (use pxh recall directly instead)
 disable_ctrl_r = false
+
+[history]
+# Regex patterns for commands to skip recording.
+# Default patterns ignore trivial commands (ls, cd, pwd, exit, etc.)
+# Set to [] to disable.
+ignore_patterns = [
+    "^ls$",
+    "^cd( .)?$",
+    "^pwd$",
+    "^exit$",
+    "^clear$",
+    "^fg$",
+    "^bg$",
+    "^jobs$",
+    "^history$",
+    "^true$",
+    "^false$",
+]
 ```
 
 ## Design
