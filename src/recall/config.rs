@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
 /// Main configuration struct
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct Config {
     #[serde(default)]
     pub host: HostConfig,
@@ -16,7 +16,7 @@ pub struct Config {
 }
 
 /// Configuration for host identity
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct HostConfig {
     pub hostname: Option<String>,
@@ -25,7 +25,7 @@ pub struct HostConfig {
 }
 
 /// Configuration for shell integration
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 #[serde(default)]
 pub struct ShellConfig {
     /// Disable Ctrl-R binding (keep shell's default behavior)
@@ -33,7 +33,7 @@ pub struct ShellConfig {
 }
 
 /// Configuration for the recall TUI
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(default)]
 pub struct RecallConfig {
     /// Keymap mode: "emacs" or "vim"
@@ -58,7 +58,7 @@ impl Default for RecallConfig {
 }
 
 /// Configuration for what to show in the preview pane
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct PreviewConfig {
     pub show_directory: bool,

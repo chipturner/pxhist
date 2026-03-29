@@ -93,6 +93,8 @@ enum Commands {
     Completions(CompletionsCommand),
     #[clap(about = "show history statistics")]
     Stats(StatsCommand),
+    #[clap(visible_alias = "cfg", about = "show or initialize configuration")]
+    Config(ConfigCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -309,6 +311,14 @@ struct CompletionsCommand {
 
 #[derive(Parser, Debug)]
 struct StatsCommand {}
+
+#[derive(Parser, Debug)]
+struct ConfigCommand {
+    #[clap(long, help = "write default configuration file")]
+    init: bool,
+    #[clap(long, help = "print the config file path")]
+    path: bool,
+}
 
 #[derive(Parser, Debug)]
 struct ExportCommand {}
@@ -744,6 +754,41 @@ struct ScanMatch {
     rowid: i64,
     #[serde(skip)]
     original_line: Option<String>,
+}
+
+impl ConfigCommand {
+    fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
+        use pxh::recall::config::Config;
+
+        if self.path {
+            match Config::default_config_path() {
+                Some(p) => println!("{}", p.display()),
+                None => return Err("could not determine config path".into()),
+            }
+            return Ok(());
+        }
+
+        if self.init {
+            let path = Config::default_config_path().ok_or("could not determine config path")?;
+            if path.exists() {
+                return Err(format!("config file already exists: {}", path.display()).into());
+            }
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            let default_config = Config::default();
+            let toml = toml::to_string_pretty(&default_config)?;
+            fs::write(&path, toml)?;
+            println!("Wrote default config to {}", path.display());
+            return Ok(());
+        }
+
+        // Default: show effective config
+        let config = Config::load();
+        let toml = toml::to_string_pretty(&config)?;
+        print!("{toml}");
+        Ok(())
+    }
 }
 
 impl StatsCommand {
@@ -2345,6 +2390,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Completions(cmd) => {
             clap_complete::generate(cmd.shell, &mut PxhArgs::command(), "pxh", &mut io::stdout());
+        }
+        Commands::Config(cmd) => {
+            cmd.go()?;
         }
         Commands::Import(cmd) => {
             cmd.go(make_conn()?)?;
