@@ -312,8 +312,15 @@ impl DoctorCommand {
             }
         }
 
-        // PXH_DB_PATH is the only exported env var; SESSION_ID and HOSTNAME
-        // are shell-local variables used by the hooks, invisible to child processes.
+        if std::env::var("PXH_SESSION_ID").is_ok() {
+            results.push(CheckResult::ok("PXH_SESSION_ID is set (hooks active in this session)"));
+        } else {
+            results.push(CheckResult::warn(
+                "PXH_SESSION_ID not set",
+                "Shell hooks may not be active; run 'source <(pxh shell-config <shell>)'",
+            ));
+        }
+
         if let (Ok(env_path), Some(actual)) = (std::env::var("PXH_DB_PATH"), db_path) {
             let env_pb = PathBuf::from(&env_path);
             if env_pb != *actual {

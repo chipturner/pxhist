@@ -163,6 +163,26 @@ fn show_with_session_id() {
 }
 
 #[test]
+fn show_with_session_current() {
+    let pc = PxhCaller::new();
+
+    // Insert commands in two sessions
+    pc.call("insert --shellname s --hostname h --username u --session-id 255 cmd_session_ff")
+        .assert()
+        .success();
+    pc.call("insert --shellname s --hostname h --username u --session-id 1 cmd_other_session")
+        .assert()
+        .success();
+
+    // --session current reads PXH_SESSION_ID from env (hex), so "ff" = 255
+    let mut cmd = pc.call("show --suppress-headers --session current");
+    cmd.env("PXH_SESSION_ID", "ff");
+    let output = cmd.output().unwrap();
+    assert_eq!(count_lines(&output.stdout), 1);
+    assert!(String::from_utf8_lossy(&output.stdout).contains("cmd_session_ff"));
+}
+
+#[test]
 fn show_with_limit() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();

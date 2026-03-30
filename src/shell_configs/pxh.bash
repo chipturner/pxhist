@@ -59,8 +59,8 @@ _pxh_check_run() {
 }
 
 _pxh_init() {
-    PXH_SESSION_ID=$(_pxh_random)
-    PXH_HOSTNAME=$(hostname -s)
+    export PXH_SESSION_ID=$(_pxh_random)
+    export PXH_HOSTNAME=$(hostname -s)
     if [ -z "${PXH_DB_PATH:-}" ]; then
         local xdg_dir="${XDG_DATA_HOME:-$HOME/.local/share}/pxh"
         if [ -d "$xdg_dir" ]; then
