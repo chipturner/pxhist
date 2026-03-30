@@ -36,12 +36,12 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
   - `command.rs`: RecallCommand struct and FilterMode enum
   - `engine.rs`: SearchEngine with nucleo fuzzy matching, score-based ranking, HistoryEntry struct
   - `tui.rs`: Terminal UI using crossterm (drawing, key handling, vim/emacs modes)
-  - `config.rs`: TOML configuration loading from `~/.pxh/config.toml`
+  - `config.rs`: TOML configuration loading from `~/.config/pxh/config.toml`
 
 ### Command Structure
 All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`. Key commands:
 - **Show/Search**: Query history with regex patterns, directory filters, session filters. Alias: `pxhs` (symlink/rename binary to invoke `pxh show` directly)
-- **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.pxh/config.toml`. Uses nucleo fuzzy matching with `-` and `*` normalized to spaces (acting as word separators)
+- **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.config/pxh/config.toml`. Uses nucleo fuzzy matching with `-` and `*` normalized to spaces (acting as word separators)
 - **Sync**: Bidirectional sync via SSH or shared directories with optional `--since` filtering
 - **Insert/Seal**: Internal commands called by shell hooks to record command start/end
 - **Import**: Bulk import from existing shell history files (bash, zsh, or JSON export)
@@ -51,7 +51,7 @@ All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`.
 - **Maintenance**: ANALYZE and VACUUM operations, cleans up non-standard tables/indexes
 
 ### Database Design
-- SQLite database at `~/.pxh/pxh.db` by default (configurable via `--db` or `PXH_DB_PATH`)
+- SQLite database at `~/.local/share/pxh/pxh.db` by default (configurable via `--db` or `PXH_DB_PATH`)
 - `command_history` table stores commands as BLOBs to handle non-UTF8 data
 - `settings` table stores key-value pairs (e.g., `original_hostname` for sync identification)
 - Unique index prevents duplicates based on command + timestamp + shellname + COALESCE'd context fields
@@ -149,7 +149,7 @@ Remote sync uses a simple binary protocol over stdin/stdout:
 5. `INSERT OR IGNORE` with ATTACH DATABASE for deduplication
 
 ### Configuration
-pxh supports a TOML configuration file at `~/.pxh/config.toml` for customizing the recall TUI:
+pxh supports a TOML configuration file at `~/.config/pxh/config.toml` for customizing the recall TUI:
 - **`[recall]`** section:
   - `keymap_mode`: "emacs" (default) or "vim"
   - `show_preview`: boolean to show/hide preview pane

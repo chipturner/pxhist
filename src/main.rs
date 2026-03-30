@@ -103,7 +103,7 @@ enum Commands {
     Completions(CompletionsCommand),
     #[clap(about = "show history statistics")]
     Stats(StatsCommand),
-    #[clap(visible_alias = "cfg", about = "show or initialize configuration")]
+    #[clap(visible_alias = "cfg", about = "edit or initialize configuration")]
     Config(ConfigCommand),
     #[clap(about = "diagnose common issues and produce diagnostic reports")]
     Doctor(doctor::DoctorCommand),
@@ -111,51 +111,51 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 struct InstallCommand {
-    #[clap(help = "shell to install helpers into")]
+    #[clap(help = "Shell to install helpers into")]
     shellname: String,
 }
 
 #[derive(Parser, Debug)]
 struct ShowCommand {
-    #[clap(short = 'i', long, help = "perform case-insensitive matching", default_value_t = false)]
+    #[clap(short = 'i', long, help = "Perform case-insensitive matching", default_value_t = false)]
     ignore_case: bool,
     #[clap(
         short,
         long,
         default_value_t = 50,
-        help = "display at most this many entries; 0 for unlimited"
+        help = "Display at most this many entries; 0 for unlimited"
     )]
     limit: usize,
-    #[clap(short, long, help = "display extra fields in the output")]
+    #[clap(short, long, help = "Display extra fields in the output")]
     verbose: bool,
-    #[clap(long, help = "suppress headers")]
+    #[clap(long, help = "Suppress headers")]
     suppress_headers: bool,
     #[clap(
         short = 'H',
         long,
-        help = "show entries that were populated while in the current working directory"
+        help = "Show entries that were populated while in the current working directory"
     )]
     here: bool,
     #[clap(
         long,
-        help = "alters --here; instead of the current working directory, use the specified directory (implies --here)"
+        help = "Alters --here; instead of the current working directory, use the specified directory (implies --here)"
     )]
     working_directory: Option<PathBuf>,
     #[clap(
         short = 'S',
         long,
-        help = "display only commands from the specified session (\"current\", \"last\", or a hex session ID)"
+        help = "Display only commands from the specified session (\"current\", \"last\", or a hex session ID)"
     )]
     session: Option<String>,
-    #[clap(short = 'F', long, help = "show only commands that exited with a non-zero status")]
+    #[clap(short = 'F', long, help = "Show only commands that exited with a non-zero status")]
     failed: bool,
     #[clap(
         long,
-        help = "if specified, list of patterns can be matched in any order against command lines"
+        help = "If specified, list of patterns can be matched in any order against command lines"
     )]
     loosen: bool,
     #[clap(
-        help = "one or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
+        help = "One or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
     )]
     patterns: Vec<String>,
 }
@@ -164,16 +164,16 @@ struct ShowCommand {
 struct ImportCommand {
     #[clap(
         long,
-        help = "path to history file to import (defaults: bash=~/.bash_history, zsh=~/.zsh_history)"
+        help = "Path to history file to import (defaults: bash=~/.bash_history, zsh=~/.zsh_history)"
     )]
     histfile: Option<PathBuf>,
-    #[clap(long, help = "type of shell history specified by --histfile")]
+    #[clap(long, help = "Type of shell history specified by --histfile")]
     shellname: String,
-    #[clap(long, help = "hostname to tag imported entries with (defaults to current hostname)")]
+    #[clap(long, help = "Hostname to tag imported entries with (defaults to current hostname)")]
     hostname: Option<OsString>,
-    #[clap(long, help = "username to tag imported entries with (defaults to current user)")]
+    #[clap(long, help = "Username to tag imported entries with (defaults to current user)")]
     username: Option<OsString>,
-    #[clap(short = 'n', long, help = "show what would be imported without making changes")]
+    #[clap(short = 'n', long, help = "Show what would be imported without making changes")]
     dry_run: bool,
 }
 
@@ -212,11 +212,15 @@ struct SyncCommand {
     ssh_cmd: String,
     #[clap(long, default_value = "pxh", help = "Path to pxh binary on the remote host")]
     remote_pxh: String,
-    #[clap(long, help = "Internal: run in server mode")]
+    #[clap(long, hide = true, help = "Internal: run in server mode")]
     server: bool,
-    #[clap(long, help = "Only sync commands from the last N days", value_name = "DAYS")]
+    #[clap(
+        long,
+        help = "Only sync commands from the last N days (remote sync only)",
+        value_name = "DAYS"
+    )]
     since: Option<u32>,
-    #[clap(long, help = "Use stdin/stdout for sync instead of SSH (for testing)")]
+    #[clap(long, hide = true, help = "Use stdin/stdout for sync instead of SSH (for testing)")]
     stdin_stdout: bool,
     #[clap(long, help = "Disable automatic filtering of potential secrets during sync import")]
     no_secret_filter: bool,
@@ -318,13 +322,13 @@ struct ShellConfigCommand {
 
 #[derive(Parser, Debug)]
 struct AutosuggestCommand {
-    #[clap(help = "prefix to match against command history")]
+    #[clap(help = "Prefix to match against command history")]
     prefix: OsString,
 }
 
 #[derive(Parser, Debug)]
 struct CompletionsCommand {
-    #[clap(help = "shell to generate completions for (bash, zsh, fish, elvish, powershell)")]
+    #[clap(help = "Shell to generate completions for (bash, zsh, fish, elvish, powershell)")]
     shell: clap_complete::Shell,
 }
 
@@ -333,7 +337,7 @@ struct StatsCommand {}
 
 #[derive(Parser, Debug)]
 struct ConfigCommand {
-    #[clap(long, help = "print the config file path")]
+    #[clap(long, help = "Print the config file path")]
     path: bool,
 }
 

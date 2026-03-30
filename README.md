@@ -56,6 +56,8 @@ source <(pxh shell-config bash)  # or: source <(pxh shell-config zsh)
 
 From now on, pxh automatically records commands with directory, host, user, exit code, and duration.
 
+> **Note:** By default, trivial commands (`ls`, `cd`, `pwd`, `exit`, etc.) are not recorded. See [Configuration](#configuration) to change this.
+
 > **Note:** fish shell is not currently supported. PRs welcome!
 
 ## Usage
@@ -242,6 +244,17 @@ eval "$(pxh completions bash)"
 eval "$(pxh completions zsh)"
 ```
 
+#### Diagnostics
+
+Check for common issues or view history statistics:
+
+```bash
+pxh doctor                # Diagnose common issues
+pxh doctor --fix          # Attempt automatic fixes
+pxh doctor --report       # Generate a diagnostic report for bug reports
+pxh stats                 # Show history statistics
+```
+
 ## Configuration
 
 pxh reads configuration from `~/.config/pxh/config.toml`. All settings are optional with sensible defaults.
@@ -298,12 +311,6 @@ ignore_patterns = [
 ]
 ```
 
-## Design
-
-pxh contains **zero networking code**. Sync works by invoking your SSH client or reading/writing files on a shared filesystem. No accounts, no cloud services, no ports, no attack surface. Your history stays on machines you control.
-
-All data lives in a local SQLite database (`~/.local/share/pxh/pxh.db`). There's no central server. The binary is statically linked with no runtime dependencies beyond libc -- consistent behavior across bash and zsh, proper handling of edge cases (quoting, binary data, concurrent access), and fast enough that you never notice it.
-
 ## Tips and Tricks
 
 ### Quick Search Alias
@@ -319,7 +326,7 @@ pxhs ffmpeg  # Equivalent to: pxh show ffmpeg
 
 ```bash
 # Commands that failed
-pxh s -v . | grep -v "0s"  # Or query the database directly
+pxh s -F  # Show commands that exited with non-zero status
 
 # What did I do in this project last week?
 pxh s --here -l 0
@@ -370,6 +377,10 @@ You can still use `pxh recall` directly or bind it to a different key.
 Inspired by [bash-history-sqlite](https://github.com/thenewwazoo/bash-history-sqlite), [zsh-histdb](https://github.com/larkery/zsh-histdb), [mcfly](https://github.com/cantino/mcfly), and [atuin](https://github.com/atuinsh/atuin). Embeds [bash-preexec](https://github.com/rcaloras/bash-preexec) and [secrets-patterns-db](https://github.com/mazen160/secrets-patterns-db).
 
 ## How it Works
+
+pxh contains **zero networking code**. Sync works by invoking your SSH client or reading/writing files on a shared filesystem. No accounts, no cloud services, no ports, no attack surface. Your history stays on machines you control.
+
+All data lives in a local SQLite database (`~/.local/share/pxh/pxh.db`). There's no central server. The binary is statically linked with no runtime dependencies beyond libc -- consistent behavior across bash and zsh, proper handling of edge cases (quoting, binary data, concurrent access), and fast enough that you never notice it.
 
 pxh hooks into your shell via preexec/precmd functions to capture each command with its start/end time, working directory, exit status, session ID, hostname, and username. For bash, it embeds [bash-preexec](https://github.com/rcaloras/bash-preexec); for zsh, it uses native hooks.
 
