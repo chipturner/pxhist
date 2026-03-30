@@ -2436,6 +2436,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     let make_conn = || pxh::sqlite_connection(&args.db);
+    let make_conn_full = || pxh::sqlite_connection_full(&args.db);
     match command {
         Commands::ShellConfig(cmd) => {
             cmd.go()?;
@@ -2467,10 +2468,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let actual_limit =
                 if cmd.limit == 0 || cmd.loosen { i32::MAX as usize } else { cmd.limit };
             cmd.limit = actual_limit;
-            cmd.go(make_conn()?)?;
+            cmd.go(make_conn_full()?)?;
         }
         Commands::Scrub(cmd) => {
-            cmd.go(make_conn()?)?;
+            cmd.go(make_conn_full()?)?;
         }
         Commands::Seal(cmd) => {
             cmd.go(make_conn()?)?;

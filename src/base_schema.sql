@@ -28,12 +28,3 @@ CREATE TABLE IF NOT EXISTS settings (
        key TEXT PRIMARY KEY,
        value BLOB
 );
-
-ATTACH DATABASE ':memory:' AS memdb;
-CREATE TABLE memdb.show_results (
-       ch_rowid INTEGER NOT NULL,
-       ch_start_unix_timestamp INTEGER,
-       ch_id INTEGER NOT NULL
-);
-
-CREATE INDEX memdb.result_timestamp ON show_results(ch_start_unix_timestamp, ch_id);

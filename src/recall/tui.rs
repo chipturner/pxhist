@@ -298,11 +298,12 @@ impl RecallTui {
         let query = initial_query.as_deref().unwrap_or("").to_string();
         let host_filter = HostFilter::default();
         let db_query_used = if query.len() >= 3 { Some(query.clone()) } else { None };
-        let entries = deduplicate_entries(engine.load_entries(
+        let mut entries = deduplicate_entries(engine.load_entries(
             initial_mode,
             host_filter,
             db_query_used.as_deref(),
         )?);
+        entries.truncate(engine.result_limit());
 
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
@@ -331,19 +332,7 @@ impl RecallTui {
         let filtered_indices = if query.is_empty() {
             (0..entries.len()).map(|i| (i, Vec::new())).collect()
         } else {
-            engine
-                .filter_entries(&entries, &query)
-                .into_iter()
-                .map(|(entry, indices)| {
-                    // Map entry reference back to index via pointer equality
-                    // (filter_entries returns references into our entries slice)
-                    let idx = entries
-                        .iter()
-                        .position(|e| std::ptr::eq(e, entry))
-                        .expect("filter_entries returned entry not in entries slice");
-                    (idx, indices)
-                })
-                .collect()
+            engine.filter_entries(&entries, &query)
         };
 
         let mut tui = RecallTui {
@@ -424,7 +413,9 @@ impl RecallTui {
     fn reload_entries(&mut self) {
         match self.engine.load_entries(self.filter_mode, self.host_filter, None) {
             Ok(entries) => {
-                self.entries = deduplicate_entries(entries);
+                let mut deduped = deduplicate_entries(entries);
+                deduped.truncate(self.engine.result_limit());
+                self.entries = deduped;
                 self.db_query_used = None;
             }
             Err(e) => {
@@ -453,7 +444,9 @@ impl RecallTui {
                 let query = self.query.clone();
                 match self.engine.load_entries(self.filter_mode, self.host_filter, Some(&query)) {
                     Ok(entries) => {
-                        self.entries = deduplicate_entries(entries);
+                        let mut deduped = deduplicate_entries(entries);
+                        deduped.truncate(self.engine.result_limit());
+                        self.entries = deduped;
                         self.db_query_used = Some(query);
                     }
                     Err(e) => {
@@ -481,18 +474,7 @@ impl RecallTui {
     }
 
     fn compute_filtered_indices(&mut self) -> Vec<(usize, Vec<u32>)> {
-        self.engine
-            .filter_entries(&self.entries, &self.query)
-            .into_iter()
-            .map(|(entry, indices)| {
-                let idx = self
-                    .entries
-                    .iter()
-                    .position(|e| std::ptr::eq(e, entry))
-                    .expect("filter_entries returned entry not in entries slice");
-                (idx, indices)
-            })
-            .collect()
+        self.engine.filter_entries(&self.entries, &self.query)
     }
 
     /// Trigger a brief visual flash for feedback on unrecognized keys

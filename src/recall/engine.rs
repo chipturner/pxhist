@@ -153,9 +153,9 @@ impl SearchEngine {
         Ok(entries)
     }
 
-    /// Shared query logic for loading recall entries. Uses a CTE so the
-    /// WHERE clause applies to both the GROUP BY aggregation and the outer
-    /// select -- preventing cross-host/directory row duplication in the JOIN.
+    /// Shared query logic for loading recall entries. Oversamples by 3x and
+    /// relies on the caller's `deduplicate_entries()` for dedup -- avoids the
+    /// expensive CTE self-join that caused double table scans at scale.
     fn run_recall_query(
         &self,
         where_clause: &str,
@@ -163,26 +163,17 @@ impl SearchEngine {
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let sql = format!(
             r#"
-WITH filtered AS (
-    SELECT * FROM command_history
-    {where_clause}
-)
-SELECT f.id, f.full_command, f.start_unix_timestamp, f.working_directory,
-       f.hostname, f.exit_status,
-       CASE WHEN f.end_unix_timestamp IS NOT NULL
-            THEN f.end_unix_timestamp - f.start_unix_timestamp
+SELECT id, full_command, start_unix_timestamp, working_directory,
+       hostname, exit_status,
+       CASE WHEN end_unix_timestamp IS NOT NULL
+            THEN end_unix_timestamp - start_unix_timestamp
             ELSE NULL END as duration
-  FROM filtered f
- INNER JOIN (
-     SELECT full_command, MAX(start_unix_timestamp) as max_ts
-       FROM filtered
-      GROUP BY full_command
- ) latest ON f.full_command = latest.full_command
-         AND f.start_unix_timestamp = latest.max_ts
- ORDER BY f.start_unix_timestamp DESC
+  FROM command_history
+  {where_clause}
+ ORDER BY start_unix_timestamp DESC
  LIMIT {}
 "#,
-            self.result_limit
+            self.result_limit * 3
         );
 
         let mut stmt = self.conn.prepare(&sql)?;
@@ -200,22 +191,27 @@ SELECT f.id, f.full_command, f.start_unix_timestamp, f.working_directory,
         Ok(deleted)
     }
 
+    /// Get the configured result limit
+    pub fn result_limit(&self) -> usize {
+        self.result_limit
+    }
+
     /// Get the working directory for display
     pub fn working_directory(&self) -> &PathBuf {
         &self.working_directory
     }
 
     /// Filter entries using nucleo fuzzy matching.
-    /// Returns entries sorted by match score (word boundary matches favored, gaps penalized),
-    /// with recency as a tiebreaker for equal scores.
-    pub fn filter_entries<'a>(
+    /// Returns (index, highlight_positions) sorted by match score (word boundary matches
+    /// favored, gaps penalized), with recency as a tiebreaker for equal scores.
+    pub fn filter_entries(
         &mut self,
-        entries: &'a [HistoryEntry],
+        entries: &[HistoryEntry],
         query: &str,
-    ) -> Vec<(&'a HistoryEntry, Vec<u32>)> {
+    ) -> Vec<(usize, Vec<u32>)> {
         if query.is_empty() {
             // No query - return all entries without match positions
-            return entries.iter().map(|e| (e, Vec::new())).collect();
+            return (0..entries.len()).map(|i| (i, Vec::new())).collect();
         }
 
         // Nucleo's fuzzy matcher gives word-boundary bonuses, treating `-` as a separator.
@@ -236,7 +232,7 @@ SELECT f.id, f.full_command, f.start_unix_timestamp, f.working_directory,
             nucleo::pattern::Normalization::Smart,
         );
 
-        let mut scored_results: Vec<(usize, u32, &HistoryEntry, Vec<u32>)> = Vec::new();
+        let mut scored_results: Vec<(usize, u32, Vec<u32>)> = Vec::new();
         let mut buf = Vec::new();
         let mut normalized_cmd = String::new();
 
@@ -260,15 +256,15 @@ SELECT f.id, f.full_command, f.start_unix_timestamp, f.working_directory,
                     let haystack = Utf32Str::new(&entry.command, &mut buf);
                     scoring_pattern.indices(haystack, &mut self.matcher, &mut indices);
                 }
-                scored_results.push((original_idx, score, entry, indices));
+                scored_results.push((original_idx, score, indices));
             }
         }
 
         // Sort by score (descending), then by original index (ascending = more recent first)
         scored_results.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
 
-        // Return just the entries and indices
-        scored_results.into_iter().map(|(_, _, entry, indices)| (entry, indices)).collect()
+        // Return just the indices and highlight positions
+        scored_results.into_iter().map(|(idx, _, indices)| (idx, indices)).collect()
     }
 }
 
@@ -366,7 +362,8 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_dedup_keeps_latest() {
+    fn test_engine_returns_all_rows_ordered_by_time() {
+        // load_entries returns raw rows (most recent first); dedup is the caller's job.
         let conn = test_db();
         insert_command(&conn, "ls -la", "host1", "/tmp", 1000);
         insert_command(&conn, "ls -la", "host1", "/tmp", 2000);
@@ -375,10 +372,11 @@ mod tests {
         let engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
-        assert_eq!(entries.len(), 2);
-
-        let ls_entry = entries.iter().find(|e| e.command == "ls -la").unwrap();
-        assert_eq!(ls_entry.timestamp, Some(2000));
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].command, "ls -la");
+        assert_eq!(entries[0].timestamp, Some(2000));
+        assert_eq!(entries[1].command, "pwd");
+        assert_eq!(entries[1].timestamp, Some(1500));
     }
 
     #[test]
@@ -393,11 +391,11 @@ mod tests {
 
         let filtered = engine.filter_entries(&entries, "release");
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].0.command, "cargo build --release");
+        assert_eq!(entries[filtered[0].0].command, "cargo build --release");
 
         let filtered = engine.filter_entries(&entries, "--release");
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].0.command, "cargo build --release");
+        assert_eq!(entries[filtered[0].0].command, "cargo build --release");
     }
 
     #[test]
@@ -412,19 +410,22 @@ mod tests {
 
         let filtered = engine.filter_entries(&entries, "*.rs");
         assert_eq!(filtered.len(), 1);
-        assert!(filtered[0].0.command.contains("*.rs"));
+        assert!(entries[filtered[0].0].command.contains("*.rs"));
     }
 
     #[test]
     fn test_global_result_limit_hides_old_commands() {
         let conn = test_db();
         let result_limit = 5;
+        // load_entries oversamples by 3x, so we need > result_limit * 3 newer
+        // commands to push the old one beyond the query window.
+        let oversample = result_limit * 3;
 
         // Insert an old "shutdown" command
         insert_command(&conn, "sudo shutdown -h now", "host1", "/home/user", 100);
 
-        // Insert more than result_limit newer unique commands to push shutdown out
-        for i in 0..(result_limit + 1) {
+        // Insert more than oversample newer unique commands to push shutdown out
+        for i in 0..(oversample + 1) {
             insert_command(
                 &conn,
                 &format!("unique-cmd-{i}"),
@@ -441,12 +442,12 @@ mod tests {
             result_limit,
         );
 
-        // Global mode without query: shutdown is beyond the result_limit window
+        // Global mode without query: shutdown is beyond the oversample window
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
-        assert_eq!(entries.len(), result_limit);
+        assert_eq!(entries.len(), oversample);
         assert!(
             !entries.iter().any(|e| e.command.contains("shutdown")),
-            "shutdown should be excluded by result_limit"
+            "shutdown should be excluded by oversample limit"
         );
 
         // Global mode WITH query: LIKE filter narrows before LIMIT, so shutdown is found
@@ -483,7 +484,7 @@ mod tests {
         let all_hosts =
             engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
 
-        // AllHosts must return at least as many unique commands as ThisHost
+        // AllHosts must return at least as many rows as ThisHost
         assert!(
             all_hosts.len() >= this_host.len(),
             "AllHosts ({}) should have >= ThisHost ({}) entries",
@@ -491,9 +492,11 @@ mod tests {
             this_host.len()
         );
 
-        // AllHosts should include commands from both hosts
-        assert_eq!(all_hosts.len(), 10); // 8 shared + 2 unique
-        assert_eq!(this_host.len(), 9); // 8 shared + 1 host1-only
+        // Raw rows (dedup is the caller's job):
+        // AllHosts: 8 commands * 2 hosts + 2 unique = 18
+        // ThisHost: 8 shared + 1 host1-only = 9
+        assert_eq!(all_hosts.len(), 18);
+        assert_eq!(this_host.len(), 9);
     }
 
     #[test]

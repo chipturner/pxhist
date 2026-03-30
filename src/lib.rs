@@ -210,11 +210,25 @@ pub fn default_db_path() -> Option<PathBuf> {
     Some(pxh_data_dir()?.join("pxh.db"))
 }
 
-/// Initialize base schema and register custom functions on a connection.
-/// Safe to call on foreign databases (scan/scrub --dir) -- all DDL is idempotent
-/// and the memdb ATTACH is per-connection only.
+/// Initialize base schema (persistent tables and indexes only).
+/// Safe to call on foreign databases (scan/scrub --dir) -- all DDL is idempotent.
 pub fn initialize_base_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     conn.execute_batch(include_str!("base_schema.sql"))?;
+    Ok(())
+}
+
+/// Set up the in-memory memdb tables and register the REGEXP function.
+/// Only needed by commands that use `memdb.show_results` or REGEXP (show, scrub).
+pub fn initialize_full_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    conn.execute_batch(
+        "ATTACH DATABASE ':memory:' AS memdb;
+         CREATE TABLE memdb.show_results (
+             ch_rowid INTEGER NOT NULL,
+             ch_start_unix_timestamp INTEGER,
+             ch_id INTEGER NOT NULL
+         );
+         CREATE INDEX memdb.result_timestamp ON show_results(ch_start_unix_timestamp, ch_id);",
+    )?;
     conn.create_scalar_function("regexp", 2, FunctionFlags::SQLITE_DETERMINISTIC, move |ctx| {
         assert_eq!(ctx.len(), 2, "called with unexpected number of arguments");
         let regexp: Arc<Regex> = ctx
@@ -242,10 +256,35 @@ pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error
         conn.pragma_update(None, "user_version", 1)?;
     }
 
+    if version < 2 {
+        // Composite index for fast MAX(id) lookups in seal's UPDATE query.
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_session_id_desc ON command_history(session_id, id DESC)",
+        )?;
+        conn.pragma_update(None, "user_version", 2)?;
+    }
+
     Ok(())
 }
 
+/// Open a lightweight connection (persistent schema only, no memdb/regexp).
+/// Use for hot-path commands like insert and seal.
 pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
+    sqlite_connection_inner(path, false)
+}
+
+/// Open a full connection with memdb tables and REGEXP function.
+/// Use for commands that need `memdb.show_results` or REGEXP (show, scrub, scan).
+pub fn sqlite_connection_full(
+    path: &Option<PathBuf>,
+) -> Result<Connection, Box<dyn std::error::Error>> {
+    sqlite_connection_inner(path, true)
+}
+
+fn sqlite_connection_inner(
+    path: &Option<PathBuf>,
+    full: bool,
+) -> Result<Connection, Box<dyn std::error::Error>> {
     let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
     if let Some(parent) = path.parent() {
         // Follow symlinks so create_dir_all creates the real target directory
@@ -267,11 +306,16 @@ pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn s
     conn.busy_timeout(Duration::from_millis(5000))?;
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "temp_store", "MEMORY")?;
-    conn.pragma_update(None, "cache_size", "16777216")?;
+    conn.pragma_update(None, "cache_size", -65536_i64)?; // 64 MB (negative = KiB)
+    conn.pragma_update(None, "mmap_size", 268435456_i64)?; // 256 MB
     conn.pragma_update(None, "synchronous", "NORMAL")?;
 
     initialize_base_schema(&conn)?;
     run_schema_migrations(&conn)?;
+
+    if full {
+        initialize_full_schema(&conn)?;
+    }
 
     Ok(conn)
 }
@@ -1170,7 +1214,7 @@ mod tests {
         run_schema_migrations(&conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
 
         // machine_id column should exist
         conn.execute(
@@ -1187,7 +1231,7 @@ mod tests {
         run_schema_migrations(&conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 
     #[test]
@@ -1204,6 +1248,6 @@ mod tests {
         run_schema_migrations(&conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 }
