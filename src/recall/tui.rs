@@ -112,10 +112,11 @@ const FLASH_DURATION_MS: u64 = 100; // Duration of visual flash in milliseconds
 
 /// Deduplicate history entries by command string, keeping the most recent occurrence.
 /// Entries are already sorted by timestamp (most recent first), so we keep the first
-/// occurrence of each command.
+/// occurrence of each command. Trailing whitespace is ignored for dedup since
+/// "df -h" and "df -h " are visually identical and semantically the same.
 fn deduplicate_entries(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
     let mut seen = HashSet::new();
-    entries.into_iter().filter(|e| seen.insert(e.command.clone())).collect()
+    entries.into_iter().filter(|e| seen.insert(e.command.trim_end().to_string())).collect()
 }
 
 /// Highlight matching portions of a command for display (substring matching).
@@ -278,6 +279,7 @@ pub struct RecallTui {
     show_preview: bool,
     preview_config: PreviewConfig,
     shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
+    db_query_used: Option<String>, // Tracks the query passed to the last DB load
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     status_message: Option<(String, Instant)>,
     needs_redraw: bool,
@@ -295,8 +297,12 @@ impl RecallTui {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let query = initial_query.as_deref().unwrap_or("").to_string();
         let host_filter = HostFilter::default();
-        // Load all entries without query filtering - fuzzy matching happens client-side
-        let entries = deduplicate_entries(engine.load_entries(initial_mode, host_filter, None)?);
+        let db_query_used = if query.len() >= 3 { Some(query.clone()) } else { None };
+        let entries = deduplicate_entries(engine.load_entries(
+            initial_mode,
+            host_filter,
+            db_query_used.as_deref(),
+        )?);
 
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
@@ -356,6 +362,7 @@ impl RecallTui {
             show_preview: config.show_preview,
             preview_config: config.preview.clone(),
             shell_mode,
+            db_query_used,
             flash_until: None,
             status_message: None,
             needs_redraw: true,
@@ -413,10 +420,12 @@ impl RecallTui {
 
     /// Reload entries from database and re-apply fuzzy filtering.
     /// Called when mode (directory/global) or host filter changes.
+    /// Always loads the broad set (no query filter at DB level).
     fn reload_entries(&mut self) {
         match self.engine.load_entries(self.filter_mode, self.host_filter, None) {
             Ok(entries) => {
                 self.entries = deduplicate_entries(entries);
+                self.db_query_used = None;
             }
             Err(e) => {
                 eprintln!("pxh recall: failed to reload entries: {e}");
@@ -427,31 +436,63 @@ impl RecallTui {
         self.update_filtered_indices();
     }
 
-    /// Apply fuzzy filtering to the current entries based on query
+    /// Apply fuzzy filtering to the current entries based on query.
+    /// For queries >= 3 chars, uses a DB-level LIKE filter to ensure old
+    /// commands beyond the initial result_limit window are included.
+    /// Only re-queries when the loaded set might not cover the current query.
     fn update_filtered_indices(&mut self) {
+        if self.query.len() >= 3 {
+            // Check if the loaded entries already cover this query. They do when
+            // the current query extends a previous DB query (LIKE '%abc%' is a
+            // superset of LIKE '%abcd%'), so client-side fuzzy suffices.
+            let needs_db_reload = match &self.db_query_used {
+                None => true,
+                Some(prev) => !self.query.starts_with(prev.as_str()),
+            };
+            if needs_db_reload {
+                let query = self.query.clone();
+                match self.engine.load_entries(self.filter_mode, self.host_filter, Some(&query)) {
+                    Ok(entries) => {
+                        self.entries = deduplicate_entries(entries);
+                        self.db_query_used = Some(query);
+                    }
+                    Err(e) => {
+                        eprintln!("pxh recall: failed to reload entries: {e}");
+                        self.flash();
+                    }
+                }
+            }
+        } else if self.db_query_used.is_some() {
+            // Query shortened below threshold -- restore broad entry set
+            self.reload_entries();
+            return;
+        }
+
         if self.query.is_empty() {
             self.filtered_indices = (0..self.entries.len()).map(|i| (i, Vec::new())).collect();
         } else {
-            self.filtered_indices = self
-                .engine
-                .filter_entries(&self.entries, &self.query)
-                .into_iter()
-                .map(|(entry, indices)| {
-                    // Map entry reference back to index via pointer equality
-                    let idx = self
-                        .entries
-                        .iter()
-                        .position(|e| std::ptr::eq(e, entry))
-                        .expect("filter_entries returned entry not in entries slice");
-                    (idx, indices)
-                })
-                .collect();
+            self.filtered_indices = self.compute_filtered_indices();
         }
 
         if self.selected_index >= self.filtered_indices.len() {
             self.selected_index = 0;
         }
         self.adjust_scroll_for_selection();
+    }
+
+    fn compute_filtered_indices(&mut self) -> Vec<(usize, Vec<u32>)> {
+        self.engine
+            .filter_entries(&self.entries, &self.query)
+            .into_iter()
+            .map(|(entry, indices)| {
+                let idx = self
+                    .entries
+                    .iter()
+                    .position(|e| std::ptr::eq(e, entry))
+                    .expect("filter_entries returned entry not in entries slice");
+                (idx, indices)
+            })
+            .collect()
     }
 
     /// Trigger a brief visual flash for feedback on unrecognized keys

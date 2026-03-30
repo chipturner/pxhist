@@ -87,7 +87,8 @@ impl SearchEngine {
         if let Some(q) = query
             && !q.is_empty()
         {
-            where_conditions.push("full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
+            where_conditions
+                .push("CAST(full_command AS text) LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
             params.push(q.to_string());
         }
 
@@ -97,34 +98,7 @@ impl SearchEngine {
             format!("WHERE {}", where_conditions.join(" AND "))
         };
 
-        let sql = format!(
-            r#"
-SELECT c.id, c.full_command, c.start_unix_timestamp, c.working_directory,
-       c.hostname, c.exit_status,
-       CASE WHEN c.end_unix_timestamp IS NOT NULL
-            THEN c.end_unix_timestamp - c.start_unix_timestamp
-            ELSE NULL END as duration
-  FROM command_history c
- INNER JOIN (
-     SELECT full_command, MAX(start_unix_timestamp) as max_ts
-       FROM command_history
-      {where_clause}
-      GROUP BY full_command
- ) latest ON c.full_command = latest.full_command
-         AND c.start_unix_timestamp = latest.max_ts
- ORDER BY c.start_unix_timestamp DESC
- LIMIT {}
-"#,
-            self.result_limit
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-        let entries: Vec<HistoryEntry> = stmt
-            .query_map(param_refs.as_slice(), |row| self.row_to_entry(row))?
-            .collect::<Result<Vec<_>, _>>()?;
-
+        let entries = self.run_recall_query(&where_clause, &params)?;
         Ok(entries)
     }
 
@@ -168,28 +142,44 @@ SELECT c.id, c.full_command, c.start_unix_timestamp, c.working_directory,
         if let Some(q) = query
             && !q.is_empty()
         {
-            where_conditions.push("full_command LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
+            where_conditions
+                .push("CAST(full_command AS text) LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
             params.push(q.to_string());
         }
 
         let where_clause = format!("WHERE {}", where_conditions.join(" AND "));
 
+        let entries = self.run_recall_query(&where_clause, &params)?;
+        Ok(entries)
+    }
+
+    /// Shared query logic for loading recall entries. Uses a CTE so the
+    /// WHERE clause applies to both the GROUP BY aggregation and the outer
+    /// select -- preventing cross-host/directory row duplication in the JOIN.
+    fn run_recall_query(
+        &self,
+        where_clause: &str,
+        params: &[String],
+    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let sql = format!(
             r#"
-SELECT c.id, c.full_command, c.start_unix_timestamp, c.working_directory,
-       c.hostname, c.exit_status,
-       CASE WHEN c.end_unix_timestamp IS NOT NULL
-            THEN c.end_unix_timestamp - c.start_unix_timestamp
+WITH filtered AS (
+    SELECT * FROM command_history
+    {where_clause}
+)
+SELECT f.id, f.full_command, f.start_unix_timestamp, f.working_directory,
+       f.hostname, f.exit_status,
+       CASE WHEN f.end_unix_timestamp IS NOT NULL
+            THEN f.end_unix_timestamp - f.start_unix_timestamp
             ELSE NULL END as duration
-  FROM command_history c
+  FROM filtered f
  INNER JOIN (
      SELECT full_command, MAX(start_unix_timestamp) as max_ts
-       FROM command_history
-      {where_clause}
+       FROM filtered
       GROUP BY full_command
- ) latest ON c.full_command = latest.full_command
-         AND c.start_unix_timestamp = latest.max_ts
- ORDER BY c.start_unix_timestamp DESC
+ ) latest ON f.full_command = latest.full_command
+         AND f.start_unix_timestamp = latest.max_ts
+ ORDER BY f.start_unix_timestamp DESC
  LIMIT {}
 "#,
             self.result_limit
@@ -201,7 +191,6 @@ SELECT c.id, c.full_command, c.start_unix_timestamp, c.working_directory,
         let entries: Vec<HistoryEntry> = stmt
             .query_map(param_refs.as_slice(), |row| self.row_to_entry(row))?
             .collect::<Result<Vec<_>, _>>()?;
-
         Ok(entries)
     }
 
@@ -424,6 +413,87 @@ mod tests {
         let filtered = engine.filter_entries(&entries, "*.rs");
         assert_eq!(filtered.len(), 1);
         assert!(filtered[0].0.command.contains("*.rs"));
+    }
+
+    #[test]
+    fn test_global_result_limit_hides_old_commands() {
+        let conn = test_db();
+        let result_limit = 5;
+
+        // Insert an old "shutdown" command
+        insert_command(&conn, "sudo shutdown -h now", "host1", "/home/user", 100);
+
+        // Insert more than result_limit newer unique commands to push shutdown out
+        for i in 0..(result_limit + 1) {
+            insert_command(
+                &conn,
+                &format!("unique-cmd-{i}"),
+                "host1",
+                "/home/user",
+                1000 + i as i64,
+            );
+        }
+
+        let engine = SearchEngine::new(
+            conn,
+            PathBuf::from("/home/user"),
+            vec![BString::from("host1")],
+            result_limit,
+        );
+
+        // Global mode without query: shutdown is beyond the result_limit window
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        assert_eq!(entries.len(), result_limit);
+        assert!(
+            !entries.iter().any(|e| e.command.contains("shutdown")),
+            "shutdown should be excluded by result_limit"
+        );
+
+        // Global mode WITH query: LIKE filter narrows before LIMIT, so shutdown is found
+        let entries = engine
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some("shutdown"))
+            .unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "sudo shutdown -h now");
+    }
+
+    #[test]
+    fn test_all_hosts_returns_superset_of_this_host() {
+        let conn = test_db();
+        let result_limit = 10;
+
+        // Same commands on both hosts, many with identical timestamps (from sync)
+        for i in 0..8 {
+            insert_command(&conn, &format!("shared-cmd-{i}"), "host1", "/tmp", 1000 + i);
+            insert_command(&conn, &format!("shared-cmd-{i}"), "host2", "/tmp", 1000 + i);
+        }
+        // Commands unique to each host
+        insert_command(&conn, "host1-only", "host1", "/tmp", 900);
+        insert_command(&conn, "host2-only", "host2", "/tmp", 901);
+
+        let engine = SearchEngine::new(
+            conn,
+            PathBuf::from("/tmp"),
+            vec![BString::from("host1")],
+            result_limit,
+        );
+
+        let this_host =
+            engine.load_entries(FilterMode::Global, HostFilter::ThisHost, None).unwrap();
+        let all_hosts =
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        // AllHosts must return at least as many unique commands as ThisHost
+        assert!(
+            all_hosts.len() >= this_host.len(),
+            "AllHosts ({}) should have >= ThisHost ({}) entries",
+            all_hosts.len(),
+            this_host.len()
+        );
+
+        // AllHosts should include commands from both hosts
+        assert_eq!(all_hosts.len(), 10); // 8 shared + 2 unique
+        assert_eq!(this_host.len(), 9); // 8 shared + 1 host1-only
     }
 
     #[test]
