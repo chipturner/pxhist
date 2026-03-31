@@ -330,7 +330,7 @@ struct AutosuggestCommand {
 
 #[derive(Parser, Debug)]
 struct CompletionsCommand {
-    #[clap(help = "Shell to generate completions for (bash, zsh, fish, elvish, powershell)")]
+    #[clap(help = "Shell to generate completions for (bash, zsh)")]
     shell: clap_complete::Shell,
 }
 
@@ -482,6 +482,15 @@ impl ShellConfigCommand {
         };
 
         io::stdout().write_all(contents.as_bytes())?;
+
+        // Append shell completions so a single eval does everything
+        let shell = match self.shellname.as_str() {
+            "zsh" => clap_complete::Shell::Zsh,
+            "bash" => clap_complete::Shell::Bash,
+            _ => unreachable!(), // already handled above
+        };
+        clap_complete::generate(shell, &mut PxhArgs::command(), "pxh", &mut io::stdout());
+
         io::stdout().flush()?;
         Ok(())
     }
@@ -502,29 +511,24 @@ impl InstallCommand {
         // Check what's already installed in the RC file.
         let contents = std::fs::read_to_string(&pb)?;
         let has_shell_config = contents.contains("pxh shell-config");
-        let has_completions = contents.contains("pxh completions");
 
-        if has_shell_config && has_completions {
-            println!("Shell config already present in {}; taking no action.", pb.display());
-            return Ok(());
-        }
-
-        if has_shell_config && !has_completions {
-            // Upgrade: add completions to existing installation
-            let mut new_contents = String::new();
-            for line in contents.lines() {
-                new_contents.push_str(line);
-                new_contents.push('\n');
-                if line.contains("pxh shell-config") {
-                    let indent = &line[..line.len() - line.trim_start().len()];
-                    new_contents.push_str(indent);
-                    new_contents.push_str(&format!("eval \"$(pxh completions {shellname})\"\n"));
-                }
+        if has_shell_config {
+            // Upgrade: remove separate completions line if present (shell-config now includes them)
+            if contents.contains("pxh completions") {
+                let new_contents: String = contents
+                    .lines()
+                    .filter(|line| !line.contains("pxh completions"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+                    + "\n";
+                std::fs::write(&pb, new_contents)?;
+                println!(
+                    "Removed separate completions line from {} (now included in shell-config).",
+                    pb.display()
+                );
+            } else {
+                println!("Shell config already present in {}; taking no action.", pb.display());
             }
-            std::fs::write(&pb, new_contents)?;
-            println!("Shell completions added to existing config in {}.", pb.display());
-            println!("Completions will be active for new sessions.  To activate now, run:");
-            println!("  eval \"$(pxh completions {shellname})\"");
             return Ok(());
         }
 
@@ -536,16 +540,13 @@ impl InstallCommand {
             r#"
 if command -v pxh &> /dev/null; then
     eval "$(pxh shell-config {shellname})"
-    eval "$(pxh completions {shellname})"
 fi"#
         )?;
         println!("Shell config successfully added to {}.", pb.display());
         println!(
             "pxh will be active for all new shell sessions.  To activate for this session, run:"
         );
-        println!(
-            "  source <(pxh shell-config {shellname}) && eval \"$(pxh completions {shellname})\""
-        );
+        println!("  source <(pxh shell-config {shellname})");
         Ok(())
     }
 }

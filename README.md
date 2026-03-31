@@ -228,20 +228,10 @@ pxh maintenance other.db  # Operate on a specific database file
 
 #### Shell Completions
 
-Generate tab-completion scripts for your shell:
+Tab completions are included automatically by `pxh shell-config`. To generate them separately:
 
 ```bash
-pxh completions bash    # also: zsh, fish, elvish, powershell
-```
-
-`pxh install` sets up completions automatically. For manual setup:
-
-```bash
-# bash (add to ~/.bashrc)
-eval "$(pxh completions bash)"
-
-# zsh (add to ~/.zshrc)
-eval "$(pxh completions zsh)"
+pxh completions bash    # or: zsh
 ```
 
 #### Diagnostics

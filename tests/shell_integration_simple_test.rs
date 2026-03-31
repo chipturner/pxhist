@@ -44,7 +44,10 @@ fn test_install_creates_correct_rc_files() -> Result<()> {
         "Original content should be preserved"
     );
     assert!(bashrc_content.contains("pxh shell-config bash"), "pxh shell-config should be added");
-    assert!(bashrc_content.contains("pxh completions bash"), "pxh completions should be added");
+    assert!(
+        !bashrc_content.contains("pxh completions"),
+        "Completions are now included in shell-config, no separate line needed"
+    );
     assert!(bashrc_content.contains("command -v pxh"), "Command check should be present");
 
     // Test zsh installation
@@ -65,7 +68,6 @@ fn test_install_creates_correct_rc_files() -> Result<()> {
         "Original content should be preserved"
     );
     assert!(zshrc_content.contains("pxh shell-config zsh"), "pxh shell-config should be added");
-    assert!(zshrc_content.contains("pxh completions zsh"), "pxh completions should be added");
 
     Ok(())
 }
@@ -98,28 +100,27 @@ fn test_install_is_idempotent() -> Result<()> {
         "RC file should not change on second install"
     );
 
-    // Count occurrences of pxh shell-config and completions
+    // Count occurrences of pxh shell-config
     let config_count = bashrc_after_second.matches("pxh shell-config").count();
     assert_eq!(config_count, 1, "Should have exactly one pxh shell-config entry");
-    let completions_count = bashrc_after_second.matches("pxh completions").count();
-    assert_eq!(completions_count, 1, "Should have exactly one pxh completions entry");
 
     Ok(())
 }
 
 #[test]
-fn test_install_upgrades_existing_without_completions() -> Result<()> {
-    // Simulate an old installation that has shell-config but not completions
+fn test_install_upgrades_existing_with_separate_completions() -> Result<()> {
+    // Simulate an old installation that has shell-config + completions as separate lines
     let temp_dir = TempDir::new()?;
     let home_dir = temp_dir.path();
     let bashrc_path = home_dir.join(".bashrc");
 
-    // Write an rc file with the old-style pxh block (no completions)
+    // Write an rc file with the old-style pxh block (separate completions line)
     fs::write(
         &bashrc_path,
         r#"# existing content
 if command -v pxh &> /dev/null; then
     eval "$(pxh shell-config bash)"
+    eval "$(pxh completions bash)"
 fi
 "#,
     )?;
@@ -133,17 +134,11 @@ fi
     );
 
     let bashrc_content = fs::read_to_string(&bashrc_path)?;
-    assert!(bashrc_content.contains("pxh completions bash"), "Completions should be added");
-    assert_eq!(
-        bashrc_content.matches("pxh shell-config").count(),
-        1,
-        "Should not duplicate shell-config"
+    assert!(
+        !bashrc_content.contains("pxh completions"),
+        "Separate completions line should be removed"
     );
-    assert_eq!(
-        bashrc_content.matches("pxh completions").count(),
-        1,
-        "Should have exactly one completions entry"
-    );
+    assert_eq!(bashrc_content.matches("pxh shell-config").count(), 1, "Should keep shell-config");
 
     // Running again should be a no-op
     let output2 = pxh_command().env("HOME", home_dir).args(["install", "bash"]).output()?;
