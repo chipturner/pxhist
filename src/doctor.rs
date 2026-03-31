@@ -59,8 +59,7 @@ impl CheckResult {
     }
 }
 
-/// Current expected schema version -- must match run_schema_migrations in lib.rs.
-const CURRENT_SCHEMA_VERSION: i32 = 1;
+use pxh::CURRENT_SCHEMA_VERSION;
 
 impl DoctorCommand {
     pub fn go(

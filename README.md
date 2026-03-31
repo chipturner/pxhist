@@ -298,7 +298,7 @@ disable_ctrl_r = false
 # Set to [] to disable.
 ignore_patterns = [
     "^ls$",
-    "^cd( .)?$",
+    "^cd( .)?$",      # matches cd, cd -, cd ~, cd / (single-char args only)
     "^pwd$",
     "^exit$",
     "^clear$",

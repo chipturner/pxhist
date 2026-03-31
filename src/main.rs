@@ -52,7 +52,12 @@ const MAX_SYNC_DB_SIZE: u64 = 1024 * 1024 * 1024;
 fn version_string() -> &'static str {
     use std::sync::LazyLock;
     static VERSION: LazyLock<String> = LazyLock::new(|| {
-        format!("{} (SQLite {}, schema v1)", env!("CARGO_PKG_VERSION"), rusqlite::version())
+        format!(
+            "{} (SQLite {}, schema v{})",
+            env!("CARGO_PKG_VERSION"),
+            rusqlite::version(),
+            pxh::CURRENT_SCHEMA_VERSION
+        )
     });
     &VERSION
 }
@@ -136,10 +141,7 @@ struct ShowCommand {
         help = "Show entries that were populated while in the current working directory"
     )]
     here: bool,
-    #[clap(
-        long,
-        help = "Alters --here; instead of the current working directory, use the specified directory (implies --here)"
-    )]
+    #[clap(long, help = "Filter to commands run in the specified directory (implies --here)")]
     working_directory: Option<PathBuf>,
     #[clap(
         short = 'S',

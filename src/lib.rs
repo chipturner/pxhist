@@ -242,6 +242,9 @@ pub fn initialize_full_schema(conn: &Connection) -> Result<(), Box<dyn std::erro
     Ok(())
 }
 
+/// Current schema version -- bump when adding new migrations below.
+pub const CURRENT_SCHEMA_VERSION: i32 = 2;
+
 /// Run versioned schema migrations tracked via PRAGMA user_version.
 pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
     let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
