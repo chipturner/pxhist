@@ -65,7 +65,11 @@ fn version_string() -> &'static str {
 #[derive(Parser, Debug)]
 #[clap(author, version = version_string(), about, long_about = None)]
 struct PxhArgs {
-    #[clap(long, env = "PXH_DB_PATH")]
+    #[clap(
+        long,
+        env = "PXH_DB_PATH",
+        help = "path to the history database (default: ~/.local/share/pxh/pxh.db)"
+    )]
     db: Option<PathBuf>,
 
     #[clap(subcommand)]
@@ -2446,6 +2450,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         PxhArgs::parse()
     };
+
+    if args.db.is_none() {
+        args.db = pxh::default_db_path();
+    }
 
     let Some(command) = args.command.as_mut() else {
         PxhArgs::command().print_help()?;
