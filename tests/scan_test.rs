@@ -118,11 +118,11 @@ fn scan_confidence_all() {
 fn scan_invalid_confidence() {
     let pc = PxhCaller::new();
 
-    // Invalid confidence level should fail
+    // Invalid confidence level is rejected by clap's ValueEnum validation
     let output = pc.call("scan --confidence invalid").output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("Invalid confidence level"));
+    assert!(stderr.contains("invalid value"));
     assert!(stderr.contains("critical"));
 }
 

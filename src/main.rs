@@ -12,12 +12,31 @@ use std::{
 
 use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
-use clap::{CommandFactory, Parser, Subcommand};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
 use rusqlite::{Connection, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
 
 mod doctor;
+
+#[derive(Clone, Debug, ValueEnum)]
+enum ConfidenceLevel {
+    Critical,
+    High,
+    Low,
+    All,
+}
+
+impl ConfidenceLevel {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Critical => "critical",
+            Self::High => "high",
+            Self::Low => "low",
+            Self::All => "all",
+        }
+    }
+}
 
 // Type alias for secret pattern matching results
 type SecretPatterns = (Vec<(&'static str, &'static str)>, regex::bytes::RegexSet);
@@ -120,7 +139,7 @@ enum Commands {
 
 #[derive(Parser, Debug)]
 struct InstallCommand {
-    #[clap(help = "Shell to install helpers into")]
+    #[clap(help = "Shell to install helpers into (bash or zsh)")]
     shellname: String,
 }
 
@@ -157,7 +176,7 @@ struct ShowCommand {
     failed: bool,
     #[clap(
         long,
-        help = "If specified, list of patterns can be matched in any order against command lines"
+        help = "Match patterns in any order instead of sequentially"
     )]
     loosen: bool,
     #[clap(
@@ -189,7 +208,7 @@ struct SyncCommand {
     dirname: Option<PathBuf>,
     #[clap(
         long,
-        help = "Only export the current database; do not read other databases",
+        help = "(directory sync only) Only export the current database; do not read other databases",
         default_value_t = false
     )]
     export_only: bool,
@@ -267,13 +286,8 @@ struct ScrubCommand {
         help = "Use secret detection to find entries to scrub (instead of interactive prompt)"
     )]
     scan: bool,
-    #[clap(
-        short,
-        long,
-        default_value = "critical",
-        help = "Confidence level for --scan: critical, high, low, or all"
-    )]
-    confidence: String,
+    #[clap(short, long, default_value = "critical", value_enum)]
+    confidence: ConfidenceLevel,
     #[clap(
         long,
         requires = "histfile",
@@ -283,7 +297,7 @@ struct ScrubCommand {
     #[clap(short = 'y', long, help = "Skip confirmation prompt")]
     yes: bool,
     #[clap(
-        help = "The string to scrub (for interactive mode). Prefer being prompted interactively."
+        help = "The string to scrub (for interactive mode)"
     )]
     contraband: Option<String>,
 }
@@ -321,6 +335,7 @@ struct SealCommand {
 
 #[derive(Parser, Debug)]
 struct ShellConfigCommand {
+    #[clap(help = "Shell name (bash or zsh)")]
     shellname: String,
     #[clap(long, help = "Don't bind Ctrl-R to pxh recall")]
     no_ctrl_r: bool,
@@ -360,13 +375,8 @@ struct MaintenanceCommand {
 
 #[derive(Parser, Debug)]
 struct ScanCommand {
-    #[clap(
-        short,
-        long,
-        default_value = "critical",
-        help = "Confidence level: critical, high, low, or all"
-    )]
-    confidence: String,
+    #[clap(short, long, default_value = "critical", value_enum)]
+    confidence: ConfidenceLevel,
     #[clap(short, long, help = "Output as JSON")]
     json: bool,
     #[clap(short, long, help = "Verbose output with pattern details")]
@@ -954,9 +964,9 @@ impl ScanCommand {
             return Err(format!("Directory does not exist: {}", dir.display()).into());
         }
 
-        let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
+        let (patterns, regex_set) = build_secret_patterns(self.confidence.as_str())?;
         if patterns.is_empty() {
-            println!("No patterns available for confidence level '{}'.", self.confidence);
+            println!("No patterns available for confidence level '{}'.", self.confidence.as_str());
             return Ok(());
         }
 
@@ -1051,7 +1061,7 @@ impl ScanCommand {
     }
 
     fn run_scan(&self, conn: &Connection) -> Result<Vec<ScanMatch>, Box<dyn std::error::Error>> {
-        let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
+        let (patterns, regex_set) = build_secret_patterns(self.confidence.as_str())?;
 
         if patterns.is_empty() {
             return Ok(vec![]);
@@ -1924,9 +1934,9 @@ impl ScrubCommand {
 
         // Build patterns once before the loop for efficiency
         let (patterns, regex_set) = if self.scan {
-            let result = build_secret_patterns(&self.confidence)?;
+            let result = build_secret_patterns(self.confidence.as_str())?;
             if result.0.is_empty() {
-                println!("No patterns available for confidence level '{}'.", self.confidence);
+                println!("No patterns available for confidence level '{}'.", self.confidence.as_str());
                 return Ok(());
             }
             result
@@ -2132,7 +2142,11 @@ impl ScrubCommand {
         let options = SyncOptions {
             scrub: scrub_pattern,
             scrub_scan: if self.scan { Some(true) } else { None },
-            scrub_confidence: if self.scan { Some(self.confidence.clone()) } else { None },
+            scrub_confidence: if self.scan {
+                Some(self.confidence.as_str().to_string())
+            } else {
+                None
+            },
             scrub_dry_run: if self.dry_run { Some(true) } else { None },
             no_secret_filter: None,
         };
@@ -2160,7 +2174,7 @@ impl ScrubCommand {
     }
 
     fn go_scan_mode(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
-        let (patterns, regex_set) = build_secret_patterns(&self.confidence)?;
+        let (patterns, regex_set) = build_secret_patterns(self.confidence.as_str())?;
 
         if patterns.is_empty() {
             println!("No patterns available.");

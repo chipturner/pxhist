@@ -12,7 +12,7 @@ use super::tui::RecallTui;
 pub struct RecallCommand {
     #[clap(long, help = "Search only in current directory", conflicts_with = "global")]
     pub here: bool,
-    #[clap(long, help = "Search across all directories (default)")]
+    #[clap(long, help = "Search across all directories (overrides --here in config)")]
     pub global: bool,
     #[clap(long, short = 'q', help = "Initial search query")]
     pub query: Option<String>,
@@ -20,9 +20,9 @@ pub struct RecallCommand {
     pub print: bool,
     #[clap(long, short = 'l', help = "Limit results when printing", default_value = "20")]
     pub limit: usize,
-    #[clap(long, help = "Show timing information")]
+    #[clap(long, hide = true, help = "Show timing information")]
     pub timing: bool,
-    #[clap(long, help = "Paint TUI once then exit (for profiling)")]
+    #[clap(long, hide = true, help = "Paint TUI once then exit (for profiling)")]
     pub paint_then_exit: bool,
     #[clap(long, help = "Shell integration mode (outputs command for shell to execute)")]
     pub shell_mode: bool,
