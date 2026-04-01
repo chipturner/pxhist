@@ -122,7 +122,7 @@ Use the `tmux-cli` skill for TUI validation workflows.
 ## Key Implementation Details
 
 ### Shell Integration
-Uses preexec/precmd hooks to capture command start/end. The `bash-preexec` library (bundled in `src/shell_configs/bash-preexec/`) provides bash compatibility with zsh-style hooks. Shell configs are embedded via `include_str!` and output via the `shell-config` command.
+Uses preexec/precmd hooks to capture command start/end. The `bash-preexec` library (vendored at `src/vendor/bash-preexec.sh`) provides bash compatibility with zsh-style hooks. Shell configs are embedded via `include_str!` and output via the `shell-config` command.
 
 ### Binary Data Handling
 Commands are stored as BLOBs to handle arbitrary shell data. Use `BString` from the bstr crate for binary string operations.
@@ -151,7 +151,7 @@ Remote sync uses a simple binary protocol over stdin/stdout:
 ### Configuration
 pxh supports a TOML configuration file at `~/.config/pxh/config.toml` for customizing the recall TUI:
 - **`[recall]`** section:
-  - `keymap_mode`: "emacs" (default) or "vim"
+  - `keymap`: "emacs" (default) or "vim"
   - `show_preview`: boolean to show/hide preview pane
   - `result_limit`: max number of results to load (default: 5000)
 - **`[recall.preview]`** section:

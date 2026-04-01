@@ -77,7 +77,7 @@ Supports both emacs (default) and vim keybindings -- set `keymap = "vim"` in `~/
 **Keybindings:**
 - `Ctrl-Y` / `Alt-W` -- Copy selected command to clipboard (via OSC 52)
 - `Ctrl-K` -- Delete selected entry from history
-- `Ctrl-H` -- Toggle host filter
+- `Ctrl-H` -- Toggle host filter (this host only / all synced hosts)
 - `Ctrl-G` -- Toggle directory/global filter
 - `Alt-1` through `Alt-9` -- Quick-select visible entries
 
@@ -153,6 +153,8 @@ pxh sync ~/Dropbox/pxh/ --export-only
 
 Each machine writes its own `.db` file and reads from all others.
 
+> **Note:** During sync, incoming commands are automatically scanned for secrets (API keys, passwords, etc.) and filtered out. Use `--no-secret-filter` to disable this behavior.
+
 ### Security: Scanning and Scrubbing
 
 #### Scanning for Secrets
@@ -169,7 +171,7 @@ pxh scan --histfile ~/.bash_history  # Scan a histfile directly
 pxh scan --dir ~/Dropbox/pxh/   # Scan all databases in a sync directory
 ```
 
-Confidence levels: `critical` (default), `high`, `low`, `all`
+Confidence levels: `critical` (default), `high`, `low`, `all`. Each level includes all stricter levels -- `high` includes `critical` patterns, `low` includes both, and `all` adds patterns without a confidence rating.
 
 #### Removing Secrets
 
