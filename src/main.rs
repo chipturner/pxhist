@@ -680,21 +680,30 @@ impl MaintenanceCommand {
 
             // Clean up non-standard indexes (except those prefixed with KEEP_)
             println!("Looking for non-standard indexes to clean up...");
-            let standard_indexes =
-                ["idx_command_history_unique", "history_session_id", "history_start_time"];
+            let standard_indexes = [
+                "idx_command_history_unique",
+                "history_session_id",
+                "history_start_time",
+                "idx_session_id_desc",
+            ];
 
             // Exclude system indexes (sqlite_autoindex_*) and the standard indexes.
             // Also exclude indexes that relate to PRIMARY KEY or UNIQUE constraints to avoid errors
             let mut stmt = conn.prepare(
-                "SELECT name FROM sqlite_master WHERE type='index' AND 
-                                        name NOT LIKE 'sqlite_autoindex_%' AND 
-                                        tbl_name NOT LIKE 'sqlite_%' AND 
-                                        name NOT IN (?1, ?2, ?3)",
+                "SELECT name FROM sqlite_master WHERE type='index' AND
+                                        name NOT LIKE 'sqlite_autoindex_%' AND
+                                        tbl_name NOT LIKE 'sqlite_%' AND
+                                        name NOT IN (?1, ?2, ?3, ?4)",
             )?;
 
             let non_standard_indexes: Vec<String> = stmt
                 .query_map(
-                    [&standard_indexes[0], &standard_indexes[1], &standard_indexes[2]],
+                    [
+                        &standard_indexes[0],
+                        &standard_indexes[1],
+                        &standard_indexes[2],
+                        &standard_indexes[3],
+                    ],
                     |row| row.get(0),
                 )?
                 .collect::<Result<Vec<String>, _>>()?;
