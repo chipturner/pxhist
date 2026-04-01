@@ -20,3 +20,4 @@ coverage.json
 coverage.xml
 
 docs/superpowers/
+.worktrees/
