@@ -166,20 +166,20 @@ fn show_with_session_id() {
 fn show_with_session_current() {
     let pc = PxhCaller::new();
 
-    // Insert commands in two sessions
-    pc.call("insert --shellname s --hostname h --username u --session-id 255 cmd_session_ff")
+    // Insert commands in two sessions using realistic decimal IDs
+    pc.call("insert --shellname s --hostname h --username u --session-id 123456789 cmd_session_a")
         .assert()
         .success();
-    pc.call("insert --shellname s --hostname h --username u --session-id 1 cmd_other_session")
+    pc.call("insert --shellname s --hostname h --username u --session-id 987654321 cmd_session_b")
         .assert()
         .success();
 
-    // --session current reads PXH_SESSION_ID from env (hex), so "ff" = 255
+    // --session current reads PXH_SESSION_ID from env (decimal)
     let mut cmd = pc.call("show --suppress-headers --session current");
-    cmd.env("PXH_SESSION_ID", "ff");
+    cmd.env("PXH_SESSION_ID", "123456789");
     let output = cmd.output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("cmd_session_ff"));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("cmd_session_a"));
 }
 
 #[test]

@@ -146,7 +146,7 @@ struct ShowCommand {
     #[clap(
         short = 'S',
         long,
-        help = "Display only commands from the specified session (\"current\", \"last\", or a hex session ID)"
+        help = "Display only commands from the specified session (\"current\", \"last\", or a session ID)"
     )]
     session: Option<String>,
     #[clap(short = 'F', long, help = "Show only commands that exited with a non-zero status")]
@@ -2345,17 +2345,17 @@ impl ShowCommand {
         if let Some(ref maybe_session) = self.session {
             let session_id: i64 = match maybe_session.as_str() {
                 "current" => {
-                    let hex = env::var("PXH_SESSION_ID").map_err(|_| {
+                    let val = env::var("PXH_SESSION_ID").map_err(|_| {
                         "PXH_SESSION_ID not set; are you in a pxh-enabled shell?"
                     })?;
-                    i64::from_str_radix(&hex, 16)?
+                    val.parse::<i64>()?
                 }
                 "last" => conn.query_row(
                     "SELECT session_id FROM command_history ORDER BY start_unix_timestamp DESC, id DESC LIMIT 1",
                     [],
                     |r| r.get(0),
                 )?,
-                hex => i64::from_str_radix(hex, 16)?,
+                id => id.parse::<i64>()?,
             };
 
             conn.execute(

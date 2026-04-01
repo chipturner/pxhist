@@ -692,7 +692,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
             header: "Session",
             header_style: "Fc",
             displayer: Box::new(|row| {
-                prettytable::Cell::new(&format!("{:x}", row.session_id)).style_spec("Fc")
+                prettytable::Cell::new(&format!("{}", row.session_id)).style_spec("Fc")
             }),
         },
     );
