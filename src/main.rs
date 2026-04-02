@@ -174,10 +174,7 @@ struct ShowCommand {
     session: Option<String>,
     #[clap(short = 'F', long, help = "Show only commands that exited with a non-zero status")]
     failed: bool,
-    #[clap(
-        long,
-        help = "Match patterns in any order instead of sequentially"
-    )]
+    #[clap(long, help = "Match patterns in any order instead of sequentially")]
     loosen: bool,
     #[clap(
         help = "One or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
@@ -296,9 +293,7 @@ struct ScrubCommand {
     shellname: Option<String>,
     #[clap(short = 'y', long, help = "Skip confirmation prompt")]
     yes: bool,
-    #[clap(
-        help = "The string to scrub (for interactive mode)"
-    )]
+    #[clap(help = "The string to scrub (for interactive mode)")]
     contraband: Option<String>,
 }
 
@@ -1936,7 +1931,10 @@ impl ScrubCommand {
         let (patterns, regex_set) = if self.scan {
             let result = build_secret_patterns(self.confidence.as_str())?;
             if result.0.is_empty() {
-                println!("No patterns available for confidence level '{}'.", self.confidence.as_str());
+                println!(
+                    "No patterns available for confidence level '{}'.",
+                    self.confidence.as_str()
+                );
                 return Ok(());
             }
             result
