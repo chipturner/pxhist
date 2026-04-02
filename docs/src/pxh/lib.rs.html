@@ -692,7 +692,7 @@
 <a href=#692 id=692 data-nosnippet>692</a>            header: <span class="string">"Session"</span>,
 <a href=#693 id=693 data-nosnippet>693</a>            header_style: <span class="string">"Fc"</span>,
 <a href=#694 id=694 data-nosnippet>694</a>            displayer: Box::new(|row| {
-<a href=#695 id=695 data-nosnippet>695</a>                prettytable::Cell::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{:x}"</span>, row.session_id)).style_spec(<span class="string">"Fc"</span>)
+<a href=#695 id=695 data-nosnippet>695</a>                prettytable::Cell::new(<span class="kw-2">&amp;</span><span class="macro">format!</span>(<span class="string">"{}"</span>, row.session_id)).style_spec(<span class="string">"Fc"</span>)
 <a href=#696 id=696 data-nosnippet>696</a>            }),
 <a href=#697 id=697 data-nosnippet>697</a>        },
 <a href=#698 id=698 data-nosnippet>698</a>    );
