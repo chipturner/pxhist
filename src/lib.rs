@@ -794,14 +794,16 @@ pub fn present_results_human_readable(
 // Rewrite a file with lines matching `contraband` removed.  utf-8
 // safe for the file (TODO: I guess make contraband a `BString` too)
 pub fn atomically_remove_lines_from_file(
-    input_filepath: &PathBuf,
+    input_filepath: &Path,
     contraband: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let original_perms = std::fs::metadata(input_filepath)?.permissions();
-    let input_file = File::open(input_filepath)?;
+    // Resolve symlinks so persist() replaces the real target, not the symlink
+    let resolved = resolve_through_symlinks(input_filepath);
+    let original_perms = std::fs::metadata(&resolved)?.permissions();
+    let input_file = File::open(&resolved)?;
     let mut input_reader = BufReader::new(input_file);
 
-    let parent = input_filepath.parent().unwrap_or(Path::new("."));
+    let parent = resolved.parent().unwrap_or(Path::new("."));
     let temp_file = tempfile::NamedTempFile::new_in(parent)?;
     let mut output_writer = BufWriter::new(&temp_file);
 
@@ -814,8 +816,8 @@ pub fn atomically_remove_lines_from_file(
 
     output_writer.flush()?;
     drop(output_writer);
-    temp_file.persist(input_filepath)?;
-    std::fs::set_permissions(input_filepath, original_perms)?;
+    temp_file.persist(&resolved)?;
+    std::fs::set_permissions(&resolved, original_perms)?;
     Ok(())
 }
 
@@ -827,13 +829,15 @@ pub fn atomically_remove_matching_lines_from_file(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::collections::HashSet;
 
-    let original_perms = std::fs::metadata(input_filepath)?.permissions();
+    // Resolve symlinks so persist() replaces the real target, not the symlink
+    let resolved = resolve_through_symlinks(input_filepath);
+    let original_perms = std::fs::metadata(&resolved)?.permissions();
     let contraband_set: HashSet<&str> = contraband_items.iter().copied().collect();
 
-    let input_file = File::open(input_filepath)?;
+    let input_file = File::open(&resolved)?;
     let mut input_reader = BufReader::new(input_file);
 
-    let parent = input_filepath.parent().unwrap_or(Path::new("."));
+    let parent = resolved.parent().unwrap_or(Path::new("."));
     let temp_file = tempfile::NamedTempFile::new_in(parent)?;
     let mut output_writer = BufWriter::new(&temp_file);
 
@@ -848,8 +852,8 @@ pub fn atomically_remove_matching_lines_from_file(
 
     output_writer.flush()?;
     drop(output_writer);
-    temp_file.persist(input_filepath)?;
-    std::fs::set_permissions(input_filepath, original_perms)?;
+    temp_file.persist(&resolved)?;
+    std::fs::set_permissions(&resolved, original_perms)?;
     Ok(())
 }
 
