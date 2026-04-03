@@ -190,18 +190,14 @@ fn test_directory_sync() -> Result<()> {
 }
 
 #[test]
-fn test_directory_sync_ignores_since() -> Result<()> {
+fn test_directory_sync_rejects_since() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let source_db = temp_dir.path().join("source.db");
     let dest_db = temp_dir.path().join("dest.db");
 
-    // Create commands with different ages
-    insert_test_command(&source_db, "old command 1", Some(10))?;
-    insert_test_command(&source_db, "mid command 1", Some(5))?;
-    insert_test_command(&source_db, "recent command 1", Some(1))?;
-    insert_test_command(&source_db, "current command 1", Some(0))?;
+    insert_test_command(&source_db, "echo test", None)?;
 
-    // Sync with --since (should be ignored for directory sync)
+    // --since should be rejected in directory sync mode
     let output = pxh_command()
         .args([
             "--db",
@@ -213,10 +209,9 @@ fn test_directory_sync_ignores_since() -> Result<()> {
         ])
         .output()?;
 
-    assert!(output.status.success());
-
-    // Should have ALL 4 commands (--since is ignored)
-    assert_eq!(count_commands(&dest_db)?, 4);
+    assert!(!output.status.success(), "--since should be rejected in directory sync mode");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("--since"), "error should mention --since: {stderr}");
 
     Ok(())
 }

@@ -1450,7 +1450,7 @@ impl SyncCommand {
         }
 
         // Validate that --since is only used with remote sync
-        if self.since.is_some() && self.remote.is_none() && !self.stdin_stdout {
+        if self.since.is_some() && self.remote.is_none() && !self.stdin_stdout && !self.server {
             return Err(Box::from(
                 "--since requires --remote or --stdin-stdout (not supported in directory sync mode)",
             ));
@@ -1719,6 +1719,25 @@ FROM other.command_history
                 (),
             )?;
         }
+
+        // Upgrade unsealed rows: if a command was synced while still running
+        // (exit_status/end_unix_timestamp NULL), fill in the sealed values from
+        // the other database where available.
+        tx.execute(
+            r#"
+UPDATE main.command_history
+SET exit_status = o.exit_status,
+    end_unix_timestamp = o.end_unix_timestamp
+FROM other.command_history o
+WHERE main.command_history.exit_status IS NULL
+  AND o.exit_status IS NOT NULL
+  AND main.command_history.full_command = o.full_command
+  AND main.command_history.start_unix_timestamp IS o.start_unix_timestamp
+  AND main.command_history.shellname = o.shellname
+  AND COALESCE(main.command_history.hostname, '') = COALESCE(o.hostname, '')
+"#,
+            (),
+        )?;
 
         // Count records after the merge
         let after_count: i64 =
