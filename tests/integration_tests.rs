@@ -479,6 +479,34 @@ fn zsh_import_multiline_commands() {
 }
 
 #[test]
+fn zsh_import_handles_malformed_timestamps() {
+    // Bug 1a: empty timestamp field in `::0;cmd` should warn+skip, not panic
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
+    let helper = PxhTestHelper::new();
+
+    let output = helper
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "zsh",
+            "--histfile",
+            resources.join("zsh_histfile_malformed").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "import should not panic on malformed timestamps, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // The normal command should still be imported
+    let export = helper.command_with_args(&["export"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&export.stdout);
+    assert!(stdout.contains("normal_command"), "valid commands should still be imported");
+}
+
+#[test]
 fn bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
     let pc = PxhCaller::new();

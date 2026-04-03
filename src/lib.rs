@@ -438,20 +438,22 @@ pub fn import_zsh_history(
         else {
             continue;
         };
-        let start_unix_timestamp =
-            match str::from_utf8(&start_time[1..]).ok().and_then(|s| s.parse::<i64>().ok()) {
-                Some(ts) => ts,
-                None => {
-                    eprintln!(
-                        "warning: {}: skipping line {}: bad timestamp {:?}",
-                        histfile.display(),
-                        line_num + 1,
-                        BString::from(start_time),
-                    );
-                    skipped += 1;
-                    continue;
-                }
-            };
+        let start_unix_timestamp = match str::from_utf8(start_time.get(1..).unwrap_or(&[]))
+            .ok()
+            .and_then(|s| s.parse::<i64>().ok())
+        {
+            Some(ts) => ts,
+            None => {
+                eprintln!(
+                    "warning: {}: skipping line {}: bad timestamp {:?}",
+                    histfile.display(),
+                    line_num + 1,
+                    BString::from(start_time),
+                );
+                skipped += 1;
+                continue;
+            }
+        };
         let duration =
             match str::from_utf8(duration_seconds).ok().and_then(|s| s.parse::<i64>().ok()) {
                 Some(d) => d,

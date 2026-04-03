@@ -935,8 +935,12 @@ impl RecallTui {
     fn delete_last_word(&mut self) {
         if !self.query.is_empty() {
             let trimmed_len = self.query.trim_end().len();
-            let word_start =
-                self.query[..trimmed_len].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+            let word_start = self.query[..trimmed_len]
+                .char_indices()
+                .rev()
+                .find(|(_, c)| c.is_whitespace())
+                .map(|(i, c)| i + c.len_utf8())
+                .unwrap_or(0);
             self.query.truncate(word_start);
             self.update_filtered_indices();
         }
@@ -1623,5 +1627,21 @@ mod tests {
         assert_eq!(super::base64_encode(b"ab"), "YWI=");
         assert_eq!(super::base64_encode(b"abc"), "YWJj");
         assert_eq!(super::base64_encode(b"echo hello world"), "ZWNobyBoZWxsbyB3b3JsZA==");
+    }
+
+    #[test]
+    fn test_delete_last_word_with_multibyte_whitespace() {
+        // U+00A0 NBSP is 2 bytes in UTF-8: 0xC2 0xA0
+        // Using rfind(is_whitespace).map(|i| i + 1) would land mid-char
+        let mut query = format!("hello\u{00A0}world");
+        let trimmed_len = query.trim_end().len();
+        let word_start = query[..trimmed_len]
+            .char_indices()
+            .rev()
+            .find(|(_, c)| c.is_whitespace())
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(0);
+        query.truncate(word_start); // should not panic
+        assert_eq!(query, "hello\u{00A0}", "should truncate after the NBSP");
     }
 }

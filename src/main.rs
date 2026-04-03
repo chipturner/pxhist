@@ -894,14 +894,18 @@ impl StatsCommand {
         println!("Sessions:   {sessions}");
 
         if let (Some(min), Some(max)) = (min_ts, max_ts) {
-            let min_date = Local.timestamp_opt(min, 0).unwrap();
-            let max_date = Local.timestamp_opt(max, 0).unwrap();
-            let days = (max - min) / 86400;
-            println!(
-                "Period:     {} to {} ({days} days)",
-                min_date.format("%Y-%m-%d"),
-                max_date.format("%Y-%m-%d"),
-            );
+            if let (Some(min_date), Some(max_date)) =
+                (Local.timestamp_opt(min, 0).single(), Local.timestamp_opt(max, 0).single())
+            {
+                let days = (max - min) / 86400;
+                println!(
+                    "Period:     {} to {} ({days} days)",
+                    min_date.format("%Y-%m-%d"),
+                    max_date.format("%Y-%m-%d"),
+                );
+            } else {
+                println!("Period:     n/a (invalid timestamps in database)");
+            }
         }
 
         if with_status > 0 {
