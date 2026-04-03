@@ -12,7 +12,7 @@ _pxh_addhistory() {
 	--username "$USER" \
 	--session-id "$PXH_SESSION_ID" \
 	--start-unix-timestamp "$started" \
-	"$cmd"
+	-- "$cmd"
     return 0
 }
 

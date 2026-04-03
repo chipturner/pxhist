@@ -315,6 +315,7 @@ struct InsertCommand {
     start_unix_timestamp: Option<i64>, // similar to above
     #[clap(long)]
     end_unix_timestamp: Option<i64>,
+    #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
     command: Vec<OsString>,
 }
 

@@ -1560,3 +1560,64 @@ fn maintenance_rejects_non_pxh_database() {
         conn.query_row("SELECT url FROM bookmarks WHERE id = 1", [], |r| r.get(0)).unwrap();
     assert_eq!(url, "https://example.com", "non-pxh database should be untouched");
 }
+
+#[test]
+fn insert_accepts_hyphen_prefixed_commands() {
+    let helper = PxhTestHelper::new();
+
+    // Commands starting with - should be recorded, not rejected by clap
+    let output = helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "1",
+            "--start-unix-timestamp",
+            "1000000",
+            "--",
+            "-la",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "insert should accept -la as a command, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Test hyphen-prefixed values without -- separator (allow_hyphen_values)
+    let output = helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "2",
+            "--start-unix-timestamp",
+            "1000001",
+            "-rf",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "-rf should be accepted as a command without --, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify both commands were recorded
+    let output =
+        helper.command_with_args(&["show", "--suppress-headers", "--limit", "0"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("-la"), "command '-la' should be in history");
+    assert!(stdout.contains("-rf"), "command '-rf' should be in history");
+}

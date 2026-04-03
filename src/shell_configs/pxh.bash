@@ -12,7 +12,7 @@ preexec() {
 	--username "$USER" \
 	--session-id "$PXH_SESSION_ID" \
 	--start-unix-timestamp "$started" \
-	"$cmd"
+	-- "$cmd"
 }
 
 precmd() {
