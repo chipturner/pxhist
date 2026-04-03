@@ -1193,3 +1193,70 @@ fn test_since_filter_removes_null_timestamps() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_directory_sync_handles_pre_migration_db() -> Result<()> {
+    // Bug 5: ATTACHed databases without machine_id column should be migrated
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+
+    // Create a pre-migration database (no machine_id column)
+    let old_db = sync_dir.join("old_peer.db");
+    {
+        let conn = rusqlite::Connection::open(&old_db)?;
+        // Create schema WITHOUT machine_id (simulating pre-v1 database)
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS command_history (
+                id INTEGER PRIMARY KEY,
+                session_id INTEGER NOT NULL,
+                full_command BLOB NOT NULL,
+                shellname TEXT NOT NULL,
+                hostname BLOB,
+                username BLOB,
+                working_directory BLOB,
+                exit_status INTEGER,
+                start_unix_timestamp INTEGER,
+                end_unix_timestamp INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);",
+        )?;
+        conn.execute(
+            "INSERT INTO command_history (session_id, full_command, shellname, hostname, username, start_unix_timestamp)
+             VALUES (1, CAST('echo from_old_peer' AS blob), 'bash', CAST('old-host' AS blob), CAST('user' AS blob), 1000000)",
+            [],
+        )?;
+    }
+
+    let output_db = temp_dir.path().join("output.db");
+    insert_test_command(&output_db, "echo existing", None)?;
+
+    // Sync should succeed despite the old DB lacking machine_id
+    let output = pxh_command()
+        .args([
+            "--db",
+            output_db.to_str().unwrap(),
+            "sync",
+            "--no-secret-filter",
+            sync_dir.to_str().unwrap(),
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "sync should handle pre-migration databases, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // Verify the old command was merged
+    let conn = rusqlite::Connection::open(&output_db)?;
+    let has_old: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM command_history WHERE CAST(full_command AS text) LIKE '%from_old_peer%'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)?;
+    assert!(has_old, "command from pre-migration DB should be merged");
+
+    Ok(())
+}

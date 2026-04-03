@@ -1601,6 +1601,14 @@ impl SyncCommand {
         path: PathBuf,
         filter_secrets: bool,
     ) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
+        // Ensure the other database has the current schema before ATTACHing,
+        // so older databases (e.g. pre-machine_id) don't fail on missing columns.
+        {
+            let other = Connection::open(&path)?;
+            pxh::initialize_base_schema(&other)?;
+            pxh::run_schema_migrations(&other)?;
+        }
+
         let tx = conn.transaction()?;
         let before_count: i64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;

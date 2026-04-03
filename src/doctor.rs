@@ -731,6 +731,12 @@ impl DoctorCommand {
                             .unwrap_or_else(|_| home.join(".local").join("share"));
                         let xdg_db = xdg_data.join("pxh").join("pxh.db");
 
+                        // Ensure legacy DB has current schema (e.g. machine_id column)
+                        {
+                            let legacy = Connection::open(&legacy_db)?;
+                            pxh::run_schema_migrations(&legacy)?;
+                        }
+
                         let mut xdg_conn = Connection::open(&xdg_db)?;
                         let tx = xdg_conn.transaction()?;
                         tx.execute(
