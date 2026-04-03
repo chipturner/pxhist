@@ -185,9 +185,18 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
         Ok(entries)
     }
 
-    /// Delete a single history entry by its database ID.
-    pub fn delete_entry(&self, id: i64) -> Result<usize, Box<dyn std::error::Error>> {
-        let deleted = self.conn.execute("DELETE FROM command_history WHERE id = ?", [id])?;
+    /// Delete all history entries matching a command (trimmed), since the
+    /// recall list is deduplicated by command text.  Returns the number of
+    /// rows deleted.
+    pub fn delete_entries_by_command(
+        &self,
+        command: &str,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let trimmed = command.trim_end();
+        let deleted = self.conn.execute(
+            "DELETE FROM command_history WHERE rtrim(CAST(full_command AS text)) = ?",
+            [trimmed],
+        )?;
         Ok(deleted)
     }
 
@@ -529,6 +538,26 @@ mod tests {
                 as i64;
         assert_eq!(format_relative_time(Some(now - 7200)), " 2h");
         assert_eq!(format_relative_time(Some(now - 36000)), "10h");
+    }
+
+    #[test]
+    fn test_delete_entries_by_command_removes_all_duplicates() {
+        let conn = test_db();
+        // Insert the same command multiple times (different timestamps simulate real usage)
+        insert_command(&conn, "git status", "host1", "/tmp", 1000);
+        insert_command(&conn, "git status", "host1", "/tmp", 2000);
+        insert_command(&conn, "git status", "host1", "/tmp", 3000);
+        insert_command(&conn, "other cmd", "host1", "/tmp", 4000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+
+        let deleted = engine.delete_entries_by_command("git status").unwrap();
+        assert_eq!(deleted, 3, "should delete all rows matching the command");
+
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "other cmd");
     }
 
     #[test]

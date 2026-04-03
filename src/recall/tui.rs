@@ -498,13 +498,14 @@ impl RecallTui {
         }
     }
 
-    /// Delete the selected entry from the database and remove from the list.
+    /// Delete all database rows matching the selected entry's command text,
+    /// since the recall list is deduplicated by command.
     fn delete_selected_entry(&mut self) {
         let Some(&(entry_idx, _)) = self.filtered_indices.get(self.selected_index) else {
             return;
         };
-        let id = self.entries[entry_idx].id;
-        if self.engine.delete_entry(id).is_ok() {
+        let command = self.entries[entry_idx].command.clone();
+        if let Ok(n) = self.engine.delete_entries_by_command(&command) {
             self.entries.remove(entry_idx);
             // Rebuild filtered indices -- adjust all indices >= entry_idx
             self.filtered_indices.retain_mut(|(idx, _)| {
@@ -520,7 +521,7 @@ impl RecallTui {
                 self.selected_index -= 1;
             }
             self.status_message =
-                Some(("(deleted)".to_string(), Instant::now() + Duration::from_secs(1)));
+                Some((format!("(deleted {n})"), Instant::now() + Duration::from_secs(1)));
         }
     }
 
