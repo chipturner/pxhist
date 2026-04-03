@@ -438,6 +438,47 @@ fn zsh_import_roundtrip() {
 }
 
 #[test]
+fn zsh_import_multiline_commands() {
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
+    let helper = PxhTestHelper::new();
+
+    let output = helper
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "zsh",
+            "--histfile",
+            resources.join("zsh_histfile_multiline").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "import failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    let json_output = helper.command_with_args(&["export"]).output().unwrap();
+    let invocations: Vec<pxh::Invocation> =
+        serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
+
+    assert_eq!(invocations.len(), 3, "should import 3 commands (not 6 lines)");
+
+    // Simple command
+    assert_eq!(invocations[0].command, "echo simple");
+
+    // Two-line continuation: "git commit \\\n-m \"test message\""
+    let git_cmd = invocations[1].command.to_string();
+    assert!(
+        git_cmd.contains("git commit") && git_cmd.contains("-m"),
+        "multi-line git commit should be joined, got: {git_cmd}"
+    );
+
+    // Three-line continuation: curl with headers and body
+    let curl_cmd = invocations[2].command.to_string();
+    assert!(
+        curl_cmd.contains("curl") && curl_cmd.contains("-H") && curl_cmd.contains("-d"),
+        "multi-line curl should be joined, got: {curl_cmd}"
+    );
+}
+
+#[test]
 fn bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
     let pc = PxhCaller::new();

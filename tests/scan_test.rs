@@ -500,3 +500,34 @@ fn scrub_scan_multiple_patterns_same_command() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("AKIAIOSFODNN7EXAMPLE"));
 }
+
+#[test]
+fn scan_zsh_histfile_multiline_secret() {
+    use std::{fs, io::Write};
+
+    let pc = PxhCaller::new();
+
+    // Create a zsh histfile where a secret is on a continuation line
+    let histfile = pc.tmpdir().join("zsh_multiline_history");
+    let mut file = fs::File::create(&histfile).unwrap();
+    write!(file, ": 1700000000:0;echo hello\n").unwrap();
+    // Multi-line curl with bearer token on continuation line
+    write!(
+        file,
+        ": 1700000001:0;curl http://api.example.com \\\n-H \"Authorization: Bearer ghp_abc123def456ghi789jkl012mno345pqr678\"\n"
+    )
+    .unwrap();
+    write!(file, ": 1700000002:0;ls -la\n").unwrap();
+    drop(file);
+
+    // Scan should detect the bearer token on the continuation line
+    let histfile_str = histfile.to_str().unwrap();
+    let cmd = format!("scan --histfile {histfile_str} --shellname zsh --confidence all");
+    let output = pc.call(&cmd).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("potential secret"),
+        "scan should detect secret on continuation line, got: {stdout}"
+    );
+}

@@ -1237,7 +1237,15 @@ fn scan_histfile(
     matches: &mut Vec<ScanMatch>,
     limit: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let lines: Vec<&[u8]> = content.split(|&b| b == b'\n').collect();
+    // For zsh, pre-join backslash-continuation lines so multi-line
+    // commands are scanned as a single unit.
+    let joined;
+    let lines: Vec<&[u8]> = if shellname == "zsh" {
+        joined = pxh::join_continuation_lines(content);
+        joined.iter().map(|v| v.as_slice()).collect()
+    } else {
+        content.split(|&b| b == b'\n').collect()
+    };
     let mut prev_timestamp_line: Option<&[u8]> = None;
 
     for line in &lines {

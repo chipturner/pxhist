@@ -387,6 +387,28 @@ fn generate_import_session_id(histfile: &Path) -> i64 {
     }
 }
 
+/// Join backslash-continuation lines in zsh EXTENDED_HISTORY format.
+/// Lines ending with `\` are joined with their successor using `\n` as separator.
+pub fn join_continuation_lines(buf: &[u8]) -> Vec<Vec<u8>> {
+    let mut result: Vec<Vec<u8>> = Vec::new();
+    let mut current: Vec<u8> = Vec::new();
+    for line in buf.split(|&ch| ch == b'\n') {
+        if line.last() == Some(&b'\\') {
+            current.extend_from_slice(&line[..line.len() - 1]);
+            current.push(b'\n');
+        } else {
+            current.extend_from_slice(line);
+            if !current.is_empty() {
+                result.push(std::mem::take(&mut current));
+            }
+        }
+    }
+    if !current.is_empty() {
+        result.push(current);
+    }
+    result
+}
+
 pub fn import_zsh_history(
     histfile: &Path,
     hostname: Option<BString>,
@@ -399,12 +421,15 @@ pub fn import_zsh_history(
         .or_else(|| uzers::get_current_username().map(|v| BString::from(v.into_vec())))
         .unwrap_or_else(|| BString::from("unknown"));
     let hostname = hostname.unwrap_or_else(get_hostname);
-    let buf_iter = buf.split(|&ch| ch == b'\n');
+    // Pre-join backslash-continuation lines: zsh EXTENDED_HISTORY writes
+    // multi-line commands as physical lines ending with '\'.
+    let logical_lines = join_continuation_lines(&buf);
 
     let mut ret = vec![];
     let mut skipped = 0usize;
     let session_id = generate_import_session_id(histfile);
-    for (line_num, line) in buf_iter.enumerate() {
+    for (line_num, line) in logical_lines.iter().enumerate() {
+        let line = line.as_slice();
         let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() else {
             continue;
         };
