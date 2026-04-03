@@ -1,4 +1,4 @@
-use std::{env, fs, process::Command};
+use std::{env, fs, path::Path, process::Command};
 
 use pxh::test_utils::pxh_path;
 use tempfile::TempDir;
@@ -117,5 +117,79 @@ fn doctor_verbose_shows_passing_checks() -> Result<()> {
         pxh_command().args(["--db", db_path.to_str().unwrap(), "doctor", "--verbose"]).output()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("  ok  Schema version"), "should show passing checks with --verbose");
+    Ok(())
+}
+
+fn insert_command_into_db(db_path: &Path, command: &str) -> Result<()> {
+    let output = pxh_command()
+        .args([
+            "--db",
+            db_path.to_str().unwrap(),
+            "insert",
+            "--hostname",
+            "test",
+            "--shellname",
+            "bash",
+            "--username",
+            "test",
+            "--session-id",
+            "1",
+            "--start-unix-timestamp",
+            "1000000",
+            command,
+        ])
+        .output()?;
+    assert!(output.status.success(), "insert failed: {}", String::from_utf8_lossy(&output.stderr));
+    Ok(())
+}
+
+#[test]
+fn doctor_fix_merges_legacy_db() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let home_dir = temp_dir.path();
+
+    // Create legacy database at ~/.pxh/pxh.db
+    let legacy_dir = home_dir.join(".pxh");
+    fs::create_dir_all(&legacy_dir)?;
+    let legacy_db = legacy_dir.join("pxh.db");
+    insert_command_into_db(&legacy_db, "legacy_command_123")?;
+
+    // Create XDG database at ~/.local/share/pxh/pxh.db
+    let xdg_dir = home_dir.join(".local").join("share").join("pxh");
+    fs::create_dir_all(&xdg_dir)?;
+    let xdg_db = xdg_dir.join("pxh.db");
+    insert_command_into_db(&xdg_db, "xdg_command_456")?;
+
+    // Run doctor --fix --yes with HOME pointing to our temp dir
+    let output = pxh_command()
+        .env("HOME", home_dir)
+        .args(["--db", xdg_db.to_str().unwrap(), "doctor", "--fix", "--yes"])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        output.status.success(),
+        "doctor --fix should succeed, stdout: {stdout}, stderr: {stderr}"
+    );
+    assert!(stdout.contains("Merged"), "should report merged commands: {stdout}");
+
+    // Verify legacy command was merged into XDG db
+    let export_output =
+        pxh_command().args(["--db", xdg_db.to_str().unwrap(), "export"]).output()?;
+    let export_stdout = String::from_utf8_lossy(&export_output.stdout);
+    assert!(
+        export_stdout.contains("legacy_command_123"),
+        "XDG db should contain legacy command after merge"
+    );
+    assert!(
+        export_stdout.contains("xdg_command_456"),
+        "XDG db should still contain its own command"
+    );
+
+    // Legacy dir should have been renamed to backup
+    assert!(!legacy_dir.exists(), "legacy dir should be moved");
+    assert!(home_dir.join(".pxh.backup").exists(), "backup should exist");
+
     Ok(())
 }

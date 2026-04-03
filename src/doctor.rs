@@ -747,8 +747,8 @@ impl DoctorCommand {
                             [],
                         )?;
                         let added: i64 = tx.query_row("SELECT changes()", [], |r| r.get(0))?;
-                        tx.execute("DETACH DATABASE legacy", [])?;
                         tx.commit()?;
+                        xdg_conn.execute("DETACH DATABASE legacy", [])?;
 
                         let backup = home.join(".pxh.backup");
                         std::fs::rename(home.join(".pxh"), &backup)?;
