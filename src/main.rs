@@ -1386,9 +1386,10 @@ impl SyncCommand {
                 .as_secs() as i64;
             let threshold = now - (days as i64 * 86400);
 
-            // Delete records older than the threshold
+            // Delete records older than the threshold (including NULLs,
+            // which have no known timestamp and shouldn't bypass the filter)
             temp_conn.execute(
-                "DELETE FROM command_history WHERE start_unix_timestamp <= ?",
+                "DELETE FROM command_history WHERE start_unix_timestamp IS NULL OR start_unix_timestamp <= ?",
                 [threshold],
             )?;
 

@@ -1089,3 +1089,85 @@ fn test_directory_sync_preserves_machine_id() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_since_filter_removes_null_timestamps() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let source_db = temp_dir.path().join("source.db");
+    let dest_db = temp_dir.path().join("dest.db");
+
+    // Create a recent command in the source
+    insert_test_command(&source_db, "echo recent", Some(1))?;
+
+    // Insert a command with NULL timestamp directly into the source DB
+    // (simulates imported bash history without timestamps)
+    {
+        let conn = rusqlite::Connection::open(&source_db)?;
+        conn.execute(
+            "INSERT INTO command_history (session_id, full_command, shellname, hostname, username)
+             VALUES (99, CAST('echo null_ts' AS blob), 'bash', CAST('test-host' AS blob), CAST('test-user' AS blob))",
+            [],
+        )?;
+    }
+
+    // Verify source has both commands
+    assert_eq!(count_commands(&source_db)?, 2);
+
+    // Use stdin-stdout sync with --since to send only recent data.
+    // --since should filter out both old AND null-timestamp commands.
+    let server_args = vec![
+        "--db".to_string(),
+        dest_db.to_str().unwrap().to_string(),
+        "sync".to_string(),
+        "--server".to_string(),
+        "--no-secret-filter".to_string(),
+    ];
+
+    let client_args = vec![
+        "--db".to_string(),
+        source_db.to_str().unwrap().to_string(),
+        "sync".to_string(),
+        "--stdin-stdout".to_string(),
+        "--send-only".to_string(),
+        "--since".to_string(),
+        "7".to_string(),
+        "--no-secret-filter".to_string(),
+    ];
+
+    let (client, server) = spawn_sync_processes(client_args, server_args)?;
+    let client_output = client.wait_with_output()?;
+    let server_output = server.wait_with_output()?;
+
+    assert!(
+        client_output.status.success(),
+        "Client failed: {}",
+        String::from_utf8_lossy(&client_output.stderr)
+    );
+    assert!(
+        server_output.status.success(),
+        "Server failed: {}",
+        String::from_utf8_lossy(&server_output.stderr)
+    );
+
+    // Dest should have the recent command but NOT the NULL-timestamp one
+    let conn = rusqlite::Connection::open(&dest_db)?;
+    let has_null_ts: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM command_history WHERE CAST(full_command AS text) = 'echo null_ts'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)?;
+    assert!(!has_null_ts, "NULL-timestamp command should be filtered by --since");
+
+    let has_recent: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM command_history WHERE CAST(full_command AS text) = 'echo recent'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .map(|n| n > 0)?;
+    assert!(has_recent, "Recent command should have been synced");
+
+    Ok(())
+}
