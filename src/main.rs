@@ -169,6 +169,7 @@ struct ShowCommand {
     #[clap(
         short = 'S',
         long,
+        conflicts_with_all = ["here", "working_directory"],
         help = "Display only commands from the specified session (\"current\", \"last\", or a session ID)"
     )]
     session: Option<String>,

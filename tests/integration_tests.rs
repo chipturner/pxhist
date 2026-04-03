@@ -245,6 +245,20 @@ fn show_loosen_honors_limit() {
 }
 
 #[test]
+fn show_session_conflicts_with_here() {
+    let helper = PxhTestHelper::new();
+
+    let output =
+        helper.command_with_args(&["show", "--session", "current", "--here"]).output().unwrap();
+    assert!(!output.status.success(), "--session and --here should conflict");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("cannot be used with") || stderr.contains("conflict"),
+        "error should mention conflict: {stderr}"
+    );
+}
+
+#[test]
 fn show_with_case_insensitive() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();
