@@ -1026,3 +1026,43 @@ fn test_directory_sync_filters_secrets() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_directory_sync_preserves_machine_id() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+
+    let source_db = sync_dir.join("source.db");
+    let output_db = temp_dir.path().join("output.db");
+
+    // Create a command in source_db and set machine_id
+    insert_test_command(&source_db, "echo with_machine_id", None)?;
+    {
+        let conn = rusqlite::Connection::open(&source_db)?;
+        conn.execute("UPDATE command_history SET machine_id = 99", [])?;
+    }
+
+    // Sync
+    let output = pxh_command()
+        .args([
+            "--db",
+            output_db.to_str().unwrap(),
+            "sync",
+            "--no-secret-filter",
+            sync_dir.to_str().unwrap(),
+        ])
+        .output()?;
+    assert!(output.status.success(), "sync failed: {}", String::from_utf8_lossy(&output.stderr));
+
+    // Verify machine_id was preserved
+    let conn = rusqlite::Connection::open(&output_db)?;
+    let machine_id: Option<i64> = conn.query_row(
+        "SELECT machine_id FROM command_history WHERE CAST(full_command AS text) LIKE '%with_machine_id%'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(machine_id, Some(99), "machine_id should be preserved through sync");
+
+    Ok(())
+}

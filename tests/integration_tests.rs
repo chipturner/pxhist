@@ -322,6 +322,44 @@ fn show_ignore_case_applies_to_all_patterns() {
     );
 }
 
+#[test]
+fn export_includes_machine_id() {
+    let helper = PxhTestHelper::new();
+
+    // Insert a command, then set machine_id directly via SQL
+    helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "1",
+            "--start-unix-timestamp",
+            "1000000",
+            "echo hello",
+        ])
+        .output()
+        .unwrap();
+
+    // Set machine_id directly
+    let conn = rusqlite::Connection::open(helper.db_path()).unwrap();
+    conn.execute("UPDATE command_history SET machine_id = 42 WHERE session_id = 1", []).unwrap();
+    drop(conn);
+
+    // Export and check that machine_id is in the JSON
+    let output = helper.command_with_args(&["export"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("machine_id"),
+        "JSON export should include machine_id field, got: {stdout}"
+    );
+    assert!(stdout.contains("42"), "machine_id should be 42 in export, got: {stdout}");
+}
+
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn insert_seal_roundtrip() {

@@ -593,6 +593,7 @@ impl Invocation {
             "exit_status": self.exit_status,
             "start_unix_timestamp": self.start_unix_timestamp,
             "end_unix_timestamp": self.end_unix_timestamp,
+            "machine_id": self.machine_id,
         })
     }
 }

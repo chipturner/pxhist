@@ -605,7 +605,7 @@ impl ExportCommand {
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         let mut stmt = conn.prepare(
         r#"
-SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
   FROM command_history h
 ORDER BY id"#,
     )?;
@@ -1587,10 +1587,10 @@ impl SyncCommand {
                     r#"
 INSERT OR IGNORE INTO main.command_history (
     session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 )
 SELECT session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
 "#,
                     (),
@@ -1600,7 +1600,7 @@ FROM other.command_history
                 let mut stmt = tx.prepare(
                     r#"
 SELECT session_id, full_command, shellname, hostname, username,
-       working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+       working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
 "#,
                 )?;
@@ -1620,9 +1620,9 @@ FROM other.command_history
                         r#"
 INSERT OR IGNORE INTO main.command_history (
     session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
                         (
                             row.get::<_, i64>(0)?,
@@ -1634,6 +1634,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                             row.get::<_, Option<i64>>(6)?,
                             row.get::<_, Option<i64>>(7)?,
                             row.get::<_, Option<i64>>(8)?,
+                            row.get::<_, Option<i64>>(9)?,
                         ),
                     )?;
                 }
@@ -1644,10 +1645,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 r#"
 INSERT OR IGNORE INTO main.command_history (
     session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 )
 SELECT session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
 "#,
                 (),

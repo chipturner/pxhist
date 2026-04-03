@@ -740,9 +740,9 @@ impl DoctorCommand {
                         tx.execute(
                             r#"INSERT OR IGNORE INTO main.command_history
                                (session_id, full_command, shellname, hostname, username,
-                                working_directory, exit_status, start_unix_timestamp, end_unix_timestamp)
+                                working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id)
                                SELECT session_id, full_command, shellname, hostname, username,
-                                      working_directory, exit_status, start_unix_timestamp, end_unix_timestamp
+                                      working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
                                FROM legacy.command_history"#,
                             [],
                         )?;
