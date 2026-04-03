@@ -326,3 +326,22 @@ fn test_get_hostname_strips_domain() {
         None => unsafe { env::remove_var("PXH_HOSTNAME") },
     }
 }
+
+#[test]
+fn test_dotted_hostname_db_filename() {
+    // Bug 10a: set_extension("db") turns "server.prod" into "server.db",
+    // colliding with "server.dev" -> "server.db". Using format! avoids this.
+    let mut path = PathBuf::from("/sync");
+    path.push(format!("{}.db", "server.prod"));
+    assert_eq!(
+        path.to_str().unwrap(),
+        "/sync/server.prod.db",
+        "dotted hostname should produce server.prod.db, not server.db"
+    );
+
+    let mut path2 = PathBuf::from("/sync");
+    path2.push(format!("{}.db", "server.dev"));
+    assert_eq!(path2.to_str().unwrap(), "/sync/server.dev.db");
+
+    assert_ne!(path, path2, "different hostnames must produce different filenames");
+}

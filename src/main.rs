@@ -1446,8 +1446,7 @@ impl SyncCommand {
         let mut output_path = dirname.clone();
         let config = pxh::recall::config::Config::load();
         let hostname = pxh::resolve_hostname(&config, &conn);
-        output_path.push(hostname.to_path_lossy());
-        output_path.set_extension("db");
+        output_path.push(format!("{}.db", hostname.to_str_lossy()));
         // TODO: vacuum seems to want a plain text string path, unlike
         // ATTACH below which takes an os_str as bytes, so we can't
         // use BString to get a vec<u8>.  Look into why this is and if
@@ -1976,7 +1975,7 @@ impl ScrubCommand {
                 return Ok(());
             }
             result
-        } else if self.contraband.as_deref().map_or(true, str::is_empty) {
+        } else if self.contraband.as_deref().is_none_or(str::is_empty) {
             return Err("Directory mode requires --scan or a non-empty contraband pattern".into());
         } else {
             (vec![], regex::bytes::RegexSet::empty())
