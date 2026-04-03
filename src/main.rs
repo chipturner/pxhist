@@ -2484,7 +2484,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     env_logger::init();
 
     // Check if binary was invoked as "pxhs", which is a shorthand for "pxh show"
-    let args_vec = env::args().collect::<Vec<_>>();
+    let args_vec = env::args_os().collect::<Vec<_>>();
 
     // Check if the executable name contains "pxhs" (handles both direct calls and symlinks)
     let is_pxhs = pxh::helpers::determine_is_pxhs(&args_vec);
@@ -2496,7 +2496,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Build new args with "show" inserted after program name
         let combined_args = std::iter::once(program)
-            .chain(std::iter::once(String::from("show")))
+            .chain(std::iter::once(OsString::from("show")))
             .chain(rest)
             .collect::<Vec<_>>();
 

@@ -59,20 +59,22 @@ fn atomic_line_remove_preserves_permissions() {
 
 #[test]
 fn test_determine_is_pxhs() {
+    use std::ffi::OsString;
+
     // Test normal pxh invocation
-    assert!(!helpers::determine_is_pxhs(&["/usr/bin/pxh".to_string()]));
-    assert!(!helpers::determine_is_pxhs(&["/path/to/pxh".to_string()]));
-    assert!(!helpers::determine_is_pxhs(&["./pxh".to_string()]));
+    assert!(!helpers::determine_is_pxhs(&[OsString::from("/usr/bin/pxh")]));
+    assert!(!helpers::determine_is_pxhs(&[OsString::from("/path/to/pxh")]));
+    assert!(!helpers::determine_is_pxhs(&[OsString::from("./pxh")]));
 
     // Test pxhs invocation (symlink behavior)
-    assert!(helpers::determine_is_pxhs(&["/usr/bin/pxhs".to_string()]));
-    assert!(helpers::determine_is_pxhs(&["/path/to/pxhs".to_string()]));
-    assert!(helpers::determine_is_pxhs(&["./pxhs".to_string()]));
+    assert!(helpers::determine_is_pxhs(&[OsString::from("/usr/bin/pxhs")]));
+    assert!(helpers::determine_is_pxhs(&[OsString::from("/path/to/pxhs")]));
+    assert!(helpers::determine_is_pxhs(&[OsString::from("./pxhs")]));
 
     // Edge cases
-    assert!(helpers::determine_is_pxhs(&["pxhs".to_string()]));
-    assert!(helpers::determine_is_pxhs(&["pxhs-something".to_string()]));
-    assert!(!helpers::determine_is_pxhs(&["".to_string()]));
+    assert!(helpers::determine_is_pxhs(&[OsString::from("pxhs")]));
+    assert!(helpers::determine_is_pxhs(&[OsString::from("pxhs-something")]));
+    assert!(!helpers::determine_is_pxhs(&[OsString::from("")]));
     assert!(!helpers::determine_is_pxhs(&[]));
 }
 

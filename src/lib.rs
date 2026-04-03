@@ -853,6 +853,7 @@ pub fn atomically_remove_matching_lines_from_file(
 
 // Helper functions for command parsing and path resolution
 pub mod helpers {
+    use std::ffi::OsString;
     use std::path::{Path, PathBuf};
 
     /// Parse an SSH command string into command and arguments, handling quotes and spaces.
@@ -996,7 +997,7 @@ pub mod helpers {
     }
 
     /// Determine if the executable is being invoked as pxhs (shorthand for pxh show)
-    pub fn determine_is_pxhs(args: &[String]) -> bool {
+    pub fn determine_is_pxhs(args: &[OsString]) -> bool {
         args.first()
             .and_then(|arg| {
                 PathBuf::from(arg).file_name().map(|name| name.to_string_lossy().contains("pxhs"))
