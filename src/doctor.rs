@@ -68,10 +68,10 @@ impl DoctorCommand {
         db_path: &Option<PathBuf>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Only migrate when --fix is set; a diagnostic command should not mutate state
-        if self.fix {
-            if let Some(c) = &conn {
-                pxh::migrate_host_settings(c);
-            }
+        if self.fix
+            && let Some(c) = &conn
+        {
+            pxh::migrate_host_settings(c);
         }
 
         let all_checks: Vec<(&str, Vec<CheckResult>)> = vec![

@@ -512,7 +512,7 @@ pub fn import_bash_history(
     let mut last_ts = None;
     for line in buf_iter {
         if line[0] == b'#'
-            && let Ok(ts) = str::parse::<i64>(str::from_utf8(&line[1..]).unwrap_or("0"))
+            && let Ok(ts) = str::parse::<i64>(str::from_utf8(&line[1..]).unwrap_or(""))
         {
             if ts > 0 {
                 last_ts = Some(ts);

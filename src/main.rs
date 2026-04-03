@@ -2517,7 +2517,7 @@ SELECT rowid, start_unix_timestamp, id
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#
                 ),
-                (working_directory.to_string_lossy(), pattern, self.query_limit() as i64),
+                (working_directory.as_os_str().as_bytes(), pattern, self.query_limit() as i64),
             )?;
         } else {
             conn.execute(
