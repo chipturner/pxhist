@@ -1339,7 +1339,27 @@ fn parse_histfile_line(
                 ts_str.trim().parse::<i64>().ok()
             });
 
-            Some((command, timestamp, String::from_utf8_lossy(line).to_string()))
+            // For multi-line commands (joined by join_continuation_lines),
+            // reconstruct the on-disk representation with trailing backslashes
+            // so scrub_from_histfile can match the physical lines.
+            let line_lossy = String::from_utf8_lossy(line);
+            let lines_to_remove = if line_lossy.contains('\n') {
+                let physical: Vec<&str> = line_lossy.split('\n').collect();
+                physical
+                    .iter()
+                    .enumerate()
+                    .map(
+                        |(i, l)| {
+                            if i < physical.len() - 1 { format!("{l}\\") } else { l.to_string() }
+                        },
+                    )
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                line_lossy.to_string()
+            };
+
+            Some((command, timestamp, lines_to_remove))
         }
         "bash" => {
             if is_bash_timestamp_line(line) {
