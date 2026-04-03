@@ -92,7 +92,8 @@ fn main() {
         let tuple = format!("(\"{}\", \"{}\")", name, regex);
 
         if CRITICAL_PATTERN_NAMES.contains(&entry.pattern.name.as_str()) {
-            critical_patterns.push(tuple.clone());
+            critical_patterns.push(tuple);
+            continue;
         }
 
         match entry.pattern.confidence.as_str() {
