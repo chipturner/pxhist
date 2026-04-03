@@ -1976,8 +1976,8 @@ impl ScrubCommand {
                 return Ok(());
             }
             result
-        } else if self.contraband.is_none() {
-            return Err("Directory mode requires --scan or a contraband pattern".into());
+        } else if self.contraband.as_deref().map_or(true, str::is_empty) {
+            return Err("Directory mode requires --scan or a non-empty contraband pattern".into());
         } else {
             (vec![], regex::bytes::RegexSet::empty())
         };

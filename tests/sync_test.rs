@@ -926,6 +926,28 @@ fn test_scrub_dir_requires_scan_or_pattern() -> Result<()> {
 }
 
 #[test]
+fn test_scrub_dir_rejects_empty_contraband() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(),
+            "scrub",
+            "--dir",
+            temp_dir.path().to_str().unwrap(),
+            "",
+        ])
+        .output()?;
+
+    assert!(!output.status.success(), "scrub --dir with empty contraband should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("non-empty"), "Error should mention non-empty: {stderr}");
+
+    Ok(())
+}
+
+#[test]
 fn test_scrub_remote_requires_scan_or_pattern() -> Result<()> {
     let temp_dir = TempDir::new()?;
 
