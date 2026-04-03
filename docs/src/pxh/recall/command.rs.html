@@ -14,7 +14,7 @@
 <a href=#14 id=14 data-nosnippet>14</a>    </span><span class="kw">pub </span>here: bool,
 <a href=#15 id=15 data-nosnippet>15</a>    <span class="attr">#[clap(long, help = <span class="string">"Search across all directories (overrides --here in config)"</span>)]
 <a href=#16 id=16 data-nosnippet>16</a>    </span><span class="kw">pub </span>global: bool,
-<a href=#17 id=17 data-nosnippet>17</a>    <span class="attr">#[clap(long, short = <span class="string">'q'</span>, help = <span class="string">"Initial search query"</span>)]
+<a href=#17 id=17 data-nosnippet>17</a>    <span class="attr">#[clap(long, short = <span class="string">'q'</span>, allow_hyphen_values = <span class="bool-val">true</span>, help = <span class="string">"Initial search query"</span>)]
 <a href=#18 id=18 data-nosnippet>18</a>    </span><span class="kw">pub </span>query: <span class="prelude-ty">Option</span>&lt;String&gt;,
 <a href=#19 id=19 data-nosnippet>19</a>    <span class="attr">#[clap(long, short = <span class="string">'p'</span>, help = <span class="string">"Print results instead of showing TUI"</span>)]
 <a href=#20 id=20 data-nosnippet>20</a>    </span><span class="kw">pub </span>print: bool,
