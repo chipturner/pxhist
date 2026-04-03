@@ -1178,12 +1178,31 @@ fn prompt_for_confirmation() -> Result<bool, Box<dyn std::error::Error>> {
     Ok(input.trim().eq_ignore_ascii_case("y"))
 }
 
+fn looks_like_zsh_extended_history(line: &[u8]) -> bool {
+    // Zsh EXTENDED_HISTORY format: `: <digits>:<digits>;`
+    // Must not match bash no-ops like `: ${VAR:=x}; cmd`
+    if !line.starts_with(b": ") {
+        return false;
+    }
+    let rest = &line[2..];
+    let colon_pos = match rest.iter().position(|&b| b == b':') {
+        Some(p) => p,
+        None => return false,
+    };
+    let semi_pos = match rest.iter().position(|&b| b == b';') {
+        Some(p) => p,
+        None => return false,
+    };
+    // timestamp field must be all digits, and colon must come before semicolon
+    colon_pos < semi_pos && rest[..colon_pos].iter().all(|b| b.is_ascii_digit())
+}
+
 fn detect_shell_format(content: &[u8]) -> String {
     for line in content.split(|&b| b == b'\n').take(10) {
         if line.is_empty() {
             continue;
         }
-        if line.starts_with(b": ") && line.contains(&b';') {
+        if looks_like_zsh_extended_history(line) {
             return "zsh".to_string();
         }
         if is_bash_timestamp_line(line) {

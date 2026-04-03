@@ -390,6 +390,34 @@ fn scrub_scan_zsh_histfile() {
 }
 
 #[test]
+fn scan_histfile_bash_noop_not_misdetected_as_zsh() {
+    use std::{fs, io::Write};
+
+    let pc = PxhCaller::new();
+
+    // Create a bash histfile that starts with `: ${VAR:=x}; cmd`
+    // This should NOT be misdetected as zsh
+    let histfile = pc.tmpdir().join("bash_noop_history");
+    let mut file = fs::File::create(&histfile).unwrap();
+    writeln!(file, ": ${{PATH:=/usr/bin}}; echo setup").unwrap();
+    writeln!(file, "export AWS_KEY=AKIAIOSFODNN7EXAMPLE").unwrap();
+    drop(file);
+
+    // Scan without --shellname - should detect as bash, not zsh
+    let histfile_str = histfile.to_str().unwrap();
+    let cmd = format!("scan --histfile {histfile_str}");
+    let output = pc.call(&cmd).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // If misdetected as zsh, the zsh parser would skip `export AWS_KEY=...`
+    // because it lacks the `: timestamp:duration;` prefix
+    assert!(
+        stdout.contains("AKIA"),
+        "bash histfile with `: $VAR; cmd` should not be misdetected as zsh, got: {stdout}"
+    );
+}
+
+#[test]
 fn scan_histfile_auto_detect_format() {
     use std::{fs, io::Write};
 
