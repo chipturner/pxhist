@@ -122,6 +122,10 @@ pub fn effective_host_set(config: &recall::config::Config) -> Vec<BString> {
 /// - If config hostname doesn't match live hostname, move old to aliases and update.
 /// - If config lacks machine_id, generate one.
 pub fn migrate_host_settings(conn: &Connection) {
+    if recall::config::Config::has_parse_error() {
+        log::warn!("config.toml has parse errors; skipping host-settings migration");
+        return;
+    }
     let config = recall::config::Config::load();
     let mut updates: Vec<(&str, toml_edit::Item)> = Vec::new();
     let live_hostname = get_hostname();

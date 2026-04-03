@@ -143,6 +143,18 @@ impl Config {
         Self::load_from_path(&config_path)
     }
 
+    /// Returns true if the config file exists but fails to parse.
+    /// Used to prevent migrate_host_settings from overwriting a corrupt config.
+    pub fn has_parse_error() -> bool {
+        let Some(path) = Self::default_config_path() else {
+            return false;
+        };
+        let Ok(content) = fs::read_to_string(&path) else {
+            return false; // file doesn't exist -- not a parse error
+        };
+        toml::from_str::<Config>(&content).is_err()
+    }
+
     pub fn default_config_path() -> Option<PathBuf> {
         Some(crate::pxh_config_dir()?.join("config.toml"))
     }
