@@ -246,6 +246,82 @@ fn show_with_case_insensitive() {
     assert_eq!(count_lines(&output.stdout), 3);
 }
 
+#[test]
+fn show_ignore_case_preserves_regex_escapes() {
+    // Bug 10 part 1: .to_lowercase() converts \S->\s, \D->\d, etc.
+    let helper = PxhTestHelper::new();
+
+    // Insert commands: one with non-whitespace chars around "token", one with whitespace
+    let insert = |cmd: &str| {
+        helper
+            .command_with_args(&[
+                "insert",
+                "--shellname",
+                "bash",
+                "--hostname",
+                "h",
+                "--username",
+                "u",
+                "--session-id",
+                "1",
+                cmd,
+            ])
+            .output()
+            .unwrap();
+    };
+    insert("XtokenY"); // \S matches X and Y
+    insert(" token "); // \S would NOT match spaces
+
+    // \S matches non-whitespace. With -i, the old code lowercased \S to \s,
+    // which matches whitespace -- the opposite.
+    let output = helper
+        .command_with_args(&["show", "--suppress-headers", "-i", r"\Stoken\S"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("XtokenY"),
+        "\\S should match non-whitespace around 'token', got: {stdout}"
+    );
+    assert!(!stdout.contains(" token "), "\\S should NOT match whitespace around 'token'");
+}
+
+#[test]
+fn show_ignore_case_applies_to_all_patterns() {
+    // Bug 10 part 2: extra_filter_step doesn't apply case_insensitive to patterns[1..]
+    let helper = PxhTestHelper::new();
+
+    // Insert a command with mixed case
+    helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "1",
+            "Foo Bar Baz",
+        ])
+        .output()
+        .unwrap();
+
+    // With --loosen -i, each pattern is matched independently.
+    // "foo" is the first pattern (used in SQLite REGEXP), "baz" is the second
+    // (used in extra_filter_step). Both should be case-insensitive.
+    let output = helper
+        .command_with_args(&["show", "--suppress-headers", "-i", "--loosen", "foo", "baz"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Foo Bar Baz"),
+        "-i should apply to all patterns including extra_filter_step, got: {stdout}"
+    );
+}
+
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn insert_seal_roundtrip() {

@@ -2308,6 +2308,7 @@ impl PrintableCommand for ShowCommand {
             .skip(1)
             .map(|s| {
                 regex::bytes::RegexBuilder::new(s.as_str())
+                    .case_insensitive(self.ignore_case)
                     .size_limit(REGEX_SIZE_LIMIT_DEFAULT)
                     .build()
             })
@@ -2347,9 +2348,7 @@ impl ShowCommand {
             self.patterns.join(".*\\s.*")
         };
 
-        // Add case-insensitive modifier and convert pattern to lowercase if needed
-        let pattern =
-            if self.ignore_case { format!("(?i){}", pattern.to_lowercase()) } else { pattern };
+        let pattern = if self.ignore_case { format!("(?i){pattern}") } else { pattern };
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
 
