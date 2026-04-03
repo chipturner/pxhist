@@ -758,6 +758,30 @@ impl DoctorCommand {
                         tx.commit()?;
                         xdg_conn.execute("DETACH DATABASE legacy", [])?;
 
+                        // Copy config.toml to XDG location before moving legacy dir
+                        let legacy_config = home.join(".pxh").join("config.toml");
+                        if legacy_config.exists() {
+                            let xdg_config_dir = std::env::var("XDG_CONFIG_HOME")
+                                .map(PathBuf::from)
+                                .unwrap_or_else(|_| home.join(".config"))
+                                .join("pxh");
+                            let xdg_config = xdg_config_dir.join("config.toml");
+                            if !xdg_config.exists() {
+                                let _ = std::fs::create_dir_all(&xdg_config_dir);
+                                if let Err(e) = std::fs::copy(&legacy_config, &xdg_config) {
+                                    eprintln!(
+                                        "    Warning: failed to copy config.toml to {}: {e}",
+                                        xdg_config.display()
+                                    );
+                                } else {
+                                    println!(
+                                        "    Copied config.toml to {}",
+                                        xdg_config.display()
+                                    );
+                                }
+                            }
+                        }
+
                         let backup = home.join(".pxh.backup");
                         std::fs::rename(home.join(".pxh"), &backup)?;
 
