@@ -261,6 +261,44 @@ fn test_manual_command_recording() -> Result<()> {
 }
 
 #[test]
+fn test_install_creates_rc_file_if_missing() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let home_dir = temp_dir.path();
+
+    // Do NOT create .bashrc -- it shouldn't exist yet
+    let bashrc_path = home_dir.join(".bashrc");
+    assert!(!bashrc_path.exists());
+
+    let output = pxh_command().env("HOME", home_dir).args(["install", "bash"]).output()?;
+
+    assert!(
+        output.status.success(),
+        "Install should succeed with missing rc file, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bashrc_content = fs::read_to_string(&bashrc_path)?;
+    assert!(bashrc_content.contains("pxh shell-config bash"), "pxh config should be written");
+
+    // Same for zsh
+    let zshrc_path = home_dir.join(".zshrc");
+    assert!(!zshrc_path.exists());
+
+    let output = pxh_command().env("HOME", home_dir).args(["install", "zsh"]).output()?;
+
+    assert!(
+        output.status.success(),
+        "Install should succeed with missing rc file, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let zshrc_content = fs::read_to_string(&zshrc_path)?;
+    assert!(zshrc_content.contains("pxh shell-config zsh"), "pxh config should be written");
+
+    Ok(())
+}
+
+#[test]
 fn test_install_rejects_invalid_shell() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let home_dir = temp_dir.path();

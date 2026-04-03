@@ -518,7 +518,7 @@ impl InstallCommand {
         pb.push(rc_file);
 
         // Check what's already installed in the RC file.
-        let contents = std::fs::read_to_string(&pb)?;
+        let contents = std::fs::read_to_string(&pb).unwrap_or_default();
         let has_shell_config = contents.contains("pxh shell-config");
 
         if has_shell_config {
@@ -541,7 +541,7 @@ impl InstallCommand {
             return Ok(());
         }
 
-        let mut file = OpenOptions::new().append(true).open(&pb)?;
+        let mut file = OpenOptions::new().append(true).create(true).open(&pb)?;
 
         write!(file, "\n# Install the pxh shell helpers to add interactive history realtime.")?;
         writeln!(
