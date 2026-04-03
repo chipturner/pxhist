@@ -14,7 +14,7 @@ use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
-use rusqlite::{Connection, Result, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, Result, TransactionBehavior};
 use tempfile::NamedTempFile;
 
 mod doctor;
@@ -1019,7 +1019,10 @@ impl ScanCommand {
 
         for entry in &entries {
             let path = entry.path();
-            let conn = match Connection::open(&path) {
+            let conn = match Connection::open_with_flags(
+                &path,
+                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Warning: Failed to open {}: {e}", path.display());
@@ -1028,8 +1031,17 @@ impl ScanCommand {
                 }
             };
 
-            if let Err(e) = pxh::initialize_base_schema(&conn) {
-                eprintln!("Warning: Failed to initialize schema for {}: {e}", path.display());
+            // Validate it's a pxh database before scanning
+            let is_pxh = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='command_history'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false);
+            if !is_pxh {
+                eprintln!("Warning: Skipping {} (not a pxh database)", path.display());
                 skipped_files += 1;
                 continue;
             }
@@ -2100,8 +2112,17 @@ impl ScrubCommand {
                 }
             };
 
-            if let Err(e) = pxh::initialize_base_schema(&conn) {
-                eprintln!(" schema error: {e}");
+            // Validate it's a pxh database
+            let is_pxh = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='command_history'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false);
+            if !is_pxh {
+                eprintln!(" skipped (not a pxh database)");
                 skipped_files += 1;
                 continue;
             }
