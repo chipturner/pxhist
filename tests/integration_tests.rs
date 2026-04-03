@@ -247,6 +247,47 @@ fn show_with_case_insensitive() {
 }
 
 #[test]
+fn show_multi_pattern_regex_precedence() {
+    // Bug: `patterns.join(".*\\s.*")` produces `git.*\s.*pull|push`
+    // which parses as `(git.*\s.*pull)|(push)` -- bare `push` matches everything
+    let helper = PxhTestHelper::new();
+
+    let insert = |sid: &str, cmd: &str| {
+        helper
+            .command_with_args(&[
+                "insert",
+                "--shellname",
+                "bash",
+                "--hostname",
+                "h",
+                "--username",
+                "u",
+                "--session-id",
+                sid,
+                "--",
+                cmd,
+            ])
+            .output()
+            .unwrap();
+    };
+    insert("1", "git pull origin main");
+    insert("2", "git push origin main");
+    insert("3", "docker push myimage"); // should NOT match `git pull|push`
+
+    let output = helper
+        .command_with_args(&["show", "--suppress-headers", "git", "pull|push"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("git pull"), "should match git pull");
+    assert!(stdout.contains("git push"), "should match git push");
+    assert!(
+        !stdout.contains("docker push"),
+        "should NOT match docker push (regex precedence bug), got: {stdout}"
+    );
+}
+
+#[test]
 fn show_ignore_case_preserves_regex_escapes() {
     // Bug 10 part 1: .to_lowercase() converts \S->\s, \D->\d, etc.
     let helper = PxhTestHelper::new();

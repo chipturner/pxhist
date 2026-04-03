@@ -2392,7 +2392,7 @@ impl ShowCommand {
         let pattern = if self.loosen {
             self.patterns.first().map_or_else(String::default, String::clone)
         } else {
-            self.patterns.join(".*\\s.*")
+            self.patterns.iter().map(|p| format!("(?:{p})")).collect::<Vec<_>>().join(".*\\s.*")
         };
 
         let pattern = if self.ignore_case { format!("(?i){pattern}") } else { pattern };
