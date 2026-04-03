@@ -644,10 +644,24 @@ impl MaintenanceCommand {
             println!("  Page size: {page_size} bytes");
             println!("  Freelist count: {freelist_count}");
 
+            // Validate this is actually a pxh database before modifying anything
+            let is_pxh_db: bool = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='command_history'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )
+                .map(|n| n > 0)?;
+            if !is_pxh_db {
+                return Err(format!(
+                    "'{db_name}' does not look like a pxh database (no command_history table); refusing to run maintenance"
+                )
+                .into());
+            }
+
             // Show row counts for main tables
-            let command_count: i64 = conn
-                .query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))
-                .unwrap_or_default(); // Handle case where table might not exist
+            let command_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0))?;
             println!("  Command history entries: {command_count}");
             println!();
 

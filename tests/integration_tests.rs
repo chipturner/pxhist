@@ -1484,3 +1484,38 @@ fn config_command_prints_path() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("config.toml"), "should print config path");
 }
+
+#[test]
+fn maintenance_rejects_non_pxh_database() {
+    let helper = PxhTestHelper::new();
+    let non_pxh_db = helper.home_dir().join("not_pxh.db");
+
+    // Create a valid SQLite database that is NOT a pxh database
+    let conn = rusqlite::Connection::open(&non_pxh_db).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, url TEXT);
+         INSERT INTO bookmarks VALUES (1, 'https://example.com');",
+    )
+    .unwrap();
+    drop(conn);
+
+    // Maintenance should refuse to operate on it
+    let output =
+        helper.command_with_args(&["maintenance", non_pxh_db.to_str().unwrap()]).output().unwrap();
+    assert!(!output.status.success(), "maintenance should fail on non-pxh database");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("does not look like a pxh database"),
+        "should explain why it refused, got: {combined}"
+    );
+
+    // Verify the database is untouched
+    let conn = rusqlite::Connection::open(&non_pxh_db).unwrap();
+    let url: String =
+        conn.query_row("SELECT url FROM bookmarks WHERE id = 1", [], |r| r.get(0)).unwrap();
+    assert_eq!(url, "https://example.com", "non-pxh database should be untouched");
+}
