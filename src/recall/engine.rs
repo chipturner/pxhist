@@ -59,12 +59,15 @@ impl SearchEngine {
         let mut pattern = String::with_capacity(query.len() * 2 + 1);
         pattern.push('%');
         for ch in query.chars() {
-            // Escape LIKE special characters
             match ch {
+                // Escape LIKE special characters
                 '%' | '_' | '\\' => {
                     pattern.push('\\');
                     pattern.push(ch);
                 }
+                // Normalize `-` and `*` to `%` to match nucleo's behavior
+                // of treating them as word separators
+                '-' | '*' => pattern.push('%'),
                 _ => pattern.push(ch),
             }
             pattern.push('%');
@@ -189,7 +192,7 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
             ELSE NULL END as duration
   FROM command_history
   {where_clause}
- ORDER BY start_unix_timestamp DESC
+ ORDER BY start_unix_timestamp DESC, id DESC
  LIMIT {}
 "#,
             self.result_limit * 3
@@ -584,6 +587,24 @@ mod tests {
         assert!(
             entries.iter().any(|e| e.command.contains("docker compose")),
             "fuzzy query 'dcu' should match 'docker compose up', got: {:?}",
+            entries.iter().map(|e| &e.command).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_like_filter_normalizes_dash_and_star() {
+        let conn = test_db();
+        insert_command(&conn, "git log --oneline", "host1", "/tmp", 1000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+
+        // "git-log" should match "git log" because `-` is normalized to wildcard
+        let entries =
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("git-log")).unwrap();
+        assert!(
+            entries.iter().any(|e| e.command.contains("git log")),
+            "query 'git-log' should match 'git log' (dash normalized), got: {:?}",
             entries.iter().map(|e| &e.command).collect::<Vec<_>>()
         );
     }
