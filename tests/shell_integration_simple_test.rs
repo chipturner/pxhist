@@ -181,6 +181,12 @@ fn test_shell_config_output() -> Result<()> {
     assert!(zsh_config.contains("_pxh_init"), "Should have init function");
     assert!(zsh_config.contains("add-zsh-hook"), "Should use zsh hooks");
 
+    // zshaddhistory hook must return 0 so pxh failures don't suppress native history
+    assert!(
+        zsh_config.contains("return 0\n}"),
+        "_pxh_addhistory must end with 'return 0' to avoid leaking pxh exit codes to zsh"
+    );
+
     Ok(())
 }
 

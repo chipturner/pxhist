@@ -13,6 +13,7 @@ _pxh_addhistory() {
 	--session-id "$PXH_SESSION_ID" \
 	--start-unix-timestamp "$started" \
 	"$cmd"
+    return 0
 }
 
 _pxh_update_last_status() {
