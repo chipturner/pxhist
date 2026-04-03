@@ -208,6 +208,43 @@ fn show_with_limit() {
 }
 
 #[test]
+fn show_loosen_honors_limit() {
+    let helper = PxhTestHelper::new();
+
+    // Insert 10 commands that match "echo" with different suffixes
+    for i in 1..=10 {
+        helper
+            .command_with_args(&[
+                "insert",
+                "--shellname",
+                "bash",
+                "--hostname",
+                "h",
+                "--username",
+                "u",
+                "--session-id",
+                &i.to_string(),
+                "--",
+                &format!("echo test_{i}"),
+            ])
+            .output()
+            .unwrap();
+    }
+
+    // --loosen --limit 3 should show only 3, not all
+    let output = helper
+        .command_with_args(&["show", "--suppress-headers", "--loosen", "--limit", "3", "echo"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        count_lines(&output.stdout),
+        3,
+        "--loosen --limit 3 should show 3 results, got: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+}
+
+#[test]
 fn show_with_case_insensitive() {
     let mut naked_cmd = Command::new(assert_cmd::cargo::cargo_bin!("pxh"));
     naked_cmd.env("PXH_DB_PATH", ":memory:").assert().success();

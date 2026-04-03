@@ -180,6 +180,9 @@ struct ShowCommand {
         help = "One or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
     )]
     patterns: Vec<String>,
+    /// Internal: SQL-level LIMIT (may differ from display limit for --loosen)
+    #[clap(skip)]
+    sql_limit: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -2384,6 +2387,14 @@ impl PrintableCommand for ShowCommand {
 }
 
 impl ShowCommand {
+    /// SQL-level LIMIT: may be larger than display_limit for --loosen,
+    /// which needs all candidates before client-side filtering.
+    fn query_limit(&self) -> usize {
+        self.sql_limit.unwrap_or(self.limit)
+    }
+}
+
+impl ShowCommand {
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         // If we are loosening then just use the first string for the
         // sqlite query.  This requires fetching all matches, however,
@@ -2438,7 +2449,7 @@ SELECT rowid, start_unix_timestamp, id
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#
                 ),
-                (pattern, session_id, self.display_limit() as i64),
+                (pattern, session_id, self.query_limit() as i64),
             )?;
         } else if here {
             conn.execute(
@@ -2452,7 +2463,7 @@ SELECT rowid, start_unix_timestamp, id
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#
                 ),
-                (working_directory.to_string_lossy(), pattern, self.display_limit() as i64),
+                (working_directory.to_string_lossy(), pattern, self.query_limit() as i64),
             )?;
         } else {
             conn.execute(
@@ -2465,7 +2476,7 @@ SELECT rowid, start_unix_timestamp, id
 ORDER BY start_unix_timestamp DESC, id DESC
 LIMIT ?"#
                 ),
-                (pattern, self.display_limit() as i64),
+                (pattern, self.query_limit() as i64),
             )?;
         }
 
@@ -2546,9 +2557,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Show(cmd) => {
-            let actual_limit =
-                if cmd.limit == 0 || cmd.loosen { i32::MAX as usize } else { cmd.limit };
-            cmd.limit = actual_limit;
+            if cmd.limit == 0 {
+                cmd.limit = i32::MAX as usize;
+            }
+            if cmd.loosen {
+                cmd.sql_limit = Some(i32::MAX as usize);
+            }
             cmd.go(make_conn_full()?)?;
         }
         Commands::Scrub(cmd) => {
