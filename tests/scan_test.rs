@@ -157,6 +157,36 @@ fn scan_confidence_critical() {
 }
 
 #[test]
+fn scan_confidence_levels_are_cumulative() {
+    let pc = PxhCaller::new();
+
+    // Insert a high-confidence-only pattern (S3 bucket -- not in CRITICAL_PATTERN_NAMES)
+    pc.call(
+        "insert --shellname bash --hostname h --username u --session-id 1 aws s3 cp data.csv s3://my-secret-bucket/uploads/",
+    )
+    .assert()
+    .success();
+
+    // Insert a low-confidence pattern (API Gateway URL)
+    pc.call("insert --shellname bash --hostname h --username u --session-id 2 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
+        .assert()
+        .success();
+
+    // --confidence low should include high-confidence patterns too
+    let output = pc.call("scan --confidence low").output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("s3://my-secret-bucket"),
+        "--confidence low should include high-level S3 bucket, got: {stdout}"
+    );
+    assert!(
+        stdout.contains("execute-api"),
+        "--confidence low should include low-level API gateway, got: {stdout}"
+    );
+}
+
+#[test]
 fn scan_verbose() {
     let pc = PxhCaller::new();
 

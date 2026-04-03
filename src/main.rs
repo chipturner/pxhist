@@ -1111,8 +1111,17 @@ pub fn build_secret_patterns(
 
     let (patterns, size_limit): (Vec<(&str, &str)>, usize) = match confidence {
         "critical" => (PATTERNS_CRITICAL.to_vec(), REGEX_SIZE_LIMIT_DEFAULT),
-        "high" => (PATTERNS_HIGH.to_vec(), REGEX_SIZE_LIMIT_DEFAULT),
-        "low" => (PATTERNS_LOW.to_vec(), REGEX_SIZE_LIMIT_DEFAULT),
+        "high" => {
+            let mut v = PATTERNS_CRITICAL.to_vec();
+            v.extend(PATTERNS_HIGH);
+            (v, REGEX_SIZE_LIMIT_DEFAULT)
+        }
+        "low" => {
+            let mut v = PATTERNS_CRITICAL.to_vec();
+            v.extend(PATTERNS_HIGH);
+            v.extend(PATTERNS_LOW);
+            (v, REGEX_SIZE_LIMIT_ALL)
+        }
         "all" => {
             let mut all = PATTERNS_CRITICAL.to_vec();
             all.extend(PATTERNS_HIGH);
