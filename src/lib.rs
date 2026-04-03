@@ -609,16 +609,13 @@ impl Invocation {
             "session_id": self.session_id,
             "command": PrettyExportString::from(self.command.as_slice()),
             "shellname": self.shellname,
-            "working_directory": self.working_directory.as_ref().map_or(
-                PrettyExportString::Readable(String::new()),
+            "working_directory": self.working_directory.as_ref().map(
                 |b| PrettyExportString::from(b.as_slice())
             ),
-            "hostname": self.hostname.as_ref().map_or(
-                PrettyExportString::Readable(String::new()),
+            "hostname": self.hostname.as_ref().map(
                 |b| PrettyExportString::from(b.as_slice())
             ),
-            "username": self.username.as_ref().map_or(
-                PrettyExportString::Readable(String::new()),
+            "username": self.username.as_ref().map(
                 |b| PrettyExportString::from(b.as_slice())
             ),
             "exit_status": self.exit_status,
