@@ -953,6 +953,29 @@ fn test_scrub_remote_requires_scan_or_pattern() -> Result<()> {
 }
 
 #[test]
+fn test_scrub_remote_rejects_empty_contraband() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+
+    // Try to run scrub --remote with an empty contraband string
+    let output = pxh_command()
+        .args([
+            "--db",
+            temp_dir.path().join("unused.db").to_str().unwrap(),
+            "scrub",
+            "--remote",
+            "fake-host",
+            "",
+        ])
+        .output()?;
+
+    assert!(!output.status.success(), "scrub --remote with empty contraband should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("non-empty"), "Error should mention non-empty: {stderr}");
+
+    Ok(())
+}
+
+#[test]
 fn test_v2_protocol_malformed_json_fails() -> Result<()> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path().join("server.db");

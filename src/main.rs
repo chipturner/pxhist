@@ -2124,6 +2124,15 @@ impl ScrubCommand {
         if !self.scan && self.contraband.is_none() {
             return Err("Remote scrub requires --scan or a contraband pattern".into());
         }
+        if let Some(c) = &self.contraband {
+            if c.is_empty() {
+                return Err("String to scrub must be non-empty; aborting.".into());
+            }
+        }
+        if !self.dry_run && !self.yes && !prompt_for_confirmation()? {
+            println!("Aborted.");
+            return Ok(());
+        }
 
         // Build the scrub options to send via the v2 protocol
         let scrub_pattern = if self.scan {
