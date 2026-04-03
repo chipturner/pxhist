@@ -1449,6 +1449,13 @@ impl SyncCommand {
             return Err(Box::from("Cannot specify both --remote and a directory path"));
         }
 
+        // Validate that --since is only used with remote sync
+        if self.since.is_some() && self.remote.is_none() && !self.stdin_stdout {
+            return Err(Box::from(
+                "--since requires --remote or --stdin-stdout (not supported in directory sync mode)",
+            ));
+        }
+
         // If in server mode, handle sync protocol
         if self.server {
             return self.handle_server_mode(&mut conn);
