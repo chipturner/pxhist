@@ -51,6 +51,22 @@ fn test_recall_here_and_global_conflict() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_recall_query_with_hyphen_prefix() -> Result<()> {
+    let helper = PxhTestHelper::new();
+
+    // --query with a hyphen-prefixed value like "--release" should be accepted
+    // (not rejected as an unknown flag)
+    let output = helper.command_with_args(&["recall", "--print", "-q", "--release"]).output()?;
+    assert!(
+        output.status.success(),
+        "recall --query with hyphen-prefixed value should succeed, got: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    Ok(())
+}
+
 // Tests for relative time formatting (these test the engine module)
 mod relative_time {
     use pxh::recall::engine::format_relative_time;

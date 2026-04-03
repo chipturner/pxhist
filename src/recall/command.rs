@@ -14,7 +14,7 @@ pub struct RecallCommand {
     pub here: bool,
     #[clap(long, help = "Search across all directories (overrides --here in config)")]
     pub global: bool,
-    #[clap(long, short = 'q', help = "Initial search query")]
+    #[clap(long, short = 'q', allow_hyphen_values = true, help = "Initial search query")]
     pub query: Option<String>,
     #[clap(long, short = 'p', help = "Print results instead of showing TUI")]
     pub print: bool,
