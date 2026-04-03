@@ -53,6 +53,25 @@ impl SearchEngine {
         self.host_set.contains(hostname)
     }
 
+    /// Build a LIKE pattern that matches a fuzzy subsequence.
+    /// "gcm" becomes "%g%c%m%" so it matches "git commit -m".
+    fn fuzzy_like_pattern(query: &str) -> String {
+        let mut pattern = String::with_capacity(query.len() * 2 + 1);
+        pattern.push('%');
+        for ch in query.chars() {
+            // Escape LIKE special characters
+            match ch {
+                '%' | '_' | '\\' => {
+                    pattern.push('\\');
+                    pattern.push(ch);
+                }
+                _ => pattern.push(ch),
+            }
+            pattern.push('%');
+        }
+        pattern
+    }
+
     /// Load history entries from the database, optionally filtered by a search query
     pub fn load_entries(
         &self,
@@ -88,8 +107,8 @@ impl SearchEngine {
             && !q.is_empty()
         {
             where_conditions
-                .push("CAST(full_command AS text) LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
-            params.push(q.to_string());
+                .push("CAST(full_command AS text) LIKE ? ESCAPE '\\' COLLATE NOCASE".to_string());
+            params.push(Self::fuzzy_like_pattern(q));
         }
 
         let where_clause = if where_conditions.is_empty() {
@@ -143,8 +162,8 @@ impl SearchEngine {
             && !q.is_empty()
         {
             where_conditions
-                .push("CAST(full_command AS text) LIKE '%' || ? || '%' COLLATE NOCASE".to_string());
-            params.push(q.to_string());
+                .push("CAST(full_command AS text) LIKE ? ESCAPE '\\' COLLATE NOCASE".to_string());
+            params.push(Self::fuzzy_like_pattern(q));
         }
 
         let where_clause = format!("WHERE {}", where_conditions.join(" AND "));
@@ -538,6 +557,35 @@ mod tests {
                 as i64;
         assert_eq!(format_relative_time(Some(now - 7200)), " 2h");
         assert_eq!(format_relative_time(Some(now - 36000)), "10h");
+    }
+
+    #[test]
+    fn test_like_filter_matches_fuzzy_subsequences() {
+        let conn = test_db();
+        insert_command(&conn, "git commit -m 'test'", "host1", "/tmp", 1000);
+        insert_command(&conn, "docker compose up", "host1", "/tmp", 2000);
+        insert_command(&conn, "kubectl get pods", "host1", "/tmp", 3000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+
+        // "gcm" should match "git commit -m" via subsequence (g...c...m)
+        let entries =
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("gcm")).unwrap();
+        assert!(
+            entries.iter().any(|e| e.command.contains("git commit")),
+            "fuzzy query 'gcm' should match 'git commit -m', got: {:?}",
+            entries.iter().map(|e| &e.command).collect::<Vec<_>>()
+        );
+
+        // "dcu" should match "docker compose up"
+        let entries =
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("dcu")).unwrap();
+        assert!(
+            entries.iter().any(|e| e.command.contains("docker compose")),
+            "fuzzy query 'dcu' should match 'docker compose up', got: {:?}",
+            entries.iter().map(|e| &e.command).collect::<Vec<_>>()
+        );
     }
 
     #[test]
