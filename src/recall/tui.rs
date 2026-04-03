@@ -100,6 +100,9 @@ fn sanitize_for_display(s: &str) -> String {
             '\n' | '\r' => result.push(' '),
             '\x00'..='\x08' | '\x0b'..='\x0c' | '\x0e'..='\x1f' | '\x7f' => {}
             '\t' => result.push(' '),
+            // C1 controls (U+0080-U+009F) include CSI (U+009B) and OSC (U+009D)
+            // which can inject terminal commands in 8-bit terminal modes
+            '\u{0080}'..='\u{009F}' => {}
             _ => result.push(c),
         }
     }
@@ -614,7 +617,7 @@ impl RecallTui {
 
         // Command (bold)
         let _ = execute!(stdout, SetAttribute(Attribute::Bold));
-        println!("{}", entry.command);
+        println!("{}", sanitize_for_display(&entry.command));
         let _ = execute!(stdout, SetAttribute(Attribute::Reset));
 
         // Timestamp
@@ -634,7 +637,7 @@ impl RecallTui {
             let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
             print!("   Dir: ");
             let _ = execute!(stdout, ResetColor);
-            println!("{}", String::from_utf8_lossy(dir));
+            println!("{}", sanitize_for_display(&String::from_utf8_lossy(dir)));
         }
 
         // Exit status
@@ -665,7 +668,7 @@ impl RecallTui {
             let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
             print!("  Host: ");
             let _ = execute!(stdout, ResetColor);
-            println!("{}", String::from_utf8_lossy(host));
+            println!("{}", sanitize_for_display(&String::from_utf8_lossy(host)));
         }
     }
 
@@ -990,7 +993,8 @@ impl RecallTui {
         if self.preview_config.show_directory
             && let Some(ref dir) = entry.working_directory
         {
-            info_parts.push(format!("Dir: {}", String::from_utf8_lossy(dir)));
+            info_parts
+                .push(format!("Dir: {}", sanitize_for_display(&String::from_utf8_lossy(dir))));
         }
 
         if self.preview_config.show_timestamp
@@ -1030,7 +1034,8 @@ impl RecallTui {
         if self.preview_config.show_hostname
             && let Some(ref host) = entry.hostname
         {
-            status_parts.push(format!("Host: {}", String::from_utf8_lossy(host)));
+            status_parts
+                .push(format!("Host: {}", sanitize_for_display(&String::from_utf8_lossy(host))));
         }
 
         queue!(w, SetForegroundColor(Color::DarkGrey))?;
@@ -1179,7 +1184,7 @@ impl RecallTui {
 
         // Draw input line
         queue!(w, MoveTo(0, input_y), Clear(ClearType::CurrentLine))?;
-        write!(w, "> {}", self.query)?;
+        write!(w, "> {}", sanitize_for_display(&self.query))?;
 
         // Draw mode indicators on same line (host filter + dir/global)
         let host_str = match self.host_filter {
@@ -1294,6 +1299,15 @@ mod tests {
         assert_eq!(sanitize_for_display("héllo wörld"), "héllo wörld");
         assert_eq!(sanitize_for_display("日本語"), "日本語");
         assert_eq!(sanitize_for_display("emoji 🎉 test"), "emoji 🎉 test");
+    }
+
+    #[test]
+    fn test_sanitize_strips_c1_controls() {
+        // U+009B is CSI in 8-bit terminal mode, U+009D is OSC
+        assert_eq!(sanitize_for_display("hello\u{009B}31mworld"), "hello31mworld");
+        assert_eq!(sanitize_for_display("test\u{009D}inject\u{009C}end"), "testinjectend");
+        // U+0085 NEL, U+008E SS2
+        assert_eq!(sanitize_for_display("a\u{0085}b\u{008E}c"), "abc");
     }
 
     #[test]
