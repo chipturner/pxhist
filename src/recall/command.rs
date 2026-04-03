@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::time::Instant;
 use std::{env, path::PathBuf};
@@ -72,6 +73,14 @@ impl RecallCommand {
             let query = self.query.as_deref();
             let entries = engine.load_entries(initial_mode, HostFilter::default(), query)?;
             let query_time = query_start.elapsed();
+
+            // Deduplicate by command text (matching TUI behavior) and respect limit
+            let mut seen = HashSet::new();
+            let entries: Vec<_> = entries
+                .into_iter()
+                .filter(|e| seen.insert(e.command.trim_end().to_string()))
+                .take(self.limit)
+                .collect();
 
             let mut stdout = io::stdout().lock();
             for entry in &entries {
