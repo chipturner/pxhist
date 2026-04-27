@@ -51,7 +51,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yml = "0.0"
 
 [dev-dependencies]
-assert_cmd = "2.2.0"
+assert_cmd = "2.2.1"
 predicates = "3.1.4"
 which = "8.0"
 rexpect = "0.7"
