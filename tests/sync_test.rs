@@ -1255,3 +1255,136 @@ fn test_directory_sync_handles_pre_migration_db() -> Result<()> {
 
     Ok(())
 }
+
+// =============================================================================
+// Incremental directory-sync (machine_id watermark) tests
+// =============================================================================
+
+fn set_local_machine_id(db_path: &Path, mid: u64) -> Result<()> {
+    use rusqlite::Connection;
+    let conn = Connection::open(db_path)?;
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value BLOB)", [])?;
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES ('local_machine_id', ?)",
+        [mid.to_string().as_bytes()],
+    )?;
+    Ok(())
+}
+
+fn get_watermark(db_path: &Path, mid: u64) -> Result<Option<i64>> {
+    use rusqlite::Connection;
+    let conn = Connection::open(db_path)?;
+    let key = format!("sync_watermark_{mid}");
+    let value: Option<Vec<u8>> =
+        conn.query_row("SELECT value FROM settings WHERE key = ?", [&key], |r| r.get(0)).ok();
+    Ok(value.and_then(|v| String::from_utf8(v).ok()?.parse::<i64>().ok()))
+}
+
+fn considered_count(stdout: &str) -> Option<i64> {
+    let needle = "considered ";
+    let start = stdout.find(needle)? + needle.len();
+    let rest = &stdout[start..];
+    let end = rest.find(' ')?;
+    rest[..end].parse().ok()
+}
+
+#[test]
+fn test_directory_sync_watermark_skips_seen_rows() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+    let src = sync_dir.join("src.db");
+    let dst = temp_dir.path().join("dst.db");
+
+    // Source: 3 rows, tagged with a machine_id so the watermark path activates.
+    insert_test_command(&src, "echo a", None)?;
+    insert_test_command(&src, "echo b", None)?;
+    insert_test_command(&src, "echo c", None)?;
+    set_local_machine_id(&src, 42)?;
+
+    // First sync: scans all 3 rows, persists watermark.
+    let out = pxh_command()
+        .args(["--db", dst.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .output()?;
+    assert!(out.status.success(), "first sync failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(considered_count(&stdout), Some(3), "first sync should consider 3 rows");
+    let wm1 = get_watermark(&dst, 42)?.expect("watermark should be set after first sync");
+    assert!(wm1 >= 3, "watermark {wm1} should cover all 3 source rows");
+
+    // Add 2 more rows to the source.
+    insert_test_command(&src, "echo d", None)?;
+    insert_test_command(&src, "echo e", None)?;
+
+    // Second sync: should only consider the 2 new rows above the watermark.
+    let out = pxh_command()
+        .args(["--db", dst.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .output()?;
+    assert!(out.status.success(), "second sync failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(considered_count(&stdout), Some(2), "second sync should only consider new rows");
+    let wm2 = get_watermark(&dst, 42)?.expect("watermark should advance after second sync");
+    assert!(wm2 > wm1, "watermark should advance: {wm1} -> {wm2}");
+
+    Ok(())
+}
+
+#[test]
+fn test_directory_sync_falls_back_when_no_machine_id() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+    let src = sync_dir.join("src.db");
+    let dst = temp_dir.path().join("dst.db");
+
+    // Source with no local_machine_id setting -- old DB shape.
+    insert_test_command(&src, "echo a", None)?;
+    insert_test_command(&src, "echo b", None)?;
+
+    // First sync still merges everything (full-scan fallback).
+    let out = pxh_command()
+        .args(["--db", dst.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .output()?;
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(considered_count(&stdout), Some(2));
+
+    // No watermark should be stored for an unknown machine_id.
+    use rusqlite::Connection;
+    let conn = Connection::open(&dst)?;
+    let watermarks: i64 = conn
+        .query_row("SELECT COUNT(*) FROM settings WHERE key LIKE 'sync_watermark_%'", [], |r| {
+            r.get(0)
+        })
+        .unwrap_or(0);
+    assert_eq!(watermarks, 0, "no watermark should be stored without a source machine_id");
+
+    Ok(())
+}
+
+#[test]
+fn test_directory_sync_warns_on_duplicate_machine_ids() -> Result<()> {
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+    let src1 = sync_dir.join("src1.db");
+    let src2 = sync_dir.join("src2.db");
+    let dst = temp_dir.path().join("dst.db");
+
+    insert_test_command(&src1, "echo from_src1", None)?;
+    insert_test_command(&src2, "echo from_src2", None)?;
+    set_local_machine_id(&src1, 99)?;
+    set_local_machine_id(&src2, 99)?;
+
+    let out = pxh_command()
+        .args(["--db", dst.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .output()?;
+    assert!(out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("machine_id 99") && stderr.contains("clone"),
+        "expected duplicate-machine_id warning, got stderr: {stderr}"
+    );
+
+    Ok(())
+}

@@ -177,6 +177,14 @@ pub fn migrate_host_settings(conn: &Connection) {
     if config.host.hostname.is_none() {
         let _ = conn.execute("DELETE FROM settings WHERE key = 'original_hostname'", []);
     }
+
+    // Mirror machine_id into the DB so sync can identify this database by its
+    // machine identity (independent of file path). Re-load config to pick up
+    // any value we just wrote above.
+    if let Some(machine_id) = recall::config::Config::load().host.machine_id {
+        let bs = BString::from(machine_id.to_string());
+        let _ = set_setting(conn, "local_machine_id", &bs);
+    }
 }
 /// Return the pxh data directory. Prefers XDG, falls back to `~/.pxh` if it exists.
 /// New installs default to `$XDG_DATA_HOME/pxh` (`~/.local/share/pxh`).
@@ -250,7 +258,7 @@ pub fn initialize_full_schema(conn: &Connection) -> Result<(), Box<dyn std::erro
 }
 
 /// Current schema version -- bump when adding new migrations below.
-pub const CURRENT_SCHEMA_VERSION: i32 = 2;
+pub const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 /// Run versioned schema migrations tracked via PRAGMA user_version.
 pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -272,6 +280,15 @@ pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error
             "CREATE INDEX IF NOT EXISTS idx_session_id_desc ON command_history(session_id, id DESC)",
         )?;
         conn.pragma_update(None, "user_version", 2)?;
+    }
+
+    if version < 3 {
+        // v3 introduces settings.local_machine_id so sync can identify a DB by
+        // its machine identity rather than by file path. The actual write
+        // happens in migrate_host_settings (Install/Config of the local DB
+        // only) -- doing it here would contaminate foreign databases that
+        // also pass through run_schema_migrations during the sync merge.
+        conn.pragma_update(None, "user_version", 3)?;
     }
 
     Ok(())
@@ -387,6 +404,19 @@ fn is_busy(e: &rusqlite::Error) -> bool {
         rusqlite::Error::SqliteFailure(err, _)
             if matches!(err.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
     )
+}
+
+/// Read this database's `local_machine_id` setting, parsed as u64.
+/// Accepts either TEXT or BLOB storage so we tolerate values written by
+/// non-pxh tooling. Returns None if the setting is absent or unparseable --
+/// callers should fall back to non-watermarked behavior in that case.
+pub fn read_local_machine_id(conn: &Connection) -> Option<u64> {
+    conn.query_row("SELECT value FROM settings WHERE key = 'local_machine_id'", [], |row| {
+        let bytes = row.get_ref(0)?.as_bytes().unwrap_or(&[]);
+        Ok(std::str::from_utf8(bytes).ok().and_then(|s| s.parse::<u64>().ok()))
+    })
+    .ok()
+    .flatten()
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -1312,7 +1342,7 @@ mod tests {
         run_schema_migrations(&conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
 
         // machine_id column should exist
         conn.execute(
@@ -1329,7 +1359,7 @@ mod tests {
         run_schema_migrations(&conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]
@@ -1346,7 +1376,7 @@ mod tests {
         run_schema_migrations(&conn).unwrap();
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
     }
 
     #[test]

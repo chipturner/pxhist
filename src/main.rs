@@ -204,6 +204,19 @@ struct ImportCommand {
     dry_run: bool,
 }
 
+/// Outcome of merging one source database into ours.
+#[derive(Debug)]
+struct MergeStats {
+    /// Rows we actually scanned in the source (above the watermark, if any).
+    considered: i64,
+    /// Rows newly inserted into main.
+    added: i64,
+    /// Rows skipped due to secret-pattern filtering.
+    filtered: i64,
+    /// `MAX(id)` from the source -- the next watermark for it.
+    new_max_id: Option<i64>,
+}
+
 #[derive(Parser, Debug)]
 struct SyncCommand {
     #[clap(help = "Directory for sync operations (required for directory-based sync)")]
@@ -1526,19 +1539,19 @@ impl SyncCommand {
             let entries = fs::read_dir(dirname)?;
             let db_extension = OsStr::new("db");
             let filter_secrets = !self.no_secret_filter;
+            // Track machine_ids seen this run so we can warn if two source
+            // databases claim the same identity (cloned install, misconfig).
+            let mut seen_machine_ids: std::collections::HashMap<u64, PathBuf> =
+                std::collections::HashMap::new();
             for entry in entries {
                 let path = entry?.path();
                 if path.extension() == Some(db_extension) && output_path != path {
-                    print!("Syncing from {}...", path.to_string_lossy());
-                    let (other_count, added_count, filtered_count) =
-                        Self::merge_database_from_file_filtered(&mut conn, path, filter_secrets)?;
-                    if filtered_count > 0 {
-                        println!(
-                            "done, considered {other_count} rows, added {added_count}, filtered {filtered_count}"
-                        );
-                    } else {
-                        println!("done, considered {other_count} rows and added {added_count}");
-                    }
+                    Self::sync_from_directory_source(
+                        &mut conn,
+                        path,
+                        filter_secrets,
+                        &mut seen_machine_ids,
+                    )?;
                 }
             }
         }
@@ -1658,13 +1671,89 @@ impl SyncCommand {
         Ok(())
     }
 
-    /// Merge history from a database file with optional secret filtering.
-    /// Returns (records_considered, records_added, records_filtered).
+    /// Sync from one source DB during a directory-mode merge. Reads the source's
+    /// `local_machine_id` to look up an incremental-sync watermark in our own
+    /// settings, then merges only rows above that watermark. Falls back to a
+    /// full scan if the source doesn't advertise a `local_machine_id` (older
+    /// pxh, never ran `install`). Tracks duplicate machine_ids across this run
+    /// and warns -- two source databases shouldn't share identity.
+    fn sync_from_directory_source(
+        conn: &mut Connection,
+        path: PathBuf,
+        filter_secrets: bool,
+        seen_machine_ids: &mut std::collections::HashMap<u64, PathBuf>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // Quick read-only peek at the source for its machine_id. Open read-only
+        // so we don't touch the file before the merge function runs its own
+        // schema setup with a regular connection.
+        let mut source_machine_id = {
+            let other = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
+            other.as_ref().and_then(pxh::read_local_machine_id)
+        };
+
+        if let Some(mid) = source_machine_id
+            && let Some(prev) = seen_machine_ids.insert(mid, path.clone())
+        {
+            eprintln!(
+                "Warning: {} and {} both report machine_id {mid} -- one of them is likely a clone or misconfigured. Falling back to full scan for this source to avoid silently missing rows.",
+                prev.display(),
+                path.display()
+            );
+            // Skip watermark + machine_id-keyed bookkeeping for this source --
+            // the two DBs share an identity, so their id spaces aren't
+            // comparable. INSERT OR IGNORE still keeps the merge correct.
+            source_machine_id = None;
+        }
+
+        // Resolve watermark for this source (None means full-scan fallback).
+        let watermark_key = source_machine_id.map(|mid| format!("sync_watermark_{mid}"));
+        let watermark: Option<i64> = watermark_key.as_deref().and_then(|key| {
+            pxh::get_setting(conn, key)
+                .ok()
+                .flatten()
+                .and_then(|bs| std::str::from_utf8(bs.as_slice()).ok()?.parse::<i64>().ok())
+        });
+
+        print!("Syncing from {}...", path.to_string_lossy());
+        let stats = Self::merge_database_from_file_filtered(conn, path, filter_secrets, watermark)?;
+
+        // Sanity check: if the source's max(id) regressed below our watermark,
+        // the source DB was probably restored from backup or rebuilt. The merge
+        // we just ran missed nothing (we had it all), but reset the watermark
+        // to the new max so future syncs use the correct value.
+        if let (Some(wm), Some(new_max)) = (watermark, stats.new_max_id)
+            && new_max < wm
+        {
+            eprintln!(" (notice: source max(id) {new_max} < watermark {wm}; resetting watermark)");
+        }
+
+        if stats.filtered > 0 {
+            println!(
+                "done, considered {} rows, added {}, filtered {}",
+                stats.considered, stats.added, stats.filtered
+            );
+        } else {
+            println!("done, considered {} rows and added {}", stats.considered, stats.added);
+        }
+
+        // Persist the new watermark when we have a machine_id key for it.
+        if let (Some(key), Some(new_max)) = (watermark_key, stats.new_max_id) {
+            let bs = BString::from(new_max.to_string());
+            pxh::set_setting(conn, &key, &bs)?;
+        }
+        Ok(())
+    }
+
+    /// Merge history from a database file with optional secret filtering and
+    /// an optional incremental-sync watermark (skip rows in `other` whose
+    /// `id <= watermark`). The unsealed-row UPDATE always scans all of `other`
+    /// since seal info may sit at any id, watermark or not.
     fn merge_database_from_file_filtered(
         conn: &mut Connection,
         path: PathBuf,
         filter_secrets: bool,
-    ) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
+        watermark: Option<i64>,
+    ) -> Result<MergeStats, Box<dyn std::error::Error>> {
         // Ensure the other database has the current schema before ATTACHing,
         // so older databases (e.g. pre-machine_id) don't fail on missing columns.
         {
@@ -1679,6 +1768,8 @@ impl SyncCommand {
         tx.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
 
         let mut filtered_count: i64 = 0;
+        // -1 sentinel matches all rows (id is AUTOINCREMENT, so always >= 1).
+        let lo = watermark.unwrap_or(-1);
 
         if filter_secrets {
             // Build secret patterns for filtering (use "critical" confidence by default)
@@ -1695,8 +1786,9 @@ INSERT OR IGNORE INTO main.command_history (
 SELECT session_id, full_command, shellname, hostname, username,
     working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
+WHERE id > ?
 "#,
-                    (),
+                    [lo],
                 )?;
             } else {
                 // Fetch records from other database and filter
@@ -1705,10 +1797,11 @@ FROM other.command_history
 SELECT session_id, full_command, shellname, hostname, username,
        working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
+WHERE id > ?
 "#,
                 )?;
 
-                let mut rows = stmt.query([])?;
+                let mut rows = stmt.query([lo])?;
                 while let Some(row) = rows.next()? {
                     let full_command: Vec<u8> = row.get(1)?;
 
@@ -1753,14 +1846,16 @@ INSERT OR IGNORE INTO main.command_history (
 SELECT session_id, full_command, shellname, hostname, username,
     working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
+WHERE id > ?
 "#,
-                (),
+                [lo],
             )?;
         }
 
         // Upgrade unsealed rows: if a command was synced while still running
         // (exit_status/end_unix_timestamp NULL), fill in the sealed values from
-        // the other database where available.
+        // the other database where available. Scans all of `other` regardless
+        // of watermark -- a seal can land at any id.
         tx.execute(
             r#"
 UPDATE main.command_history
@@ -1781,14 +1876,25 @@ WHERE main.command_history.exit_status IS NULL
         let after_count: i64 =
             tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
 
-        // Count how many records were in the other database
+        // Rows considered = source rows we actually scanned (above watermark).
         let other_count: i64 = tx
-            .prepare("SELECT COUNT(*) FROM other.command_history")?
-            .query_row((), |r| r.get(0))?;
+            .prepare("SELECT COUNT(*) FROM other.command_history WHERE id > ?")?
+            .query_row([lo], |r| r.get(0))?;
+
+        // Highest id in source -- caller persists as the next watermark.
+        let new_max_id: Option<i64> = tx
+            .prepare("SELECT MAX(id) FROM other.command_history")?
+            .query_row((), |r| r.get(0))
+            .ok();
 
         tx.commit()?;
         conn.execute("DETACH DATABASE other", ())?;
-        Ok((other_count, after_count - before_count, filtered_count))
+        Ok(MergeStats {
+            considered: other_count,
+            added: after_count - before_count,
+            filtered: filtered_count,
+            new_max_id,
+        })
     }
 
     fn handle_server_mode(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
@@ -1952,12 +2058,18 @@ WHERE main.command_history.exit_status IS NULL
         // Determine if we should filter secrets
         let filter_secrets = !options.no_secret_filter.unwrap_or(false);
 
-        // Use the merge function with optional secret filtering
-        let (other_count, added_count, filtered_count) = Self::merge_database_from_file_filtered(
+        // Use the merge function with optional secret filtering.
+        // SSH/stdin-stdout sync streams a full DB snapshot each time, so we
+        // don't apply a watermark here -- pass None for full-scan behavior.
+        let stats = Self::merge_database_from_file_filtered(
             conn,
             temp_file.path().to_path_buf(),
             filter_secrets,
+            None,
         )?;
+        let other_count = stats.considered;
+        let added_count = stats.added;
+        let filtered_count = stats.filtered;
 
         // Get current hostname and database path
         let current_hostname = pxh::get_hostname();
