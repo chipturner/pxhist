@@ -8,13 +8,14 @@ use std::{
     os::unix::ffi::{OsStrExt, OsStringExt},
     path::{Path, PathBuf},
     str,
+    time::Duration,
 };
 
 use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
-use rusqlite::{Connection, OpenFlags, Result, TransactionBehavior};
+use rusqlite::{Connection, OpenFlags, Result};
 use tempfile::NamedTempFile;
 
 mod doctor;
@@ -566,16 +567,21 @@ fi"#
 }
 
 impl SealCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
-        conn.execute(
-            r#"
+    fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        // Short busy_timeout: let our own jittered retry loop handle contention
+        // so a single waiter can't burn the full timeout while others slip past.
+        conn.busy_timeout(Duration::from_millis(100))?;
+        pxh::with_write_retry(&mut conn, Duration::from_secs(1), |tx| {
+            tx.execute(
+                r#"
 UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
  WHERE exit_status is NULL
    AND end_unix_timestamp IS NULL
    AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"#,
-            (self.exit_status, self.end_unix_timestamp, self.session_id),
-        )?;
-        Ok(())
+                (self.exit_status, self.end_unix_timestamp, self.session_id),
+            )?;
+            Ok(())
+        })
     }
 }
 
@@ -2715,9 +2721,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 session_id: cmd.session_id,
                 machine_id: config.host.machine_id,
             };
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
-            invocation.insert(&tx)?;
-            tx.commit()?;
+            // Short busy_timeout: let our own jittered retry loop handle contention
+            // so a single waiter can't burn the full timeout while others slip past.
+            conn.busy_timeout(Duration::from_millis(100))?;
+            pxh::with_write_retry(&mut conn, Duration::from_secs(1), |tx| invocation.insert(tx))?;
         }
         Commands::Doctor(cmd) => {
             let conn = make_conn().ok();

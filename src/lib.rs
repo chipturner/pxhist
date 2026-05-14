@@ -12,14 +12,17 @@ use std::{
     path::{Path, PathBuf},
     str,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use bstr::{BString, ByteSlice, io::BufReadExt};
 use chrono::prelude::{Local, TimeZone};
 use itertools::Itertools;
 use regex::bytes::Regex;
-use rusqlite::{Connection, Error, Result, Row, Transaction, functions::FunctionFlags};
+use rusqlite::{
+    Connection, Error, ErrorCode, Result, Row, Transaction, TransactionBehavior,
+    functions::FunctionFlags,
+};
 use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -317,14 +320,73 @@ fn sqlite_connection_inner(
     conn.pragma_update(None, "mmap_size", 268435456_i64)?; // 256 MB
     conn.pragma_update(None, "synchronous", "NORMAL")?;
 
-    initialize_base_schema(&conn)?;
-    run_schema_migrations(&conn)?;
+    // Schema DDL is idempotent but not free -- skip it once the database is at
+    // the current version. Hot-path commands (insert, seal) open a fresh
+    // connection per invocation, so this saves a parse + several PRAGMA calls
+    // every time.
+    let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version != CURRENT_SCHEMA_VERSION {
+        initialize_base_schema(&conn)?;
+        run_schema_migrations(&conn)?;
+    }
 
     if full {
         initialize_full_schema(&conn)?;
     }
 
     Ok(conn)
+}
+
+/// Run `f` against a write transaction, retrying on `SQLITE_BUSY`/`SQLITE_LOCKED`
+/// with exponential backoff and jitter. Each attempt uses `BEGIN IMMEDIATE` so
+/// contention is detected up front rather than mid-transaction. Gives up once
+/// `max_total` elapses and returns the final busy error.
+///
+/// Why this exists: SQLite's own `busy_timeout` retries are unfair under heavy
+/// write contention (a single waiter can spend the full timeout sleeping while
+/// other writers slip past). Jittered backoff at the caller gives fairness and
+/// a bounded worst-case latency suitable for the shell hot path.
+pub fn with_write_retry<T, F>(
+    conn: &mut Connection,
+    max_total: Duration,
+    mut f: F,
+) -> Result<T, Box<dyn std::error::Error>>
+where
+    F: FnMut(&Transaction) -> rusqlite::Result<T>,
+{
+    let start = Instant::now();
+    let mut backoff = Duration::from_micros(500);
+    let cap = Duration::from_millis(50);
+    loop {
+        let attempt = (|| -> rusqlite::Result<T> {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let value = f(&tx)?;
+            tx.commit()?;
+            Ok(value)
+        })();
+        match attempt {
+            Ok(v) => return Ok(v),
+            Err(e) if is_busy(&e) => {
+                let elapsed = start.elapsed();
+                if elapsed >= max_total {
+                    return Err(e.into());
+                }
+                let jitter_us = rand::random::<u64>() % backoff.as_micros().max(1) as u64;
+                let sleep = backoff + Duration::from_micros(jitter_us);
+                std::thread::sleep(sleep.min(max_total - elapsed));
+                backoff = (backoff * 2).min(cap);
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
+fn is_busy(e: &rusqlite::Error) -> bool {
+    matches!(
+        e,
+        rusqlite::Error::SqliteFailure(err, _)
+            if matches!(err.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
+    )
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -347,7 +409,7 @@ impl Invocation {
         self.command == other.command && self.start_unix_timestamp == other.start_unix_timestamp
     }
 
-    pub fn insert(&self, tx: &Transaction) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn insert(&self, tx: &Transaction) -> rusqlite::Result<()> {
         tx.execute(
             r#"
 INSERT OR IGNORE INTO command_history (
@@ -376,7 +438,6 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
                 self.machine_id.map(|id| id as i64),
             ),
         )?;
-
         Ok(())
     }
 }
@@ -1286,5 +1347,67 @@ mod tests {
 
         let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0)).unwrap();
         assert_eq!(version, 2);
+    }
+
+    #[test]
+    fn test_with_write_retry_succeeds_immediately() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (v INTEGER);").unwrap();
+        with_write_retry(&mut conn, Duration::from_secs(1), |tx| {
+            tx.execute("INSERT INTO t VALUES (?)", [42])?;
+            Ok(())
+        })
+        .unwrap();
+        let v: i64 = conn.query_row("SELECT v FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, 42);
+    }
+
+    #[test]
+    fn test_with_write_retry_propagates_non_busy_error() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let result = with_write_retry(&mut conn, Duration::from_secs(1), |tx| {
+            tx.execute("SELECT * FROM does_not_exist", [])?;
+            Ok(())
+        });
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_with_write_retry_retries_then_succeeds() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (v INTEGER);").unwrap();
+        let mut calls = 0;
+        with_write_retry(&mut conn, Duration::from_secs(1), |tx| {
+            calls += 1;
+            if calls < 3 {
+                // Synthesize a busy error to drive the retry loop.
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                    None,
+                ));
+            }
+            tx.execute("INSERT INTO t VALUES (?)", [1])?;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(calls, 3);
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM t", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+    }
+
+    #[test]
+    fn test_with_write_retry_gives_up_after_timeout() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        let start = Instant::now();
+        let result: Result<(), _> = with_write_retry(&mut conn, Duration::from_millis(20), |_tx| {
+            Err(rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
+                None,
+            ))
+        });
+        let elapsed = start.elapsed();
+        assert!(result.is_err());
+        // Should give up roughly at the cap, not run forever.
+        assert!(elapsed < Duration::from_millis(200), "took {elapsed:?}");
     }
 }
