@@ -38,3 +38,12 @@ jobs:
 
     - name: Run security audit
       run: cargo audit
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+    - uses: EmbarkStudios/cargo-deny-action@v2
