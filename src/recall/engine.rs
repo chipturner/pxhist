@@ -233,8 +233,11 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
     }
 
     /// Filter entries using nucleo fuzzy matching.
-    /// Returns (index, highlight_positions) sorted by match score (word boundary matches
-    /// favored, gaps penalized), with recency as a tiebreaker for equal scores.
+    /// Returns (index, highlight_positions) sorted by combined score:
+    /// nucleo's fuzzy score (word-boundary matches favored, gaps penalized)
+    /// plus a recency boost so freshly-used commands outrank stale ones at
+    /// similar match quality. Original-index ascending breaks remaining ties
+    /// (more recent first).
     pub fn filter_entries(
         &mut self,
         entries: &[HistoryEntry],
@@ -244,6 +247,11 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
             // No query - return all entries without match positions
             return (0..entries.len()).map(|i| (i, Vec::new())).collect();
         }
+
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
         // Nucleo's fuzzy matcher gives word-boundary bonuses, treating `-` as a separator.
         // This causes `--release` to score poorly (empty segments before "release").
@@ -287,7 +295,8 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
                     let haystack = Utf32Str::new(&entry.command, &mut buf);
                     scoring_pattern.indices(haystack, &mut self.matcher, &mut indices);
                 }
-                scored_results.push((original_idx, score, indices));
+                let boosted = score + frecency_boost(entry.timestamp, now_secs);
+                scored_results.push((original_idx, boosted, indices));
             }
         }
 
@@ -296,6 +305,25 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
 
         // Return just the indices and highlight positions
         scored_results.into_iter().map(|(idx, _, indices)| (idx, indices)).collect()
+    }
+}
+
+/// Recency boost added to nucleo's fuzzy score so freshly-used commands outrank
+/// stale ones at similar match quality. The step values are tuned to nucleo's
+/// natural range (~16-32 for single-char queries): the boost can flip ordering
+/// for short queries, but for longer queries -- where nucleo scores grow with
+/// each matched char -- it degrades gracefully into a tiebreaker.
+fn frecency_boost(timestamp: Option<i64>, now_secs: i64) -> u32 {
+    let Some(ts) = timestamp else { return 0 };
+    let age_secs = (now_secs - ts).max(0);
+    let age_days = age_secs as f64 / 86400.0;
+    match age_days {
+        d if d < 0.04 => 24, // < ~1 hour
+        d if d < 1.0 => 16,
+        d if d < 7.0 => 10,
+        d if d < 30.0 => 5,
+        d if d < 90.0 => 2,
+        _ => 0,
     }
 }
 
@@ -442,6 +470,80 @@ mod tests {
         let filtered = engine.filter_entries(&entries, "*.rs");
         assert_eq!(filtered.len(), 1);
         assert!(entries[filtered[0].0].command.contains("*.rs"));
+    }
+
+    #[test]
+    fn test_frecency_boost_handles_missing_timestamp() {
+        assert_eq!(frecency_boost(None, 1_000_000), 0);
+    }
+
+    #[test]
+    fn test_frecency_boost_decays_in_steps() {
+        let now = 86_400 * 10_000;
+        let day = 86_400;
+        assert_eq!(frecency_boost(Some(now), now), 24);
+        assert_eq!(frecency_boost(Some(now - 1800), now), 24); // 30 min
+        assert_eq!(frecency_boost(Some(now - 7200), now), 16); // 2 hours
+        assert_eq!(frecency_boost(Some(now - day * 3), now), 10);
+        assert_eq!(frecency_boost(Some(now - day * 14), now), 5);
+        assert_eq!(frecency_boost(Some(now - day * 60), now), 2);
+        assert_eq!(frecency_boost(Some(now - day * 200), now), 0);
+    }
+
+    #[test]
+    fn test_frecency_boost_clamps_future_timestamps() {
+        // Clock skew shouldn't yield a smaller boost than "now".
+        let now = 86_400 * 10_000;
+        assert_eq!(frecency_boost(Some(now + 86_400), now), 24);
+    }
+
+    fn wall_clock_now() -> i64 {
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    #[test]
+    fn test_filter_entries_recent_beats_older_better_fuzzy_match() {
+        // For query "p": "python ..." gets nucleo's first-char bonus, while
+        // "cd /p" only gets a word-boundary bonus -- so without frecency the
+        // older python entry would win. With frecency, the fresh /p entry
+        // should outrank it.
+        let conn = test_db();
+        let now = wall_clock_now();
+
+        insert_command(&conn, "python script.py", "host1", "/tmp", now - 86_400 * 200);
+        insert_command(&conn, "cd /p", "host1", "/tmp", now - 60);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        let filtered = engine.filter_entries(&entries, "p");
+
+        assert!(filtered.len() >= 2);
+        assert_eq!(
+            entries[filtered[0].0].command, "cd /p",
+            "fresh /p should outrank old python under frecency for query 'p'"
+        );
+    }
+
+    #[test]
+    fn test_filter_entries_preserves_fuzzy_quality_when_equally_recent() {
+        // Both entries are within the same frecency tier, so the boost cancels
+        // and the better fuzzy match (first-char "python") should still win.
+        let conn = test_db();
+        let now = wall_clock_now();
+
+        insert_command(&conn, "python script.py", "host1", "/tmp", now - 60);
+        insert_command(&conn, "cd /p", "host1", "/tmp", now - 120);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        let filtered = engine.filter_entries(&entries, "p");
+
+        assert_eq!(
+            entries[filtered[0].0].command, "python script.py",
+            "with both recent, fuzzy quality (first-char match) should win"
+        );
     }
 
     #[test]
