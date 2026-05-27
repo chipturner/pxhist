@@ -65,9 +65,9 @@ impl SearchEngine {
                     pattern.push('\\');
                     pattern.push(ch);
                 }
-                // Normalize `-` and `*` to `%` to match nucleo's behavior
-                // of treating them as word separators
-                '-' | '*' => pattern.push('%'),
+                // Recall-separator chars become wildcards so the prefilter
+                // mirrors `normalize_recall_char()` in scoring (see below).
+                c if is_recall_separator(c) => pattern.push('%'),
                 _ => pattern.push(ch),
             }
             pattern.push('%');
@@ -253,13 +253,14 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
-        // Nucleo's fuzzy matcher gives word-boundary bonuses, treating `-` as a separator.
-        // This causes `--release` to score poorly (empty segments before "release").
-        // We normalize dashes and asterisks to spaces for scoring so `--release` and `release`
-        // rank equally, and `*` acts as a word separator in queries.
+        // Nucleo distinguishes whitespace boundaries (BONUS_BOUNDARY_WHITE) from
+        // delimiter boundaries (BONUS_BOUNDARY_DELIMITER, ~40% smaller), so for query
+        // "foobar" the haystack `cat /foobar` scores meaningfully below `foobar plain`
+        // -- enough that the frecency boost can't always close the gap. Normalizing
+        // `-`, `*`, `/` to spaces in both query and haystack puts these match positions
+        // in the BOUNDARY_WHITE tier. (`*` also acts as a word separator in queries.)
         // The original query is used for highlighting so `--release` shows highlighted dashes.
-        let normalized_query: String =
-            query.chars().map(|c| if c == '-' || c == '*' { ' ' } else { c }).collect();
+        let normalized_query: String = query.chars().map(normalize_recall_char).collect();
         let scoring_pattern = Pattern::parse(
             &normalized_query,
             nucleo::pattern::CaseMatching::Smart,
@@ -276,10 +277,9 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
         let mut normalized_cmd = String::new();
 
         for (original_idx, entry) in entries.iter().enumerate() {
-            // Normalize command for scoring (- and * → space)
+            // Normalize command for scoring (-, *, / → space)
             normalized_cmd.clear();
-            normalized_cmd
-                .extend(entry.command.chars().map(|c| if c == '-' || c == '*' { ' ' } else { c }));
+            normalized_cmd.extend(entry.command.chars().map(normalize_recall_char));
             buf.clear();
             let haystack = Utf32Str::new(&normalized_cmd, &mut buf);
 
@@ -306,6 +306,20 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
         // Return just the indices and highlight positions
         scored_results.into_iter().map(|(idx, _, indices)| (idx, indices)).collect()
     }
+}
+
+/// Characters treated as word separators in recall search. `-` covers flag forms
+/// (`--release`), `*` covers glob queries, and `/` covers path components so a
+/// match after any of them scores like a whitespace boundary rather than nucleo's
+/// (lower) delimiter boundary.
+fn is_recall_separator(c: char) -> bool {
+    matches!(c, '-' | '*' | '/')
+}
+
+/// Map separator chars to space so nucleo treats them as word boundaries; pass
+/// through everything else.
+fn normalize_recall_char(c: char) -> char {
+    if is_recall_separator(c) { ' ' } else { c }
 }
 
 /// Recency boost added to nucleo's fuzzy score so freshly-used commands outrank
@@ -470,6 +484,62 @@ mod tests {
         let filtered = engine.filter_entries(&entries, "*.rs");
         assert_eq!(filtered.len(), 1);
         assert!(entries[filtered[0].0].command.contains("*.rs"));
+    }
+
+    #[test]
+    fn test_engine_fuzzy_normalization_slashes() {
+        let conn = test_db();
+        insert_command(&conn, "cat /foobar", "host1", "/tmp", 1000);
+        insert_command(&conn, "echo hello", "host1", "/tmp", 2000);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        let filtered = engine.filter_entries(&entries, "foobar");
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(entries[filtered[0].0].command, "cat /foobar");
+    }
+
+    #[test]
+    fn test_filter_entries_recent_slash_path_beats_older_plain_word() {
+        // The user's reported bug: typing `foobar` should rank a recent
+        // `cat /foobar` (path-component match) above an old plain `foobar`.
+        // Without `/` normalization, nucleo's delimiter-boundary bonus is
+        // smaller than the whitespace-boundary bonus, and the gap can exceed
+        // the frecency boost cap.
+        let conn = test_db();
+        let now = wall_clock_now();
+
+        insert_command(&conn, "foobar --plain", "host1", "/tmp", now - 86_400 * 200);
+        insert_command(&conn, "cat /foobar", "host1", "/tmp", now - 60);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+        let filtered = engine.filter_entries(&entries, "foobar");
+
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(
+            entries[filtered[0].0].command, "cat /foobar",
+            "recent /foobar should outrank older plain foobar once `/` normalizes to a word boundary"
+        );
+    }
+
+    #[test]
+    fn test_like_filter_normalizes_slash() {
+        // Query `/foobar` should match haystacks where `/foobar` doesn't appear
+        // literally -- the `/` is a wildcard in the prefilter, consistent with
+        // how it's treated as a word separator in scoring.
+        let conn = test_db();
+        insert_command(&conn, "echo foobar", "host1", "/tmp", 1000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries =
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("/foobar")).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].command, "echo foobar");
     }
 
     #[test]
