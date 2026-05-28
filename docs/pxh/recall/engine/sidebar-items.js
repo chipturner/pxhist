@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["format_relative_time"],"struct":["HistoryEntry","SearchEngine"]};
+window.SIDEBAR_ITEMS = {"fn":["format_relative_time","frecency_boost","is_recall_separator","normalize_recall_char"],"struct":["HistoryEntry","SearchEngine"]};
