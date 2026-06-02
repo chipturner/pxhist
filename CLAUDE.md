@@ -9,11 +9,11 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 ## Build Commands
 - Build: `cargo build` or `cargo build --release`
 - Quick validation: `just check` (runs clippy + tests)
-- Run tests: `cargo test`
-- Run single test: `cargo test test_name`
-- Run integration tests: `cargo test --test integration_tests`
-- Run specific test file: `cargo test --test sync_test`
+- Run tests: `just test` (cargo-nextest; filter with e.g. `just test sync`)
+- Run full suite repeatedly to catch flakes: `just stress` (default 10 runs)
+- Docker end-to-end suite: `just docker-e2e`
 - Format code: `just fmt`
+- Check formatting without modifying (CI-style): `just fmt-check`
 - Lint: `cargo clippy -- -D warnings`
 - Upgrade dependencies: `just cargo-upgrade`
 - Coverage: `just coverage` or `just coverage-detailed`
@@ -29,7 +29,8 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - **`src/main.rs`**: CLI interface using clap with subcommands (Show, Sync, Import, Install, Recall, Scan, etc.)
 - **`src/lib.rs`**: Core business logic including database operations, history parsing, shell integration, and the `helpers` and `test_utils` modules
 - **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates. Runs every connection (idempotent via `IF NOT EXISTS`); also sets up per-connection in-memory `memdb` tables. Schema migrations are version-tracked via `PRAGMA user_version` in `run_schema_migrations()` in `lib.rs`.
-- **`src/secrets_patterns.rs`**: Built-in regex patterns for detecting secrets in command history (used by Scan/Scrub)
+- **`build.rs`**: Generates secret-detection patterns (used by Scan/Scrub) at build time from `src/vendor/rules-stable.yml` (vendored from the secrets-patterns-db submodule), filtered by a curated `CRITICAL_PATTERN_NAMES` allowlist. `src/secrets_patterns.rs` is just an `include!` of the generated code -- edit `build.rs`, not it. Refresh vendored files with `just vendor-update` (requires `git submodule update --init --recursive`).
+- **`src/doctor.rs`**: `pxh doctor` diagnostics and auto-fix (`--fix`) for installation/config issues
 - **`src/shell_configs/`**: Shell integration scripts for bash (`pxh.bash`) and zsh (`pxh.zsh`) using preexec hooks
 - **`src/recall/`**: Interactive TUI history search module
   - `mod.rs`: Module exports
@@ -49,6 +50,8 @@ All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`.
 - **Scan**: Detect potential secrets in command history using built-in patterns
 - **Scrub**: Remove sensitive commands from history (supports `--patterns-from-scan`, `--dir`, `--remote`)
 - **Maintenance**: ANALYZE and VACUUM operations, cleans up non-standard tables/indexes
+- **Doctor**: Diagnose and optionally fix (`--fix`) installation/config issues
+- **Autosuggest**: Internal command backing the zsh-autosuggestions strategy in `pxh.zsh`
 
 ### Database Design
 - SQLite database at `~/.local/share/pxh/pxh.db` by default (configurable via `--db` or `PXH_DB_PATH`)
@@ -68,15 +71,10 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 ## Code Style Guidelines
 - **Imports**: Group by Std, External, Crate
 - **Formatting**: `cargo fmt` (via `just fmt`), config in rustfmt.toml
-- **Naming**:
-  - `snake_case` for variables, functions, methods
-  - `CamelCase` for types, structs, enums
-  - Command structs end with "Command" (e.g., `ShowCommand`)
+- **Naming**: Command structs end with "Command" (e.g., `ShowCommand`)
 - **Error Handling**: Use `Result<T, Box<dyn std::error::Error>>` with `?` operator
 - **Types**:
   - `BString` from bstr for binary strings/non-UTF8 data
-  - `PathBuf` and `Path` for file paths
-  - `Option<T>` for values that might not exist
   - `uzers` crate for user information (security-updated fork of `users`)
 
 ## Testing Guidelines
@@ -91,8 +89,10 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/interactive_shell_test.rs`**: Interactive shell session testing with rexpect
 - **`tests/shell_integration_simple_test.rs`**: Simple shell integration tests
 - **`tests/shell_hooks_test.rs`**: Shell hook (preexec/precmd) testing
+- **`tests/doctor_test.rs`**: Doctor command diagnostics tests
+- **`tests/docker/`**: Dockerized end-to-end shell integration (run via `just docker-e2e`)
 - **`tests/common/mod.rs`**: Shared test utilities and compatibility wrappers
-- **`tests/resources/`**: Sample histfiles for import testing (bash simple/timestamped, zsh)
+- **`tests/resources/`**: Sample histfiles for import testing (bash simple/timestamped, zsh incl. malformed/multiline)
 
 ### Test Helpers
 Located in `pxh::test_utils` (src/lib.rs) and `tests/common/mod.rs`:
@@ -149,7 +149,10 @@ Remote sync uses a simple binary protocol over stdin/stdout:
 5. `INSERT OR IGNORE` with ATTACH DATABASE for deduplication
 
 ### Configuration
-pxh supports a TOML configuration file at `~/.config/pxh/config.toml` for customizing the recall TUI:
+pxh supports a TOML configuration file at `~/.config/pxh/config.toml`:
+- **`[host]`** section: `hostname`, `machine_id`, `aliases` for sync identity
+- **`[shell]`** section: `disable_ctrl_r` to skip the Ctrl-R binding
+- **`[history]`** section: `ignore_patterns` (regexes for commands to skip recording)
 - **`[recall]`** section:
   - `keymap`: "emacs" (default) or "vim"
   - `show_preview`: boolean to show/hide preview pane
