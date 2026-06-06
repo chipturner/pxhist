@@ -1197,6 +1197,16 @@ pub fn build_secret_patterns(
     Ok((patterns, regex_set))
 }
 
+/// True when both paths refer to the same file (by device + inode), so
+/// symlinked or hard-linked aliases of the same database are caught too.
+fn is_same_file(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(ma), Ok(mb)) => ma.dev() == mb.dev() && ma.ino() == mb.ino(),
+        _ => false,
+    }
+}
+
 fn is_bash_timestamp_line(line: &[u8]) -> bool {
     line.starts_with(b"#") && line.len() > 1 && line[1..].iter().all(|&b| b.is_ascii_digit())
 }
@@ -1546,6 +1556,13 @@ impl SyncCommand {
             for entry in entries {
                 let path = entry?.path();
                 if path.extension() == Some(db_extension) && output_path != path {
+                    // Skip the live database itself (e.g. it lives inside the
+                    // sync dir): merging a database into itself is a no-op,
+                    // and ATTACHing our own file would self-deadlock now that
+                    // merge transactions take write locks up front.
+                    if conn.path().is_some_and(|own| is_same_file(Path::new(own), &path)) {
+                        continue;
+                    }
                     Self::sync_from_directory_source(
                         &mut conn,
                         path,
@@ -1746,7 +1763,7 @@ impl SyncCommand {
 
     /// Merge history from a database file with optional secret filtering and
     /// an optional incremental-sync watermark (skip rows in `other` whose
-    /// `id <= watermark`). The unsealed-row UPDATE always scans all of `other`
+    /// `id <= watermark`). The unsealed-row update always scans all of `other`
     /// since seal info may sit at any id, watermark or not.
     fn merge_database_from_file_filtered(
         conn: &mut Connection,
@@ -1762,83 +1779,137 @@ impl SyncCommand {
             pxh::run_schema_migrations(&other)?;
         }
 
-        let tx = conn.transaction()?;
-        let before_count: i64 =
-            tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
-        tx.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
+        conn.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
+        let result = Self::merge_attached(conn, filter_secrets, watermark);
+        conn.execute("DETACH DATABASE other", ())?;
+        result
+    }
 
-        let mut filtered_count: i64 = 0;
+    /// Merge `other.command_history` (already ATTACHed) into main.
+    ///
+    /// Structured to minimize write-lock hold time so concurrent shell hooks
+    /// (insert/seal, which only retry for ~1s) don't hit "database is locked"
+    /// during a sync: all reads and regex filtering happen outside any write
+    /// transaction (WAL readers never block writers), and inserts run in
+    /// id-ordered chunks, each a short BEGIN IMMEDIATE transaction via
+    /// `with_write_retry`. The merge is therefore not atomic, but INSERT OR
+    /// IGNORE is idempotent and the caller only advances the watermark after
+    /// full success, so an interrupted merge simply re-considers rows next sync.
+    fn merge_attached(
+        conn: &mut Connection,
+        filter_secrets: bool,
+        watermark: Option<i64>,
+    ) -> Result<MergeStats, Box<dyn std::error::Error>> {
+        // Generous budget: sync is background work, so wait out long writers
+        // rather than failing the merge.
+        const WRITE_RETRY_BUDGET: Duration = Duration::from_secs(30);
+        const CHUNK_SIZE: i64 = 5000;
+
         // -1 sentinel matches all rows (id is AUTOINCREMENT, so always >= 1).
         let lo = watermark.unwrap_or(-1);
 
-        if filter_secrets {
-            // Build secret patterns for filtering (use "critical" confidence by default)
-            let (patterns, regex_set) = build_secret_patterns("critical")?;
+        // Read-only pre-pass: source stats, taken before the merge so
+        // `considered` reflects what we scan below.
+        let considered: i64 = conn
+            .prepare("SELECT COUNT(*) FROM other.command_history WHERE id > ?")?
+            .query_row([lo], |r| r.get(0))?;
 
-            if patterns.is_empty() {
-                // No patterns, just do regular merge
-                tx.execute(
-                    r#"
-INSERT OR IGNORE INTO main.command_history (
-    session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
-)
-SELECT session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
-FROM other.command_history
-WHERE id > ?
-"#,
-                    [lo],
-                )?;
-            } else {
-                // Fetch records from other database and filter
-                let mut stmt = tx.prepare(
-                    r#"
+        // Highest id in source -- caller persists as the next watermark.
+        let new_max_id: Option<i64> = conn
+            .prepare("SELECT MAX(id) FROM other.command_history")?
+            .query_row((), |r| r.get(0))
+            .ok();
+
+        // Build secret patterns for filtering (use "critical" confidence by default)
+        let regex_set = if filter_secrets {
+            let (patterns, regex_set) = build_secret_patterns("critical")?;
+            (!patterns.is_empty()).then_some(regex_set)
+        } else {
+            None
+        };
+
+        let mut added: usize = 0;
+        let mut filtered_count: i64 = 0;
+        let mut cursor = lo;
+        loop {
+            // Upper id bound of the next chunk (NULL once the source is drained).
+            let hi: Option<i64> = conn
+                .prepare(
+                    "SELECT MAX(id) FROM (SELECT id FROM other.command_history
+                      WHERE id > ? ORDER BY id LIMIT ?)",
+                )?
+                .query_row((cursor, CHUNK_SIZE), |r| r.get(0))?;
+            let Some(hi) = hi else { break };
+
+            if let Some(regex_set) = &regex_set {
+                // Read and regex-filter the chunk before taking the write
+                // lock; pattern matching is the expensive part of the merge.
+                type SourceRow = (
+                    i64,
+                    Vec<u8>,
+                    String,
+                    Option<Vec<u8>>,
+                    Option<Vec<u8>>,
+                    Option<Vec<u8>>,
+                    Option<i64>,
+                    Option<i64>,
+                    Option<i64>,
+                    Option<i64>,
+                );
+                let rows: Vec<SourceRow> = conn
+                    .prepare(
+                        r#"
 SELECT session_id, full_command, shellname, hostname, username,
        working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
-WHERE id > ?
+WHERE id > ? AND id <= ?
 "#,
-                )?;
+                    )?
+                    .query_map((cursor, hi), |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                            row.get(8)?,
+                            row.get(9)?,
+                        ))
+                    })?
+                    .collect::<rusqlite::Result<_>>()?;
 
-                let mut rows = stmt.query([lo])?;
-                while let Some(row) = rows.next()? {
-                    let full_command: Vec<u8> = row.get(1)?;
+                let total = rows.len();
+                let keep: Vec<SourceRow> =
+                    rows.into_iter().filter(|row| !regex_set.is_match(&row.1)).collect();
+                filtered_count += (total - keep.len()) as i64;
 
-                    // Check if command matches any secret pattern
-                    if regex_set.is_match(&full_command) {
-                        filtered_count += 1;
-                        continue;
-                    }
-
-                    // Insert the record if it doesn't match any secret pattern
-                    tx.execute(
-                        r#"
+                added += pxh::with_write_retry(conn, WRITE_RETRY_BUDGET, |tx| {
+                    let mut inserted = 0;
+                    for row in &keep {
+                        inserted += tx.execute(
+                            r#"
 INSERT OR IGNORE INTO main.command_history (
     session_id, full_command, shellname, hostname, username,
     working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 )
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 "#,
-                        (
-                            row.get::<_, i64>(0)?,
-                            &full_command,
-                            row.get::<_, String>(2)?,
-                            row.get::<_, Option<Vec<u8>>>(3)?,
-                            row.get::<_, Option<Vec<u8>>>(4)?,
-                            row.get::<_, Option<Vec<u8>>>(5)?,
-                            row.get::<_, Option<i64>>(6)?,
-                            row.get::<_, Option<i64>>(7)?,
-                            row.get::<_, Option<i64>>(8)?,
-                            row.get::<_, Option<i64>>(9)?,
-                        ),
-                    )?;
-                }
-            }
-        } else {
-            // No filtering, just do regular merge
-            tx.execute(
-                r#"
+                            rusqlite::params![
+                                row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
+                                row.9
+                            ],
+                        )?;
+                    }
+                    Ok(inserted)
+                })?;
+            } else {
+                // No filtering, bulk-copy the chunk in SQL.
+                added += pxh::with_write_retry(conn, WRITE_RETRY_BUDGET, |tx| {
+                    tx.execute(
+                        r#"
 INSERT OR IGNORE INTO main.command_history (
     session_id, full_command, shellname, hostname, username,
     working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
@@ -1846,55 +1917,53 @@ INSERT OR IGNORE INTO main.command_history (
 SELECT session_id, full_command, shellname, hostname, username,
     working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 FROM other.command_history
-WHERE id > ?
+WHERE id > ? AND id <= ?
 "#,
-                [lo],
-            )?;
+                        (cursor, hi),
+                    )
+                })?;
+            }
+            cursor = hi;
         }
 
         // Upgrade unsealed rows: if a command was synced while still running
         // (exit_status/end_unix_timestamp NULL), fill in the sealed values from
         // the other database where available. Scans all of `other` regardless
-        // of watermark -- a seal can land at any id.
-        tx.execute(
-            r#"
-UPDATE main.command_history
-SET exit_status = o.exit_status,
-    end_unix_timestamp = o.end_unix_timestamp
-FROM other.command_history o
-WHERE main.command_history.exit_status IS NULL
-  AND o.exit_status IS NOT NULL
-  AND main.command_history.full_command = o.full_command
-  AND main.command_history.start_unix_timestamp IS o.start_unix_timestamp
-  AND main.command_history.shellname = o.shellname
-  AND COALESCE(main.command_history.hostname, '') = COALESCE(o.hostname, '')
+        // of watermark -- a seal can land at any id. Find candidates with a
+        // read-only join, then apply targeted updates in one short transaction.
+        let seal_updates: Vec<(i64, i64, Option<i64>)> = conn
+            .prepare(
+                r#"
+SELECT m.id, o.exit_status, o.end_unix_timestamp
+  FROM main.command_history m
+  JOIN other.command_history o
+    ON m.full_command = o.full_command
+   AND m.start_unix_timestamp IS o.start_unix_timestamp
+   AND m.shellname = o.shellname
+   AND COALESCE(m.hostname, '') = COALESCE(o.hostname, '')
+ WHERE m.exit_status IS NULL
+   AND o.exit_status IS NOT NULL
 "#,
-            (),
-        )?;
+            )?
+            .query_map((), |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+            .collect::<rusqlite::Result<_>>()?;
 
-        // Count records after the merge
-        let after_count: i64 =
-            tx.prepare("SELECT COUNT(*) FROM main.command_history")?.query_row((), |r| r.get(0))?;
+        if !seal_updates.is_empty() {
+            pxh::with_write_retry(conn, WRITE_RETRY_BUDGET, |tx| {
+                for (id, exit_status, end_ts) in &seal_updates {
+                    // Re-check exit_status IS NULL: a local seal may have
+                    // landed since the read above.
+                    tx.execute(
+                        "UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
+                          WHERE id = ? AND exit_status IS NULL",
+                        (exit_status, end_ts, id),
+                    )?;
+                }
+                Ok(())
+            })?;
+        }
 
-        // Rows considered = source rows we actually scanned (above watermark).
-        let other_count: i64 = tx
-            .prepare("SELECT COUNT(*) FROM other.command_history WHERE id > ?")?
-            .query_row([lo], |r| r.get(0))?;
-
-        // Highest id in source -- caller persists as the next watermark.
-        let new_max_id: Option<i64> = tx
-            .prepare("SELECT MAX(id) FROM other.command_history")?
-            .query_row((), |r| r.get(0))
-            .ok();
-
-        tx.commit()?;
-        conn.execute("DETACH DATABASE other", ())?;
-        Ok(MergeStats {
-            considered: other_count,
-            added: after_count - before_count,
-            filtered: filtered_count,
-            new_max_id,
-        })
+        Ok(MergeStats { considered, added: added as i64, filtered: filtered_count, new_max_id })
     }
 
     fn handle_server_mode(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {

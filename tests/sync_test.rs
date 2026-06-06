@@ -189,6 +189,47 @@ fn test_directory_sync() -> Result<()> {
     Ok(())
 }
 
+// Sync must outlast a writer that holds the database lock longer than
+// SQLite's 5s busy_timeout (e.g. another pxh process mid-write). The merge
+// path retries with backoff rather than erroring out.
+#[test]
+fn test_directory_sync_with_concurrent_write_lock() -> Result<()> {
+    use rusqlite::Connection;
+
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+
+    let source_db = sync_dir.join("source.db");
+    insert_test_command(&source_db, "echo from_source", None)?;
+
+    let output_db = temp_dir.path().join("output.db");
+    insert_test_command(&output_db, "echo local", None)?;
+
+    // Hold the write lock on our database past the 5s busy_timeout, then
+    // release; sync's retry loop must wait it out instead of failing.
+    let lock_conn = Connection::open(&output_db)?;
+    lock_conn.execute_batch("BEGIN IMMEDIATE")?;
+    let holder = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(6500));
+        lock_conn.execute_batch("COMMIT").expect("failed to release write lock");
+    });
+
+    let output = pxh_command()
+        .args(["--db", output_db.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .output()?;
+    holder.join().expect("lock holder thread panicked");
+
+    assert!(
+        output.status.success(),
+        "sync failed under write-lock contention: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(count_commands(&output_db)?, 2);
+
+    Ok(())
+}
+
 #[test]
 fn test_directory_sync_rejects_since() -> Result<()> {
     let temp_dir = TempDir::new()?;
