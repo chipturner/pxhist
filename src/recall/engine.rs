@@ -306,6 +306,7 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
         let mut scored_results: Vec<(usize, u32, Vec<u32>)> = Vec::new();
         let mut buf = Vec::new();
         let mut normalized_cmd = String::new();
+        let cwd = self.working_directory.as_os_str().as_encoded_bytes();
 
         for (original_idx, entry) in entries.iter().enumerate() {
             // Normalize command for scoring (-, *, / → space)
@@ -328,7 +329,8 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
                 }
                 let boosted = score
                     + frecency_boost(entry.timestamp, now_secs)
-                    + frequency_boost(entry.use_count);
+                    + frequency_boost(entry.use_count)
+                    + directory_boost(entry.working_directory.as_ref().map(|d| d.as_slice()), cwd);
                 scored_results.push((original_idx, boosted, indices));
             }
         }
@@ -381,6 +383,14 @@ fn frecency_boost(timestamp: Option<i64>, now_secs: i64) -> u32 {
 /// 8+ → 12.
 fn frequency_boost(use_count: u32) -> u32 {
     (4 * use_count.max(1).ilog2()).min(12)
+}
+
+/// Boost for commands last run in the current working directory, so global
+/// mode softly prefers project-local history without hiding everything else
+/// (the directory filter mode remains the hard version). In directory mode
+/// every entry shares the cwd, making the boost uniform and rank-neutral.
+fn directory_boost(working_directory: Option<&[u8]>, cwd: &[u8]) -> u32 {
+    if !cwd.is_empty() && working_directory == Some(cwd) { 8 } else { 0 }
 }
 
 /// Format a timestamp as a relative time string (e.g., "2m", "3h", "2d")
@@ -622,6 +632,43 @@ mod tests {
             entries[filtered[0].0].command, "make betaa",
             "frequently-used command should outrank the one-off at equal match quality"
         );
+    }
+
+    #[test]
+    fn test_filter_entries_same_directory_beats_elsewhere() {
+        // Equal match quality, recency tier, and frequency: the command last
+        // run in the engine's working directory should win. Without the
+        // directory boost the tie would break toward index 0.
+        let now = wall_clock_now();
+        let entry = |id: i64, command: &str, dir: &str| HistoryEntry {
+            id,
+            command: command.to_string(),
+            timestamp: Some(now - 60),
+            working_directory: Some(BString::from(dir)),
+            hostname: None,
+            exit_status: None,
+            duration_secs: None,
+            use_count: 1,
+        };
+        let entries = vec![entry(1, "make alpha", "/elsewhere"), entry(2, "make betaa", "/proj")];
+
+        let mut engine =
+            SearchEngine::new(test_db(), PathBuf::from("/proj"), vec![BString::from("host1")], 100);
+        let filtered = engine.filter_entries(&entries, "make");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(
+            entries[filtered[0].0].command, "make betaa",
+            "same-directory command should outrank one from elsewhere at equal match quality"
+        );
+    }
+
+    #[test]
+    fn test_directory_boost_requires_exact_match() {
+        assert_eq!(directory_boost(Some(b"/proj"), b"/proj"), 8);
+        assert_eq!(directory_boost(Some(b"/proj/sub"), b"/proj"), 0);
+        assert_eq!(directory_boost(Some(b"/other"), b"/proj"), 0);
+        assert_eq!(directory_boost(None, b"/proj"), 0);
+        assert_eq!(directory_boost(Some(b""), b""), 0, "empty cwd must never boost");
     }
 
     #[test]
