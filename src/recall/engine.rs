@@ -53,12 +53,51 @@ impl SearchEngine {
         self.host_set.contains(hostname)
     }
 
-    /// Build a LIKE pattern that matches a fuzzy subsequence.
+    /// Build the LIKE patterns for the DB prefilter: one per whitespace-separated
+    /// query atom, since nucleo matches atoms in any order. fzf-style operators
+    /// understood by nucleo's `Pattern::parse` (`^`/`'` prefix, `$` suffix) are
+    /// stripped so the prefilter remains a superset of what the fuzzy stage
+    /// accepts; negated atoms (`!foo`) are dropped entirely because LIKE can only
+    /// require presence -- the fuzzy stage enforces absence.
+    fn fuzzy_like_patterns(query: &str) -> Vec<String> {
+        query
+            .split_whitespace()
+            .filter_map(|atom| {
+                if atom.starts_with('!') {
+                    return None;
+                }
+                let atom = atom.strip_prefix(['^', '\'']).unwrap_or(atom);
+                let atom = atom.strip_suffix('$').unwrap_or(atom);
+                (!atom.is_empty()).then(|| Self::fuzzy_like_pattern(atom))
+            })
+            .collect()
+    }
+
+    /// Whether a query produces any DB-level prefilter conditions. Queries of
+    /// only negated/operator atoms don't, and load identically to no query.
+    pub fn query_has_prefilter(query: &str) -> bool {
+        !Self::fuzzy_like_patterns(query).is_empty()
+    }
+
+    /// Append one LIKE condition per prefilter pattern of `query`.
+    fn push_query_conditions(
+        query: Option<&str>,
+        where_conditions: &mut Vec<String>,
+        params: &mut Vec<String>,
+    ) {
+        for pattern in query.map(Self::fuzzy_like_patterns).unwrap_or_default() {
+            where_conditions
+                .push("CAST(full_command AS text) LIKE ? ESCAPE '\\' COLLATE NOCASE".to_string());
+            params.push(pattern);
+        }
+    }
+
+    /// Build a LIKE pattern that matches a fuzzy subsequence of one atom.
     /// "gcm" becomes "%g%c%m%" so it matches "git commit -m".
-    fn fuzzy_like_pattern(query: &str) -> String {
-        let mut pattern = String::with_capacity(query.len() * 2 + 1);
+    fn fuzzy_like_pattern(atom: &str) -> String {
+        let mut pattern = String::with_capacity(atom.len() * 2 + 1);
         pattern.push('%');
-        for ch in query.chars() {
+        for ch in atom.chars() {
             match ch {
                 // Escape LIKE special characters
                 '%' | '_' | '\\' => {
@@ -106,13 +145,7 @@ impl SearchEngine {
             }
         }
 
-        if let Some(q) = query
-            && !q.is_empty()
-        {
-            where_conditions
-                .push("CAST(full_command AS text) LIKE ? ESCAPE '\\' COLLATE NOCASE".to_string());
-            params.push(Self::fuzzy_like_pattern(q));
-        }
+        Self::push_query_conditions(query, &mut where_conditions, &mut params);
 
         let where_clause = if where_conditions.is_empty() {
             String::new()
@@ -161,13 +194,7 @@ impl SearchEngine {
             }
         }
 
-        if let Some(q) = query
-            && !q.is_empty()
-        {
-            where_conditions
-                .push("CAST(full_command AS text) LIKE ? ESCAPE '\\' COLLATE NOCASE".to_string());
-            params.push(Self::fuzzy_like_pattern(q));
-        }
+        Self::push_query_conditions(query, &mut where_conditions, &mut params);
 
         let where_clause = format!("WHERE {}", where_conditions.join(" AND "));
 
@@ -761,6 +788,96 @@ mod tests {
             "fuzzy query 'dcu' should match 'docker compose up', got: {:?}",
             entries.iter().map(|e| &e.command).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_like_filter_atoms_match_any_order() {
+        // nucleo matches whitespace-separated atoms in any order, so the DB
+        // prefilter must too -- one LIKE condition per atom, not one ordered
+        // subsequence for the whole query.
+        let conn = test_db();
+        insert_command(&conn, "git push origin main", "host1", "/tmp", 1000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some("push git"))
+            .unwrap();
+        assert_eq!(entries.len(), 1, "reversed word order should still prefilter-match");
+        assert_eq!(entries[0].command, "git push origin main");
+    }
+
+    #[test]
+    fn test_like_filter_strips_fzf_operators() {
+        // nucleo's Pattern::parse understands fzf-style operators; the LIKE
+        // prefilter must strip them rather than demand them as literal chars.
+        let conn = test_db();
+        insert_command(&conn, "cargo build --release", "host1", "/tmp", 1000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+
+        for query in ["^cargo", "release$", "'build", "^cargo release$"] {
+            let entries =
+                engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some(query)).unwrap();
+            assert_eq!(entries.len(), 1, "query {query:?} should survive the prefilter");
+        }
+    }
+
+    #[test]
+    fn test_like_filter_drops_negated_atoms() {
+        // A negated atom can't be prefiltered (LIKE can only require presence),
+        // so it must be dropped; the fuzzy stage enforces absence. A query of
+        // only negated atoms degrades to the broad (unfiltered) load.
+        let conn = test_db();
+        insert_command(&conn, "vim notes.txt", "host1", "/tmp", 1000);
+        insert_command(&conn, "cargo build", "host1", "/tmp", 2000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+
+        let entries =
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("!vim")).unwrap();
+        assert_eq!(entries.len(), 2, "pure-negation query should not prefilter at all");
+
+        let entries = engine
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some("!vim cargo"))
+            .unwrap();
+        assert_eq!(entries.len(), 1, "positive atom should still prefilter");
+        assert_eq!(entries[0].command, "cargo build");
+    }
+
+    #[test]
+    fn test_filter_entries_negation_and_prefix() {
+        // End-to-end: the fuzzy stage honors fzf-style operators the prefilter
+        // now lets through.
+        let conn = test_db();
+        insert_command(&conn, "vim notes.txt", "host1", "/tmp", 1000);
+        insert_command(&conn, "cargo build --release", "host1", "/tmp", 2000);
+        insert_command(&conn, "echo cargo", "host1", "/tmp", 3000);
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        let filtered = engine.filter_entries(&entries, "!vim");
+        let commands: Vec<_> = filtered.iter().map(|(i, _)| &entries[*i].command).collect();
+        assert!(!commands.iter().any(|c| c.contains("vim")), "negation should exclude vim");
+        assert_eq!(commands.len(), 2);
+
+        let filtered = engine.filter_entries(&entries, "^cargo");
+        assert_eq!(filtered.len(), 1, "^ should anchor to start of command");
+        assert_eq!(entries[filtered[0].0].command, "cargo build --release");
+    }
+
+    #[test]
+    fn test_query_has_prefilter() {
+        assert!(SearchEngine::query_has_prefilter("cargo"));
+        assert!(SearchEngine::query_has_prefilter("!vim cargo"));
+        assert!(!SearchEngine::query_has_prefilter("!vim"));
+        assert!(!SearchEngine::query_has_prefilter("^$"));
+        assert!(!SearchEngine::query_has_prefilter("   "));
+        assert!(!SearchEngine::query_has_prefilter(""));
     }
 
     #[test]

@@ -300,7 +300,8 @@ impl RecallTui {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let query = initial_query.as_deref().unwrap_or("").to_string();
         let host_filter = HostFilter::default();
-        let db_query_used = if query.len() >= 3 { Some(query.clone()) } else { None };
+        let db_query_used =
+            (query.len() >= 3 && SearchEngine::query_has_prefilter(&query)).then(|| query.clone());
         let mut entries = deduplicate_entries(engine.load_entries(
             initial_mode,
             host_filter,
@@ -431,11 +432,13 @@ impl RecallTui {
     }
 
     /// Apply fuzzy filtering to the current entries based on query.
-    /// For queries >= 3 chars, uses a DB-level LIKE filter to ensure old
-    /// commands beyond the initial result_limit window are included.
+    /// For queries >= 3 chars with at least one prefilterable atom, uses a
+    /// DB-level LIKE filter to ensure old commands beyond the initial
+    /// result_limit window are included. Queries with no prefilterable atoms
+    /// (e.g. pure negation "!vim") use the broad set, like short queries.
     /// Only re-queries when the loaded set might not cover the current query.
     fn update_filtered_indices(&mut self) {
-        if self.query.len() >= 3 {
+        if self.query.len() >= 3 && SearchEngine::query_has_prefilter(&self.query) {
             // Check if the loaded entries already cover this query. They do when
             // the current query extends a previous DB query (LIKE '%abc%' is a
             // superset of LIKE '%abcd%'), so client-side fuzzy suffices.
