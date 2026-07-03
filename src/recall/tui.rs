@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::hash_map::Entry as MapEntry;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::{Duration, Instant};
@@ -115,11 +116,23 @@ const FLASH_DURATION_MS: u64 = 100; // Duration of visual flash in milliseconds
 
 /// Deduplicate history entries by command string, keeping the most recent occurrence.
 /// Entries are already sorted by timestamp (most recent first), so we keep the first
-/// occurrence of each command. Trailing whitespace is ignored for dedup since
-/// "df -h" and "df -h " are visually identical and semantically the same.
+/// occurrence of each command, accumulating the number of collapsed duplicates in
+/// its `use_count` for the frequency component of scoring. Trailing whitespace is
+/// ignored for dedup since "df -h" and "df -h " are visually identical and
+/// semantically the same.
 fn deduplicate_entries(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
-    let mut seen = HashSet::new();
-    entries.into_iter().filter(|e| seen.insert(e.command.trim_end().to_string())).collect()
+    let mut index: HashMap<String, usize> = HashMap::new();
+    let mut deduped: Vec<HistoryEntry> = Vec::new();
+    for entry in entries {
+        match index.entry(entry.command.trim_end().to_string()) {
+            MapEntry::Occupied(slot) => deduped[*slot.get()].use_count += entry.use_count,
+            MapEntry::Vacant(slot) => {
+                slot.insert(deduped.len());
+                deduped.push(entry);
+            }
+        }
+    }
+    deduped
 }
 
 /// A candidate entry set as loaded for a particular DB-level query
@@ -1607,6 +1620,7 @@ mod tests {
                 exit_status: None,
                 duration_secs: None,
                 hostname: None,
+                use_count: 1,
             },
             HistoryEntry {
                 id: 2,
@@ -1616,6 +1630,7 @@ mod tests {
                 exit_status: None,
                 duration_secs: None,
                 hostname: None,
+                use_count: 1,
             },
             HistoryEntry {
                 id: 3,
@@ -1625,6 +1640,7 @@ mod tests {
                 exit_status: None,
                 duration_secs: None,
                 hostname: None,
+                use_count: 1,
             },
         ];
 
@@ -1633,6 +1649,8 @@ mod tests {
         assert_eq!(deduped[0].command, "cmd1");
         assert_eq!(deduped[0].timestamp, Some(100)); // kept first (most recent)
         assert_eq!(deduped[1].command, "cmd2");
+        assert_eq!(deduped[0].use_count, 2, "collapsed duplicates should be counted");
+        assert_eq!(deduped[1].use_count, 1);
     }
 
     fn cache_snapshot(db_query: Option<&str>, n_entries: usize) -> super::EntrySnapshot {
@@ -1646,6 +1664,7 @@ mod tests {
                 hostname: None,
                 exit_status: None,
                 duration_secs: None,
+                use_count: 1,
             })
             .collect();
         super::EntrySnapshot { db_query: db_query.map(String::from), entries }

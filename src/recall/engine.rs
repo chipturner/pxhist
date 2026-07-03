@@ -16,6 +16,9 @@ pub struct HistoryEntry {
     pub hostname: Option<BString>,
     pub exit_status: Option<i32>,
     pub duration_secs: Option<i64>,
+    /// Occurrences of this command within the loaded window. Rows load as 1;
+    /// the recall dedup pass accumulates collapsed duplicates here.
+    pub use_count: u32,
 }
 
 /// Search engine that combines SQLite queries with nucleo fuzzy matching
@@ -173,6 +176,7 @@ impl SearchEngine {
             hostname: hostname.map(BString::from),
             exit_status,
             duration_secs,
+            use_count: 1,
         })
     }
 
@@ -322,7 +326,9 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
                     let haystack = Utf32Str::new(&entry.command, &mut buf);
                     scoring_pattern.indices(haystack, &mut self.matcher, &mut indices);
                 }
-                let boosted = score + frecency_boost(entry.timestamp, now_secs);
+                let boosted = score
+                    + frecency_boost(entry.timestamp, now_secs)
+                    + frequency_boost(entry.use_count);
                 scored_results.push((original_idx, boosted, indices));
             }
         }
@@ -366,6 +372,15 @@ fn frecency_boost(timestamp: Option<i64>, now_secs: i64) -> u32 {
         d if d < 90.0 => 2,
         _ => 0,
     }
+}
+
+/// Boost for commands used repeatedly within the loaded window, so workhorse
+/// commands outrank one-offs at similar match quality. Log-scale and capped
+/// below a single matched char (~16 in nucleo's scale) so frequency can break
+/// near-ties but never swamp match quality: 1 use → 0, 2-3 → 4, 4-7 → 8,
+/// 8+ → 12.
+fn frequency_boost(use_count: u32) -> u32 {
+    (4 * use_count.max(1).ilog2()).min(12)
 }
 
 /// Format a timestamp as a relative time string (e.g., "2m", "3h", "2d")
@@ -567,6 +582,46 @@ mod tests {
             engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("/foobar")).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].command, "echo foobar");
+    }
+
+    #[test]
+    fn test_frequency_boost_is_log_scale_and_capped() {
+        assert_eq!(frequency_boost(0), 0);
+        assert_eq!(frequency_boost(1), 0);
+        assert_eq!(frequency_boost(2), 4);
+        assert_eq!(frequency_boost(3), 4);
+        assert_eq!(frequency_boost(4), 8);
+        assert_eq!(frequency_boost(7), 8);
+        assert_eq!(frequency_boost(8), 12);
+        assert_eq!(frequency_boost(10_000), 12);
+    }
+
+    #[test]
+    fn test_filter_entries_frequent_command_beats_one_off() {
+        // Same match quality and same recency tier: the command used
+        // repeatedly within the window should outrank the one-off. Without
+        // the frequency boost the tie would break toward index 0.
+        let now = wall_clock_now();
+        let entry = |id: i64, command: &str, use_count: u32| HistoryEntry {
+            id,
+            command: command.to_string(),
+            timestamp: Some(now - 60),
+            working_directory: None,
+            hostname: None,
+            exit_status: None,
+            duration_secs: None,
+            use_count,
+        };
+        let entries = vec![entry(1, "make alpha", 1), entry(2, "make betaa", 8)];
+
+        let mut engine =
+            SearchEngine::new(test_db(), PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let filtered = engine.filter_entries(&entries, "make");
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(
+            entries[filtered[0].0].command, "make betaa",
+            "frequently-used command should outrank the one-off at equal match quality"
+        );
     }
 
     #[test]
