@@ -122,6 +122,65 @@ fn deduplicate_entries(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
     entries.into_iter().filter(|e| seen.insert(e.command.trim_end().to_string())).collect()
 }
 
+/// A candidate entry set as loaded for a particular DB-level query
+/// (None = the broad, unfiltered recency window).
+struct EntrySnapshot {
+    db_query: Option<String>,
+    entries: Vec<HistoryEntry>,
+}
+
+/// Bounded cache of candidate sets from previous DB loads. Backspacing (or
+/// re-typing) a query restores a previous set by moving it out of the cache
+/// instead of re-scanning the table, which costs ~100ms at 500k rows.
+#[derive(Default)]
+struct EntryCache {
+    snapshots: Vec<EntrySnapshot>,
+}
+
+impl EntryCache {
+    const CAP: usize = 8;
+
+    /// Whether a set loaded with `db_query` is guaranteed to contain every
+    /// row the DB would return for `query`. A narrow set covers extensions
+    /// of its own query (each LIKE atom pattern only narrows as chars are
+    /// appended); the broad set covers exactly the queries that don't want
+    /// a DB dig, since it is window-limited.
+    fn covers(db_query: Option<&str>, query: &str, wants_prefilter: bool) -> bool {
+        match (db_query, wants_prefilter) {
+            (None, false) => true,
+            (Some(prev), true) => query.starts_with(prev),
+            _ => false,
+        }
+    }
+
+    /// Remove and return the narrowest cached set covering `query`.
+    /// Narrowest = fewest entries for the fuzzy stage to re-rank.
+    fn take_covering(&mut self, query: &str, wants_prefilter: bool) -> Option<EntrySnapshot> {
+        let idx = self
+            .snapshots
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| Self::covers(s.db_query.as_deref(), query, wants_prefilter))
+            .max_by_key(|(_, s)| s.db_query.as_ref().map_or(0, String::len))
+            .map(|(i, _)| i)?;
+        Some(self.snapshots.remove(idx))
+    }
+
+    /// Store a snapshot, replacing any existing one for the same db_query
+    /// and evicting the oldest when full.
+    fn store(&mut self, snap: EntrySnapshot) {
+        self.snapshots.retain(|s| s.db_query != snap.db_query);
+        if self.snapshots.len() >= Self::CAP {
+            self.snapshots.remove(0);
+        }
+        self.snapshots.push(snap);
+    }
+
+    fn clear(&mut self) {
+        self.snapshots.clear();
+    }
+}
+
 /// Highlight matching portions of a command for display (substring matching).
 /// Returns spans with (text, is_highlight) pairs.
 /// Only used in tests now - fuzzy matching uses highlight_command_with_indices.
@@ -283,6 +342,7 @@ pub struct RecallTui {
     preview_config: PreviewConfig,
     shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
     db_query_used: Option<String>, // Tracks the query passed to the last DB load
+    entry_cache: EntryCache, // Previous candidate sets, restored on backspace
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     status_message: Option<(String, Instant)>,
     needs_redraw: bool,
@@ -356,6 +416,7 @@ impl RecallTui {
             preview_config: config.preview.clone(),
             shell_mode,
             db_query_used,
+            entry_cache: EntryCache::default(),
             flash_until: None,
             status_message: None,
             needs_redraw: true,
@@ -412,9 +473,11 @@ impl RecallTui {
     }
 
     /// Reload entries from database and re-apply fuzzy filtering.
-    /// Called when mode (directory/global) or host filter changes.
+    /// Called when mode (directory/global) or host filter changes and after
+    /// deletions -- all of which invalidate previously cached candidate sets.
     /// Always loads the broad set (no query filter at DB level).
     fn reload_entries(&mut self) {
+        self.entry_cache.clear();
         match self.engine.load_entries(self.filter_mode, self.host_filter, None) {
             Ok(entries) => {
                 let mut deduped = deduplicate_entries(entries);
@@ -432,40 +495,8 @@ impl RecallTui {
     }
 
     /// Apply fuzzy filtering to the current entries based on query.
-    /// For queries >= 3 chars with at least one prefilterable atom, uses a
-    /// DB-level LIKE filter to ensure old commands beyond the initial
-    /// result_limit window are included. Queries with no prefilterable atoms
-    /// (e.g. pure negation "!vim") use the broad set, like short queries.
-    /// Only re-queries when the loaded set might not cover the current query.
     fn update_filtered_indices(&mut self) {
-        if self.query.len() >= 3 && SearchEngine::query_has_prefilter(&self.query) {
-            // Check if the loaded entries already cover this query. They do when
-            // the current query extends a previous DB query (LIKE '%abc%' is a
-            // superset of LIKE '%abcd%'), so client-side fuzzy suffices.
-            let needs_db_reload = match &self.db_query_used {
-                None => true,
-                Some(prev) => !self.query.starts_with(prev.as_str()),
-            };
-            if needs_db_reload {
-                let query = self.query.clone();
-                match self.engine.load_entries(self.filter_mode, self.host_filter, Some(&query)) {
-                    Ok(entries) => {
-                        let mut deduped = deduplicate_entries(entries);
-                        deduped.truncate(self.engine.result_limit());
-                        self.entries = deduped;
-                        self.db_query_used = Some(query);
-                    }
-                    Err(e) => {
-                        eprintln!("pxh recall: failed to reload entries: {e}");
-                        self.flash();
-                    }
-                }
-            }
-        } else if self.db_query_used.is_some() {
-            // Query shortened below threshold -- restore broad entry set
-            self.reload_entries();
-            return;
-        }
+        self.ensure_entries_cover_query();
 
         if self.query.is_empty() {
             self.filtered_indices = (0..self.entries.len()).map(|i| (i, Vec::new())).collect();
@@ -477,6 +508,55 @@ impl RecallTui {
             self.selected_index = 0;
         }
         self.adjust_scroll_for_selection();
+    }
+
+    /// Ensure `self.entries` is a valid candidate superset for the current
+    /// query, hitting the database only when no previously loaded set covers
+    /// it. Queries >= 3 chars with at least one prefilterable atom want a
+    /// DB-level LIKE dig so old commands beyond the initial result_limit
+    /// window are included; shorter queries (and ones with no prefilterable
+    /// atoms, e.g. pure negation "!vim") want the broad recency window.
+    /// Appending to a query is covered by the current set (LIKE '%abc%' is a
+    /// superset of LIKE '%abcd%'); backspacing restores the previous set from
+    /// the cache. Only divergent edits reach the database.
+    fn ensure_entries_cover_query(&mut self) {
+        let wants_prefilter =
+            self.query.len() >= 3 && SearchEngine::query_has_prefilter(&self.query);
+        if EntryCache::covers(self.db_query_used.as_deref(), &self.query, wants_prefilter) {
+            return;
+        }
+
+        if let Some(snap) = self.entry_cache.take_covering(&self.query, wants_prefilter) {
+            let prev = self.take_current_snapshot();
+            self.entry_cache.store(prev);
+            self.entries = snap.entries;
+            self.db_query_used = snap.db_query;
+            return;
+        }
+
+        let db_query = wants_prefilter.then(|| self.query.clone());
+        match self.engine.load_entries(self.filter_mode, self.host_filter, db_query.as_deref()) {
+            Ok(entries) => {
+                let mut deduped = deduplicate_entries(entries);
+                deduped.truncate(self.engine.result_limit());
+                let prev = self.take_current_snapshot();
+                self.entry_cache.store(prev);
+                self.entries = deduped;
+                self.db_query_used = db_query;
+            }
+            Err(e) => {
+                eprintln!("pxh recall: failed to reload entries: {e}");
+                self.flash();
+            }
+        }
+    }
+
+    /// Move the current candidate set out of `self` for caching.
+    fn take_current_snapshot(&mut self) -> EntrySnapshot {
+        EntrySnapshot {
+            db_query: self.db_query_used.take(),
+            entries: std::mem::take(&mut self.entries),
+        }
     }
 
     fn compute_filtered_indices(&mut self) -> Vec<(usize, Vec<u32>)> {
@@ -1553,6 +1633,79 @@ mod tests {
         assert_eq!(deduped[0].command, "cmd1");
         assert_eq!(deduped[0].timestamp, Some(100)); // kept first (most recent)
         assert_eq!(deduped[1].command, "cmd2");
+    }
+
+    fn cache_snapshot(db_query: Option<&str>, n_entries: usize) -> super::EntrySnapshot {
+        use crate::recall::engine::HistoryEntry;
+        let entries = (0..n_entries)
+            .map(|i| HistoryEntry {
+                id: i as i64,
+                command: format!("cmd-{i}"),
+                timestamp: None,
+                working_directory: None,
+                hostname: None,
+                exit_status: None,
+                duration_secs: None,
+            })
+            .collect();
+        super::EntrySnapshot { db_query: db_query.map(String::from), entries }
+    }
+
+    #[test]
+    fn test_entry_cache_covers() {
+        use super::EntryCache;
+        // Broad set covers any query that doesn't want a DB dig.
+        assert!(EntryCache::covers(None, "ab", false));
+        assert!(EntryCache::covers(None, "!vim", false));
+        // Broad set cannot cover a dig: it's window-limited.
+        assert!(!EntryCache::covers(None, "abc", true));
+        // A narrow set covers extensions of its query (LIKE superset)...
+        assert!(EntryCache::covers(Some("abc"), "abc", true));
+        assert!(EntryCache::covers(Some("abc"), "abcd", true));
+        // ...but not divergent or broader queries.
+        assert!(!EntryCache::covers(Some("abc"), "abx", true));
+        assert!(!EntryCache::covers(Some("abc"), "ab", false));
+    }
+
+    #[test]
+    fn test_entry_cache_takes_narrowest_covering() {
+        let mut cache = super::EntryCache::default();
+        cache.store(cache_snapshot(None, 3));
+        cache.store(cache_snapshot(Some("git"), 2));
+        cache.store(cache_snapshot(Some("git pu"), 1));
+
+        let hit = cache.take_covering("git push", true).unwrap();
+        assert_eq!(hit.db_query.as_deref(), Some("git pu"), "narrowest covering set wins");
+        assert_eq!(hit.entries.len(), 1);
+
+        // Taken snapshot is removed; the next-narrowest still serves.
+        let hit = cache.take_covering("git push", true).unwrap();
+        assert_eq!(hit.db_query.as_deref(), Some("git"));
+
+        // Broad snapshot serves short queries; then the cache is dry.
+        let hit = cache.take_covering("gi", false).unwrap();
+        assert_eq!(hit.db_query, None);
+        assert!(cache.take_covering("gi", false).is_none());
+    }
+
+    #[test]
+    fn test_entry_cache_store_replaces_and_stays_bounded() {
+        let mut cache = super::EntryCache::default();
+        cache.store(cache_snapshot(Some("abc"), 1));
+        cache.store(cache_snapshot(Some("abc"), 5));
+        let hit = cache.take_covering("abc", true).unwrap();
+        assert_eq!(hit.entries.len(), 5, "same-query store should replace, not duplicate");
+        assert!(cache.take_covering("abc", true).is_none());
+
+        for i in 0..20 {
+            cache.store(cache_snapshot(Some(&format!("q{i}")), 1));
+        }
+        assert!(cache.snapshots.len() <= super::EntryCache::CAP, "cache should stay bounded");
+        assert!(
+            cache.take_covering("q19", true).is_some(),
+            "most recent snapshots survive eviction"
+        );
+        assert!(cache.take_covering("q0", true).is_none(), "oldest snapshot evicted");
     }
 
     // Tests for highlight_command_with_indices (fuzzy match highlighting)
