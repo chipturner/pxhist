@@ -81,6 +81,20 @@ Supports both emacs (default) and vim keybindings -- set `keymap = "vim"` in `~/
 - `Ctrl-G` -- Toggle directory/global filter
 - `Alt-1` through `Alt-9` -- Quick-select visible entries
 
+**Query syntax:**
+
+Matching is fuzzy with smart case (all-lowercase queries match case-insensitively; a capital letter makes the query case-sensitive). Space-separated terms must all match, in any order. `-`, `*`, and `/` count as word separators, so `cargo build` matches `cargo build --release` and `src engine` matches `src/recall/engine.rs`.
+
+fzf-style operators are also supported:
+
+| Query | Matches |
+|-------|---------|
+| `'git` | commands containing `git` exactly (no fuzzy matching) |
+| `^cargo` | commands starting with `cargo` |
+| `.rs$` | commands ending with `.rs` |
+| `!sudo` | commands *not* containing `sudo` |
+| `^git push$` | commands starting with `git` and ending with `push` |
+
 ### Searching History (pxh show)
 
 The `show` command (alias: `s`) is the power-search interface:

@@ -554,6 +554,54 @@ mod tests {
     }
 
     #[test]
+    fn test_engine_fzf_operator_semantics() {
+        // Locks in the fzf-style query operators documented in the README:
+        // `'exact`, `^prefix`, `suffix$`, `!negation`, and combinations.
+        let conn = test_db();
+        let commands = [
+            "sudo apt install ripgrep",
+            "cargo build --release",
+            "watch cargo test",
+            "git push",
+            "git push origin main",
+            "grep -rn limit src",
+        ];
+        for (i, cmd) in commands.iter().enumerate() {
+            insert_command(&conn, cmd, "host1", "/tmp", 1000 + i as i64);
+        }
+
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        let matches = |engine: &mut SearchEngine, query: &str| -> Vec<String> {
+            let mut cmds: Vec<String> = engine
+                .filter_entries(&entries, query)
+                .iter()
+                .map(|(idx, _)| entries[*idx].command.clone())
+                .collect();
+            cmds.sort();
+            cmds
+        };
+
+        // Fuzzy `git` also matches the subsequence in `grep -rn limit src`;
+        // `'git` requires the exact substring.
+        assert_eq!(
+            matches(&mut engine, "git"),
+            ["git push", "git push origin main", "grep -rn limit src"]
+        );
+        assert_eq!(matches(&mut engine, "'git"), ["git push", "git push origin main"]);
+
+        assert_eq!(matches(&mut engine, "^cargo"), ["cargo build --release"]);
+        assert_eq!(matches(&mut engine, "push$"), ["git push"]);
+        assert_eq!(matches(&mut engine, "^git push$"), ["git push"]);
+
+        let without_sudo = matches(&mut engine, "!sudo");
+        assert_eq!(without_sudo.len(), 5);
+        assert!(!without_sudo.contains(&"sudo apt install ripgrep".to_string()));
+    }
+
+    #[test]
     fn test_filter_entries_recent_slash_path_beats_older_plain_word() {
         // The user's reported bug: typing `foobar` should rank a recent
         // `cat /foobar` (path-component match) above an old plain `foobar`.
