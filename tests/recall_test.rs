@@ -1,6 +1,55 @@
 use pxh::test_utils::PxhTestHelper;
+use rexpect::session::spawn_command;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+// Selecting an entry must emit LeaveAlternateScreen exactly once. A second
+// one (e.g. from Drop after an explicit cleanup) makes some terminals
+// restore a stale saved cursor position, so the shell prompt printed after
+// exit overwrites the start of the selection details.
+#[test]
+fn test_recall_select_leaves_alternate_screen_once() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let status = helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "zsh",
+            "--hostname",
+            "testhost",
+            "--username",
+            "tester",
+            "--session-id",
+            "42",
+            "--exit-status",
+            "0",
+            "echo hello recall",
+        ])
+        .status()?;
+    assert!(status.success(), "insert should succeed");
+
+    let cmd = helper.command_with_args(&["recall", "-q", "hello"]);
+    let mut session = spawn_command(cmd, Some(10_000))?;
+    // rexpect ptys start 0x0; give the TUI a real size (SIGWINCH redraws).
+    {
+        use std::os::fd::AsRawFd;
+        let master = session.process().get_file_handle()?;
+        let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+        // SAFETY: valid fd and pointer for the duration of the call.
+        unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+    }
+    // Wait for the TUI to draw (status bar is part of every frame).
+    session.exp_string("Enter Run")?;
+    session.send("\r")?;
+    session.flush()?;
+    let tail = session.exp_eof()?;
+
+    let leaves = tail.matches("\x1b[?1049l").count();
+    assert_eq!(leaves, 1, "expected exactly one LeaveAlternateScreen, got {leaves}: {tail:?}");
+    // The selected command must survive in the post-TUI output.
+    assert!(tail.contains("echo hello recall"), "selection details missing: {tail:?}");
+    Ok(())
+}
 
 #[test]
 fn test_recall_help_shows_options() -> Result<()> {

@@ -359,6 +359,7 @@ pub struct RecallTui {
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     status_message: Option<(String, Instant)>,
     needs_redraw: bool,
+    cleaned_up: bool, // Terminal already restored; Drop must not repeat it
     #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
 }
@@ -433,6 +434,7 @@ impl RecallTui {
             flash_until: None,
             status_message: None,
             needs_redraw: true,
+            cleaned_up: false,
             #[cfg(not(target_os = "windows"))]
             keyboard_enhanced,
         };
@@ -776,6 +778,7 @@ impl RecallTui {
     }
 
     fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.cleaned_up = true;
         #[cfg(not(target_os = "windows"))]
         if self.keyboard_enhanced {
             let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
@@ -1074,8 +1077,9 @@ impl RecallTui {
         // Line 1: Full command (can truncate)
         queue!(w, MoveTo(0, start_y + 1), Clear(ClearType::CurrentLine))?;
         let safe_cmd = sanitize_for_display(&entry.command);
-        let cmd_display: String = if safe_cmd.chars().count() > width as usize - 2 {
-            let truncated: String = safe_cmd.chars().take(width as usize - 5).collect();
+        let cmd_display: String = if safe_cmd.chars().count() > (width as usize).saturating_sub(2) {
+            let truncated: String =
+                safe_cmd.chars().take((width as usize).saturating_sub(5)).collect();
             format!("{truncated}...")
         } else {
             safe_cmd
@@ -1363,6 +1367,9 @@ enum KeyAction {
 
 impl Drop for RecallTui {
     fn drop(&mut self) {
+        if self.cleaned_up {
+            return;
+        }
         #[cfg(not(target_os = "windows"))]
         if self.keyboard_enhanced {
             let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
