@@ -108,9 +108,11 @@ enum Commands {
     Import(ImportCommand),
     #[clap(about = "export full history as JSON")]
     Export(ExportCommand),
-    #[clap(about = "synchronize to and from a directory of other pxh history databases")]
+    #[clap(about = "synchronize history with a remote host over SSH or a directory of databases")]
     Sync(SyncCommand),
-    #[clap(about = "scrub (remove) history entries matching the prompted-for string")]
+    #[clap(
+        about = "scrub (remove) sensitive history entries, interactively or via secret scanning"
+    )]
     Scrub(ScrubCommand),
     #[clap(about = "(internal) invoked by the shell to insert a history entry")]
     Insert(InsertCommand),
