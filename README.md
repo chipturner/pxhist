@@ -35,7 +35,7 @@ curl -sSfL https://raw.githubusercontent.com/chipturner/pxhist/main/install.sh |
 **From source:**
 
 ```bash
-cargo install pxh        # requires Rust 1.88+
+cargo install pxh        # requires Rust 1.95+
 ```
 
 ### Shell setup
