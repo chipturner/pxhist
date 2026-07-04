@@ -18,6 +18,21 @@ $ pxh s ffmpeg
  2022-08-03 10:39:11  ffmpeg -i cropped.mp4 -vf "pad=width=430:..." cropped.gif
 ```
 
+## Why pxh?
+
+Great tools already exist in this space -- [atuin](https://github.com/atuinsh/atuin) in particular is excellent, and if you want end-to-end-encrypted sync through a server or fish/nushell support, use it. pxh sits deliberately at the *no moving parts* end of the spectrum:
+
+|  | pxh | atuin | mcfly | zsh-histdb |
+|---|---|---|---|---|
+| Sync | SSH or shared folder | sync server (hosted or self-hosted) | none | none |
+| Accounts / keys | none | account + key for sync | none | none |
+| Background daemon | none | optional | none | none |
+| Secret scan & scrub | built in | no | no | no |
+| History database | plain SQLite, documented schema -- query it yourself | SQLite | SQLite | SQLite |
+| Shells | bash, zsh | bash, zsh, fish, nushell, xonsh | bash, zsh, fish | zsh |
+
+**Switching from atuin?** `contrib/atuin-to-pxh` converts your atuin database to pxh's JSON import format -- see [Import](#import).
+
 ## Install
 
 **Homebrew** (macOS and Linux):
@@ -168,6 +183,8 @@ pxh sync ~/Dropbox/pxh/ --export-only
 Each machine writes its own `.db` file and reads from all others.
 
 > **Note:** During sync, incoming commands are automatically scanned for secrets (API keys, passwords, etc.) and filtered out. Use `--no-secret-filter` to disable this behavior.
+
+> **Note:** Sync database files are ordinary unencrypted SQLite -- anyone who can read the shared folder can read your history. Run `pxh scan`/`pxh scrub` before syncing, and weigh your sync provider's trust model (SSH sync avoids third-party storage entirely).
 
 ### Security: Scanning and Scrubbing
 
