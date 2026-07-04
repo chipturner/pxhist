@@ -236,14 +236,9 @@ Tab completions are included automatically by `pxh shell-config`. To generate th
 pxh completions bash    # or: zsh
 ```
 
-#### Diagnostics
-
-Check for common issues or view history statistics:
+#### Statistics
 
 ```bash
-pxh doctor                # Diagnose common issues
-pxh doctor --fix          # Attempt automatic fixes
-pxh doctor --report       # Generate a diagnostic report for bug reports
 pxh stats                 # Show history statistics
 ```
 
@@ -363,6 +358,21 @@ disable_ctrl_r = true
 ```
 
 You can still use `pxh recall` directly or bind it to a different key.
+
+## Troubleshooting
+
+Something not working? `pxh doctor` checks your installation end to end -- binary setup, shell integration, database health, and config validity -- and can fix most problems itself:
+
+```bash
+pxh doctor                # Diagnose common issues
+pxh doctor --fix          # Apply automatic fixes
+```
+
+Filing a bug? `pxh doctor --report` generates a ready-to-paste markdown report of your setup (versions, shell integration state, database stats) for [GitHub issues](https://github.com/chipturner/pxhist/issues):
+
+```bash
+pxh doctor --report
+```
 
 ## Credits
 
