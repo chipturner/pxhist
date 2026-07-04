@@ -66,3 +66,8 @@ coverage-clean:
 docker-e2e:
 	docker build -t pxh-e2e -f tests/docker/Dockerfile .
 	docker run --rm pxh-e2e
+
+# Record demo GIFs (requires vhs: https://github.com/charmbracelet/vhs)
+demo *tapes:
+	cargo build --release
+	demo/record.sh {{ tapes }}

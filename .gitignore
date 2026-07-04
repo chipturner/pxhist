@@ -21,3 +21,6 @@ coverage.xml
 
 docs/superpowers/
 .worktrees/
+
+# Recorded demo GIFs (regenerate with `just demo`)
+demo/out/
