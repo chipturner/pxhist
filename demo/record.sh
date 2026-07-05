@@ -26,7 +26,23 @@ rm -rf "$DEMO_DIR"
 mkdir -p "$DEMO_DIR" "$SCRIPT_DIR/out"
 pxh --db "$DEMO_DB" import --shellname json --histfile "$SCRIPT_DIR/fixture.json"
 
-tapes=("$@")
+# Isolated HOME for shell-integration tapes (ctrl-r.tape sets Env HOME to
+# this); .zshrc loads the pxh hooks and pins the hostname so live-recorded
+# commands stay deterministic.
+DEMO_HOME="$DEMO_DIR/home"
+mkdir -p "$DEMO_HOME"
+cat > "$DEMO_HOME/.zshrc" <<EOF
+PROMPT='%F{blue}\$%f '
+export PATH="$REPO_ROOT/target/release:\$PATH"
+eval "\$(pxh shell-config zsh)"
+export PXH_HOSTNAME=apollo
+EOF
+
+tapes=()
+for tape in "$@"; do
+    [[ -f "$tape" ]] || die "not found: $tape"
+    tapes+=("$(cd "$(dirname "$tape")" && pwd)/$(basename "$tape")")
+done
 [[ ${#tapes[@]} -gt 0 ]] || tapes=("$SCRIPT_DIR"/*.tape)
 
 cd "$SCRIPT_DIR"
