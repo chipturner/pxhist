@@ -11,6 +11,8 @@ syncs across machines over SSH or a shared filesystem.
 **No cloud accounts. No servers. No networking code. No AI.** Just your history,
 on your machines, searchable in milliseconds.
 
+![pxh in action: a command recorded live, found with Ctrl-R and re-run, then an old command pulled back for editing](https://chipturner.github.io/pxhist/demo/ctrl-r.gif)
+
 ```
 $ pxh s ffmpeg
  2022-06-04 07:54:04  ffmpeg -encoders | grep '^ V'

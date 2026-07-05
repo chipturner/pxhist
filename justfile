@@ -71,3 +71,7 @@ docker-e2e:
 demo *tapes:
 	cargo build --release
 	demo/record.sh {{ tapes }}
+
+# Push recorded demo GIFs to gh-pages, where the README hot-links them
+demo-publish:
+	demo/publish.sh
