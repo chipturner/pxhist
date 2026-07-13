@@ -11,8 +11,26 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  publish:
+  test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+
+    - name: Run tests
+      run: cargo nextest run --locked
+
+  publish:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v5
 
@@ -26,6 +44,7 @@ jobs:
   build:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       matrix:
         include:
@@ -73,6 +92,7 @@ jobs:
     name: GitHub Release
     needs: [publish, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 
@@ -94,6 +114,7 @@ jobs:
     name: Update Homebrew formula
     needs: [release]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v5
 

@@ -8,12 +8,17 @@ on:
   schedule:
     - cron: '0 0 * * 1' # Weekly on Monday
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
     - uses: actions/checkout@v5
@@ -42,6 +47,7 @@ jobs:
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v5
       with:
