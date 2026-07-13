@@ -1829,7 +1829,7 @@ mod tests {
     fn test_delete_last_word_with_multibyte_whitespace() {
         // U+00A0 NBSP is 2 bytes in UTF-8: 0xC2 0xA0
         // Using rfind(is_whitespace).map(|i| i + 1) would land mid-char
-        let mut query = format!("hello\u{00A0}world");
+        let mut query = "hello\u{00A0}world".to_string();
         let trimmed_len = query.trim_end().len();
         let word_start = query[..trimmed_len]
             .char_indices()

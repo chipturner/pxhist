@@ -961,7 +961,7 @@ impl StatsCommand {
             for (cmd_bytes, cnt) in &top {
                 let cmd = BString::new(cmd_bytes.clone());
                 let display = if cmd.len() > 60 {
-                    format!("{}...", &cmd[..60].to_str_lossy())
+                    format!("{}...", cmd[..60].to_str_lossy())
                 } else {
                     cmd.to_str_lossy().into_owned()
                 };

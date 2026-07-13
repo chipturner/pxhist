@@ -143,16 +143,9 @@ fn test_sqlite_connection_creates_dirs_through_symlink() {
 
 #[test]
 fn test_get_relative_path_from_home() {
-    // Test with no overrides - this will use the actual current exe and home dir
-    let result = helpers::get_relative_path_from_home(None, None);
-    // It should return either Some(path) or None
-    match result {
-        Some(path) => {
-            // If it returns a path, it should be non-empty (unless exe is exactly at home)
-            assert!(path.is_empty() || !path.is_empty());
-        }
-        None => assert!(true), // None is a valid response if exe is not under home
-    }
+    // Test with no overrides - this will use the actual current exe and home dir.
+    // Either Some(path) or None is valid depending on where the exe lives.
+    let _ = helpers::get_relative_path_from_home(None, None);
 
     // Test with specific paths
     let exe = PathBuf::from("/home/user/bin/pxh");

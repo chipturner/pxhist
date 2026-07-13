@@ -814,7 +814,7 @@ fn symlink_pxhs_behavior() {
 
     // Get the actual binary path and create symlinks
     let bin_path = assert_cmd::cargo::cargo_bin!("pxh");
-    std::os::unix::fs::symlink(&bin_path, &pxh_symlink_path).unwrap();
+    std::os::unix::fs::symlink(bin_path, &pxh_symlink_path).unwrap();
     std::os::unix::fs::symlink(&pxh_symlink_path, &pxhs_path).unwrap();
 
     // Create a PxhCaller for our test
