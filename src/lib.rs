@@ -29,6 +29,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub mod recall;
 pub mod secrets_patterns;
+pub mod sync;
 
 pub fn get_setting(
     conn: &Connection,
