@@ -20,6 +20,7 @@ use crossterm::event::{
 use super::command::{FilterMode, HostFilter};
 use super::config::{KeymapMode, PreviewConfig, RecallConfig};
 use super::engine::{HistoryEntry, SearchEngine, format_relative_time};
+use super::query::RecallQuery;
 
 const SCROLL_MARGIN: usize = 5;
 
@@ -138,7 +139,7 @@ fn deduplicate_entries(entries: Vec<HistoryEntry>) -> Vec<HistoryEntry> {
 /// A candidate entry set as loaded for a particular DB-level query
 /// (None = the broad, unfiltered recency window).
 struct EntrySnapshot {
-    db_query: Option<String>,
+    db_query: Option<RecallQuery>,
     entries: Vec<HistoryEntry>,
 }
 
@@ -154,27 +155,32 @@ impl EntryCache {
     const CAP: usize = 8;
 
     /// Whether a set loaded with `db_query` is guaranteed to contain every
-    /// row the DB would return for `query`. A narrow set covers extensions
-    /// of its own query (each LIKE atom pattern only narrows as chars are
-    /// appended); the broad set covers exactly the queries that don't want
-    /// a DB dig, since it is window-limited.
-    fn covers(db_query: Option<&str>, query: &str, wants_prefilter: bool) -> bool {
+    /// row the DB would return for `query`. A narrow set covers queries
+    /// whose prefilter conditions imply its own (`RecallQuery::covers`, the
+    /// same relation the LIKE patterns are built from); the broad set covers
+    /// exactly the queries that don't want a DB dig, since it is
+    /// window-limited.
+    fn covers(db_query: Option<&RecallQuery>, query: &RecallQuery, wants_prefilter: bool) -> bool {
         match (db_query, wants_prefilter) {
             (None, false) => true,
-            (Some(prev), true) => query.starts_with(prev),
+            (Some(prev), true) => prev.covers(query),
             _ => false,
         }
     }
 
     /// Remove and return the narrowest cached set covering `query`.
     /// Narrowest = fewest entries for the fuzzy stage to re-rank.
-    fn take_covering(&mut self, query: &str, wants_prefilter: bool) -> Option<EntrySnapshot> {
+    fn take_covering(
+        &mut self,
+        query: &RecallQuery,
+        wants_prefilter: bool,
+    ) -> Option<EntrySnapshot> {
         let idx = self
             .snapshots
             .iter()
             .enumerate()
-            .filter(|(_, s)| Self::covers(s.db_query.as_deref(), query, wants_prefilter))
-            .max_by_key(|(_, s)| s.db_query.as_ref().map_or(0, String::len))
+            .filter(|(_, s)| Self::covers(s.db_query.as_ref(), query, wants_prefilter))
+            .max_by_key(|(_, s)| s.db_query.as_ref().map_or(0, RecallQuery::specificity))
             .map(|(i, _)| i)?;
         Some(self.snapshots.remove(idx))
     }
@@ -354,7 +360,7 @@ pub struct RecallTui {
     show_preview: bool,
     preview_config: PreviewConfig,
     shell_mode: bool, // When true, outputs command for shell execution; when false, prints details
-    db_query_used: Option<String>, // Tracks the query passed to the last DB load
+    db_query_used: Option<RecallQuery>, // Tracks the query passed to the last DB load
     entry_cache: EntryCache, // Previous candidate sets, restored on backspace
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     status_message: Option<(String, Instant)>,
@@ -374,12 +380,13 @@ impl RecallTui {
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let query = initial_query.as_deref().unwrap_or("").to_string();
         let host_filter = HostFilter::default();
+        let parsed_query = RecallQuery::parse(&query);
         let db_query_used =
-            (query.len() >= 3 && SearchEngine::query_has_prefilter(&query)).then(|| query.clone());
+            (query.len() >= 3 && parsed_query.has_prefilter()).then(|| parsed_query.clone());
         let mut entries = deduplicate_entries(engine.load_entries(
             initial_mode,
             host_filter,
-            db_query_used.as_deref(),
+            db_query_used.as_ref(),
         )?);
         entries.truncate(engine.result_limit());
 
@@ -410,7 +417,7 @@ impl RecallTui {
         let filtered_indices = if query.is_empty() {
             (0..entries.len()).map(|i| (i, Vec::new())).collect()
         } else {
-            engine.filter_entries(&entries, &query)
+            engine.filter_entries(&entries, &parsed_query)
         };
 
         let mut tui = RecallTui {
@@ -509,14 +516,18 @@ impl RecallTui {
         self.update_filtered_indices();
     }
 
-    /// Apply fuzzy filtering to the current entries based on query.
+    /// Apply fuzzy filtering to the current entries based on query. The
+    /// query is parsed once here; the same parse drives both the candidate
+    /// coverage check and the fuzzy stage, so the two cannot disagree about
+    /// atom semantics.
     fn update_filtered_indices(&mut self) {
-        self.ensure_entries_cover_query();
+        let query = RecallQuery::parse(&self.query);
+        self.ensure_entries_cover_query(&query);
 
-        if self.query.is_empty() {
+        if query.is_empty() {
             self.filtered_indices = (0..self.entries.len()).map(|i| (i, Vec::new())).collect();
         } else {
-            self.filtered_indices = self.compute_filtered_indices();
+            self.filtered_indices = self.engine.filter_entries(&self.entries, &query);
         }
 
         if self.selected_index >= self.filtered_indices.len() {
@@ -534,14 +545,13 @@ impl RecallTui {
     /// Appending to a query is covered by the current set (LIKE '%abc%' is a
     /// superset of LIKE '%abcd%'); backspacing restores the previous set from
     /// the cache. Only divergent edits reach the database.
-    fn ensure_entries_cover_query(&mut self) {
-        let wants_prefilter =
-            self.query.len() >= 3 && SearchEngine::query_has_prefilter(&self.query);
-        if EntryCache::covers(self.db_query_used.as_deref(), &self.query, wants_prefilter) {
+    fn ensure_entries_cover_query(&mut self, query: &RecallQuery) {
+        let wants_prefilter = query.raw().len() >= 3 && query.has_prefilter();
+        if EntryCache::covers(self.db_query_used.as_ref(), query, wants_prefilter) {
             return;
         }
 
-        if let Some(snap) = self.entry_cache.take_covering(&self.query, wants_prefilter) {
+        if let Some(snap) = self.entry_cache.take_covering(query, wants_prefilter) {
             let prev = self.take_current_snapshot();
             self.entry_cache.store(prev);
             self.entries = snap.entries;
@@ -549,8 +559,8 @@ impl RecallTui {
             return;
         }
 
-        let db_query = wants_prefilter.then(|| self.query.clone());
-        match self.engine.load_entries(self.filter_mode, self.host_filter, db_query.as_deref()) {
+        let db_query = wants_prefilter.then(|| query.clone());
+        match self.engine.load_entries(self.filter_mode, self.host_filter, db_query.as_ref()) {
             Ok(entries) => {
                 let mut deduped = deduplicate_entries(entries);
                 deduped.truncate(self.engine.result_limit());
@@ -572,10 +582,6 @@ impl RecallTui {
             db_query: self.db_query_used.take(),
             entries: std::mem::take(&mut self.entries),
         }
-    }
-
-    fn compute_filtered_indices(&mut self) -> Vec<(usize, Vec<u32>)> {
-        self.engine.filter_entries(&self.entries, &self.query)
     }
 
     /// Trigger a brief visual flash for feedback on unrecognized keys
@@ -1674,23 +1680,32 @@ mod tests {
                 use_count: 1,
             })
             .collect();
-        super::EntrySnapshot { db_query: db_query.map(String::from), entries }
+        super::EntrySnapshot { db_query: db_query.map(RecallQuery::parse), entries }
     }
 
     #[test]
     fn test_entry_cache_covers() {
         use super::EntryCache;
+        let covers = |db_query: Option<&str>, query: &str, wants_prefilter: bool| {
+            EntryCache::covers(
+                db_query.map(RecallQuery::parse).as_ref(),
+                &RecallQuery::parse(query),
+                wants_prefilter,
+            )
+        };
         // Broad set covers any query that doesn't want a DB dig.
-        assert!(EntryCache::covers(None, "ab", false));
-        assert!(EntryCache::covers(None, "!vim", false));
+        assert!(covers(None, "ab", false));
+        assert!(covers(None, "!vim", false));
         // Broad set cannot cover a dig: it's window-limited.
-        assert!(!EntryCache::covers(None, "abc", true));
-        // A narrow set covers extensions of its query (LIKE superset)...
-        assert!(EntryCache::covers(Some("abc"), "abc", true));
-        assert!(EntryCache::covers(Some("abc"), "abcd", true));
+        assert!(!covers(None, "abc", true));
+        // A narrow set covers queries whose conditions imply its own...
+        assert!(covers(Some("abc"), "abc", true));
+        assert!(covers(Some("abc"), "abcd", true));
+        assert!(covers(Some("rs"), "rs/main", true), "separator append stays covered");
+        assert!(covers(Some("push"), "git push", true), "atom order is irrelevant");
         // ...but not divergent or broader queries.
-        assert!(!EntryCache::covers(Some("abc"), "abx", true));
-        assert!(!EntryCache::covers(Some("abc"), "ab", false));
+        assert!(!covers(Some("abc"), "abx", true));
+        assert!(!covers(Some("abc"), "ab", false));
     }
 
     #[test]
@@ -1700,18 +1715,19 @@ mod tests {
         cache.store(cache_snapshot(Some("git"), 2));
         cache.store(cache_snapshot(Some("git pu"), 1));
 
-        let hit = cache.take_covering("git push", true).unwrap();
-        assert_eq!(hit.db_query.as_deref(), Some("git pu"), "narrowest covering set wins");
+        let raw = |snap: &super::EntrySnapshot| snap.db_query.as_ref().map(|q| q.raw().to_string());
+        let hit = cache.take_covering(&RecallQuery::parse("git push"), true).unwrap();
+        assert_eq!(raw(&hit).as_deref(), Some("git pu"), "narrowest covering set wins");
         assert_eq!(hit.entries.len(), 1);
 
         // Taken snapshot is removed; the next-narrowest still serves.
-        let hit = cache.take_covering("git push", true).unwrap();
-        assert_eq!(hit.db_query.as_deref(), Some("git"));
+        let hit = cache.take_covering(&RecallQuery::parse("git push"), true).unwrap();
+        assert_eq!(raw(&hit).as_deref(), Some("git"));
 
         // Broad snapshot serves short queries; then the cache is dry.
-        let hit = cache.take_covering("gi", false).unwrap();
-        assert_eq!(hit.db_query, None);
-        assert!(cache.take_covering("gi", false).is_none());
+        let hit = cache.take_covering(&RecallQuery::parse("gi"), false).unwrap();
+        assert!(hit.db_query.is_none());
+        assert!(cache.take_covering(&RecallQuery::parse("gi"), false).is_none());
     }
 
     #[test]
@@ -1719,19 +1735,22 @@ mod tests {
         let mut cache = super::EntryCache::default();
         cache.store(cache_snapshot(Some("abc"), 1));
         cache.store(cache_snapshot(Some("abc"), 5));
-        let hit = cache.take_covering("abc", true).unwrap();
+        let hit = cache.take_covering(&RecallQuery::parse("abc"), true).unwrap();
         assert_eq!(hit.entries.len(), 5, "same-query store should replace, not duplicate");
-        assert!(cache.take_covering("abc", true).is_none());
+        assert!(cache.take_covering(&RecallQuery::parse("abc"), true).is_none());
 
         for i in 0..20 {
             cache.store(cache_snapshot(Some(&format!("q{i}")), 1));
         }
         assert!(cache.snapshots.len() <= super::EntryCache::CAP, "cache should stay bounded");
         assert!(
-            cache.take_covering("q19", true).is_some(),
+            cache.take_covering(&RecallQuery::parse("q19"), true).is_some(),
             "most recent snapshots survive eviction"
         );
-        assert!(cache.take_covering("q0", true).is_none(), "oldest snapshot evicted");
+        assert!(
+            cache.take_covering(&RecallQuery::parse("q0"), true).is_none(),
+            "oldest snapshot evicted"
+        );
     }
 
     // Tests for highlight_command_with_indices (fuzzy match highlighting)

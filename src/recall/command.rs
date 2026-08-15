@@ -8,6 +8,7 @@ use rusqlite::Connection;
 
 use super::config::Config;
 use super::engine::{SearchEngine, format_relative_time};
+use super::query::RecallQuery;
 use super::tui::RecallTui;
 #[derive(Parser, Debug)]
 pub struct RecallCommand {
@@ -70,8 +71,9 @@ impl RecallCommand {
         // Print mode: just query and print results, no TUI
         if self.print {
             let query_start = Instant::now();
-            let query = self.query.as_deref();
-            let entries = engine.load_entries(initial_mode, HostFilter::default(), query)?;
+            let query = self.query.as_deref().map(RecallQuery::parse);
+            let entries =
+                engine.load_entries(initial_mode, HostFilter::default(), query.as_ref())?;
             let query_time = query_start.elapsed();
 
             // Deduplicate by command text (matching TUI behavior) and respect limit

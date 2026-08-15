@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use bstr::BString;
-use nucleo::{Config, Matcher, Utf32Str, pattern::Pattern};
+use nucleo::{Config, Matcher, Utf32Str};
 use rusqlite::Connection;
 
 use super::command::{FilterMode, HostFilter};
+use super::query::{RecallQuery, normalize_recall_char};
 
 /// A history entry with its metadata
 #[derive(Debug, Clone)]
@@ -56,73 +57,28 @@ impl SearchEngine {
         self.host_set.contains(hostname)
     }
 
-    /// Build the LIKE patterns for the DB prefilter: one per whitespace-separated
-    /// query atom, since nucleo matches atoms in any order. fzf-style operators
-    /// understood by nucleo's `Pattern::parse` (`^`/`'` prefix, `$` suffix) are
-    /// stripped so the prefilter remains a superset of what the fuzzy stage
-    /// accepts; negated atoms (`!foo`) are dropped entirely because LIKE can only
-    /// require presence -- the fuzzy stage enforces absence.
-    fn fuzzy_like_patterns(query: &str) -> Vec<String> {
-        query
-            .split_whitespace()
-            .filter_map(|atom| {
-                if atom.starts_with('!') {
-                    return None;
-                }
-                let atom = atom.strip_prefix(['^', '\'']).unwrap_or(atom);
-                let atom = atom.strip_suffix('$').unwrap_or(atom);
-                (!atom.is_empty()).then(|| Self::fuzzy_like_pattern(atom))
-            })
-            .collect()
-    }
-
-    /// Whether a query produces any DB-level prefilter conditions. Queries of
-    /// only negated/operator atoms don't, and load identically to no query.
-    pub fn query_has_prefilter(query: &str) -> bool {
-        !Self::fuzzy_like_patterns(query).is_empty()
-    }
-
-    /// Append one LIKE condition per prefilter pattern of `query`.
+    /// Append one LIKE condition per prefilter pattern of `query`. The
+    /// patterns come from `RecallQuery`, which owns the guarantee that they
+    /// accept every row the fuzzy stage could match.
     fn push_query_conditions(
-        query: Option<&str>,
+        query: Option<&RecallQuery>,
         where_conditions: &mut Vec<String>,
         params: &mut Vec<String>,
     ) {
-        for pattern in query.map(Self::fuzzy_like_patterns).unwrap_or_default() {
+        for pattern in query.map(RecallQuery::like_patterns).unwrap_or_default() {
             where_conditions
                 .push("CAST(full_command AS text) LIKE ? ESCAPE '\\' COLLATE NOCASE".to_string());
             params.push(pattern);
         }
     }
 
-    /// Build a LIKE pattern that matches a fuzzy subsequence of one atom.
-    /// "gcm" becomes "%g%c%m%" so it matches "git commit -m".
-    fn fuzzy_like_pattern(atom: &str) -> String {
-        let mut pattern = String::with_capacity(atom.len() * 2 + 1);
-        pattern.push('%');
-        for ch in atom.chars() {
-            match ch {
-                // Escape LIKE special characters
-                '%' | '_' | '\\' => {
-                    pattern.push('\\');
-                    pattern.push(ch);
-                }
-                // Recall-separator chars become wildcards so the prefilter
-                // mirrors `normalize_recall_char()` in scoring (see below).
-                c if is_recall_separator(c) => pattern.push('%'),
-                _ => pattern.push(ch),
-            }
-            pattern.push('%');
-        }
-        pattern
-    }
-
-    /// Load history entries from the database, optionally filtered by a search query
+    /// Load history entries from the database, optionally narrowed by the
+    /// query's DB prefilter.
     pub fn load_entries(
         &self,
         filter_mode: FilterMode,
         host_filter: HostFilter,
-        query: Option<&str>,
+        query: Option<&RecallQuery>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let entries = match filter_mode {
             FilterMode::Directory => self.load_entries_for_directory(host_filter, query)?,
@@ -134,7 +90,7 @@ impl SearchEngine {
     fn load_all_entries(
         &self,
         host_filter: HostFilter,
-        query: Option<&str>,
+        query: Option<&RecallQuery>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let mut where_conditions = Vec::new();
         let mut params: Vec<String> = Vec::new();
@@ -183,7 +139,7 @@ impl SearchEngine {
     fn load_entries_for_directory(
         &self,
         host_filter: HostFilter,
-        query: Option<&str>,
+        query: Option<&RecallQuery>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
         let mut where_conditions = vec!["working_directory = CAST(? as blob)".to_string()];
         let dir_str = self.working_directory.to_string_lossy().to_string();
@@ -272,7 +228,7 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
     pub fn filter_entries(
         &mut self,
         entries: &[HistoryEntry],
-        query: &str,
+        query: &RecallQuery,
     ) -> Vec<(usize, Vec<u32>)> {
         if query.is_empty() {
             // No query - return all entries without match positions
@@ -291,17 +247,8 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
         // `-`, `*`, `/` to spaces in both query and haystack puts these match positions
         // in the BOUNDARY_WHITE tier. (`*` also acts as a word separator in queries.)
         // The original query is used for highlighting so `--release` shows highlighted dashes.
-        let normalized_query: String = query.chars().map(normalize_recall_char).collect();
-        let scoring_pattern = Pattern::parse(
-            &normalized_query,
-            nucleo::pattern::CaseMatching::Smart,
-            nucleo::pattern::Normalization::Smart,
-        );
-        let highlight_pattern = Pattern::parse(
-            query,
-            nucleo::pattern::CaseMatching::Smart,
-            nucleo::pattern::Normalization::Smart,
-        );
+        let scoring_pattern = query.scoring_pattern();
+        let highlight_pattern = query.highlight_pattern();
 
         let mut scored_results: Vec<(usize, u32, Vec<u32>)> = Vec::new();
         let mut buf = Vec::new();
@@ -341,20 +288,6 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
         // Return just the indices and highlight positions
         scored_results.into_iter().map(|(idx, _, indices)| (idx, indices)).collect()
     }
-}
-
-/// Characters treated as word separators in recall search. `-` covers flag forms
-/// (`--release`), `*` covers glob queries, and `/` covers path components so a
-/// match after any of them scores like a whitespace boundary rather than nucleo's
-/// (lower) delimiter boundary.
-fn is_recall_separator(c: char) -> bool {
-    matches!(c, '-' | '*' | '/')
-}
-
-/// Map separator chars to space so nucleo treats them as word boundaries; pass
-/// through everything else.
-fn normalize_recall_char(c: char) -> char {
-    if is_recall_separator(c) { ' ' } else { c }
 }
 
 /// Recency boost added to nucleo's fuzzy score so freshly-used commands outrank
@@ -443,6 +376,10 @@ mod tests {
         conn
     }
 
+    fn q(query: &str) -> RecallQuery {
+        RecallQuery::parse(query)
+    }
+
     fn insert_command(conn: &Connection, cmd: &str, hostname: &str, dir: &str, ts: i64) {
         conn.execute(
             "INSERT INTO command_history (session_id, full_command, shellname, hostname, working_directory, start_unix_timestamp)
@@ -514,11 +451,11 @@ mod tests {
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
 
-        let filtered = engine.filter_entries(&entries, "release");
+        let filtered = engine.filter_entries(&entries, &q("release"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(entries[filtered[0].0].command, "cargo build --release");
 
-        let filtered = engine.filter_entries(&entries, "--release");
+        let filtered = engine.filter_entries(&entries, &q("--release"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(entries[filtered[0].0].command, "cargo build --release");
     }
@@ -533,7 +470,7 @@ mod tests {
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
 
-        let filtered = engine.filter_entries(&entries, "*.rs");
+        let filtered = engine.filter_entries(&entries, &q("*.rs"));
         assert_eq!(filtered.len(), 1);
         assert!(entries[filtered[0].0].command.contains("*.rs"));
     }
@@ -548,7 +485,7 @@ mod tests {
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
 
-        let filtered = engine.filter_entries(&entries, "foobar");
+        let filtered = engine.filter_entries(&entries, &q("foobar"));
         assert_eq!(filtered.len(), 1);
         assert_eq!(entries[filtered[0].0].command, "cat /foobar");
     }
@@ -576,7 +513,7 @@ mod tests {
 
         let matches = |engine: &mut SearchEngine, query: &str| -> Vec<String> {
             let mut cmds: Vec<String> = engine
-                .filter_entries(&entries, query)
+                .filter_entries(&entries, &q(query))
                 .iter()
                 .map(|(idx, _)| entries[*idx].command.clone())
                 .collect();
@@ -617,7 +554,7 @@ mod tests {
         let mut engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
-        let filtered = engine.filter_entries(&entries, "foobar");
+        let filtered = engine.filter_entries(&entries, &q("foobar"));
 
         assert_eq!(filtered.len(), 2);
         assert_eq!(
@@ -636,8 +573,9 @@ mod tests {
 
         let engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
-        let entries =
-            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("/foobar")).unwrap();
+        let entries = engine
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("/foobar")))
+            .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].command, "echo foobar");
     }
@@ -674,7 +612,7 @@ mod tests {
 
         let mut engine =
             SearchEngine::new(test_db(), PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
-        let filtered = engine.filter_entries(&entries, "make");
+        let filtered = engine.filter_entries(&entries, &q("make"));
         assert_eq!(filtered.len(), 2);
         assert_eq!(
             entries[filtered[0].0].command, "make betaa",
@@ -702,7 +640,7 @@ mod tests {
 
         let mut engine =
             SearchEngine::new(test_db(), PathBuf::from("/proj"), vec![BString::from("host1")], 100);
-        let filtered = engine.filter_entries(&entries, "make");
+        let filtered = engine.filter_entries(&entries, &q("make"));
         assert_eq!(filtered.len(), 2);
         assert_eq!(
             entries[filtered[0].0].command, "make betaa",
@@ -763,7 +701,7 @@ mod tests {
         let mut engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
-        let filtered = engine.filter_entries(&entries, "p");
+        let filtered = engine.filter_entries(&entries, &q("p"));
 
         assert!(filtered.len() >= 2);
         assert_eq!(
@@ -785,7 +723,7 @@ mod tests {
         let mut engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
-        let filtered = engine.filter_entries(&entries, "p");
+        let filtered = engine.filter_entries(&entries, &q("p"));
 
         assert_eq!(
             entries[filtered[0].0].command, "python script.py",
@@ -832,7 +770,7 @@ mod tests {
 
         // Global mode WITH query: LIKE filter narrows before LIMIT, so shutdown is found
         let entries = engine
-            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some("shutdown"))
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("shutdown")))
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].command, "sudo shutdown -h now");
@@ -923,7 +861,7 @@ mod tests {
 
         // "gcm" should match "git commit -m" via subsequence (g...c...m)
         let entries =
-            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("gcm")).unwrap();
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("gcm"))).unwrap();
         assert!(
             entries.iter().any(|e| e.command.contains("git commit")),
             "fuzzy query 'gcm' should match 'git commit -m', got: {:?}",
@@ -932,7 +870,7 @@ mod tests {
 
         // "dcu" should match "docker compose up"
         let entries =
-            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("dcu")).unwrap();
+            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("dcu"))).unwrap();
         assert!(
             entries.iter().any(|e| e.command.contains("docker compose")),
             "fuzzy query 'dcu' should match 'docker compose up', got: {:?}",
@@ -951,7 +889,7 @@ mod tests {
         let engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine
-            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some("push git"))
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("push git")))
             .unwrap();
         assert_eq!(entries.len(), 1, "reversed word order should still prefilter-match");
         assert_eq!(entries[0].command, "git push origin main");
@@ -968,8 +906,9 @@ mod tests {
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
 
         for query in ["^cargo", "release$", "'build", "^cargo release$"] {
-            let entries =
-                engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some(query)).unwrap();
+            let entries = engine
+                .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q(query)))
+                .unwrap();
             assert_eq!(entries.len(), 1, "query {query:?} should survive the prefilter");
         }
     }
@@ -986,12 +925,13 @@ mod tests {
         let engine =
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
 
-        let entries =
-            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("!vim")).unwrap();
+        let entries = engine
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("!vim")))
+            .unwrap();
         assert_eq!(entries.len(), 2, "pure-negation query should not prefilter at all");
 
         let entries = engine
-            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some("!vim cargo"))
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("!vim cargo")))
             .unwrap();
         assert_eq!(entries.len(), 1, "positive atom should still prefilter");
         assert_eq!(entries[0].command, "cargo build");
@@ -1010,24 +950,119 @@ mod tests {
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
         let entries = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
 
-        let filtered = engine.filter_entries(&entries, "!vim");
+        let filtered = engine.filter_entries(&entries, &q("!vim"));
         let commands: Vec<_> = filtered.iter().map(|(i, _)| &entries[*i].command).collect();
         assert!(!commands.iter().any(|c| c.contains("vim")), "negation should exclude vim");
         assert_eq!(commands.len(), 2);
 
-        let filtered = engine.filter_entries(&entries, "^cargo");
+        let filtered = engine.filter_entries(&entries, &q("^cargo"));
         assert_eq!(filtered.len(), 1, "^ should anchor to start of command");
         assert_eq!(entries[filtered[0].0].command, "cargo build --release");
     }
 
     #[test]
-    fn test_query_has_prefilter() {
-        assert!(SearchEngine::query_has_prefilter("cargo"));
-        assert!(SearchEngine::query_has_prefilter("!vim cargo"));
-        assert!(!SearchEngine::query_has_prefilter("!vim"));
-        assert!(!SearchEngine::query_has_prefilter("^$"));
-        assert!(!SearchEngine::query_has_prefilter("   "));
-        assert!(!SearchEngine::query_has_prefilter(""));
+    fn test_like_filter_splits_atoms_on_separators() {
+        // Scoring normalizes `-`/`*`/`/` to spaces *before* nucleo splits the
+        // query into atoms, so "rs/main" is two order-independent atoms. The
+        // prefilter must mirror that split or it silently drops rows the
+        // fuzzy stage would match (README promises "src engine" matches
+        // "src/recall/engine.rs" with `/` acting as a word separator).
+        let conn = test_db();
+        insert_command(&conn, "vim src/main.rs", "host1", "/tmp", 1000);
+
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        for query in ["rs/main", "rs-main", "rs*main"] {
+            let entries = engine
+                .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q(query)))
+                .unwrap();
+            assert_eq!(
+                entries.len(),
+                1,
+                "prefilter must split {query:?} into atoms like the scorer"
+            );
+        }
+    }
+
+    #[test]
+    fn test_prefilter_is_superset_of_fuzzy_stage() {
+        // The core invariant of the two-stage search: every row the fuzzy
+        // stage would accept must survive the DB prefilter. Deterministic
+        // pseudo-random queries over a corpus rich in separators, operators,
+        // and escapes; result_limit is large enough that truncation never
+        // masks a violation.
+        let commands = [
+            "vim src/main.rs",
+            "cargo build --release",
+            "git push origin main",
+            "find . -name '*.rs' -delete",
+            "echo foo bar",
+            "grep -rn limit src/recall/engine.rs",
+            "docker compose up -d",
+            "ls -la /home/user/project",
+        ];
+        let conn = test_db();
+        for (i, cmd) in commands.iter().enumerate() {
+            insert_command(&conn, cmd, "host1", "/tmp", 1000 + i as i64);
+        }
+        let mut engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 1000);
+        let all = engine.load_entries(FilterMode::Global, HostFilter::AllHosts, None).unwrap();
+
+        // Query fragments deliberately shaped like real typing: separators
+        // inside atoms, fzf operators, escaped spaces, multi-atom queries.
+        let fragments = [
+            "rs/main",
+            "rs-main",
+            "src/rec",
+            "git/push",
+            "build--rel",
+            "foo\\ bar",
+            "^cargo",
+            "'build",
+            "push$",
+            "!vim",
+            "main",
+            "rs",
+            "eng/lim",
+            "up-d",
+            "*.rs",
+            "/home/user",
+            "release",
+            "gpo",
+        ];
+        let mut seed: u64 = 0x9e3779b97f4a7c15;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        let mut queries: Vec<String> = fragments.iter().map(|f| f.to_string()).collect();
+        for _ in 0..200 {
+            let a = fragments[(next() % fragments.len() as u64) as usize];
+            let b = fragments[(next() % fragments.len() as u64) as usize];
+            let joiner = [" ", "/", "-"][(next() % 3) as usize];
+            queries.push(format!("{a}{joiner}{b}"));
+        }
+
+        for query in &queries {
+            let fuzzy_ids: Vec<i64> = engine
+                .filter_entries(&all, &q(query))
+                .iter()
+                .map(|(idx, _)| all[*idx].id)
+                .collect();
+            let prefiltered = engine
+                .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q(query)))
+                .unwrap();
+            for id in &fuzzy_ids {
+                assert!(
+                    prefiltered.iter().any(|e| e.id == *id),
+                    "query {query:?}: row id {id} ({:?}) passes the fuzzy stage but is dropped by the prefilter",
+                    all.iter().find(|e| e.id == *id).map(|e| &e.command)
+                );
+            }
+        }
     }
 
     #[test]
@@ -1039,8 +1074,9 @@ mod tests {
             SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
 
         // "git-log" should match "git log" because `-` is normalized to wildcard
-        let entries =
-            engine.load_entries(FilterMode::Global, HostFilter::AllHosts, Some("git-log")).unwrap();
+        let entries = engine
+            .load_entries(FilterMode::Global, HostFilter::AllHosts, Some(&q("git-log")))
+            .unwrap();
         assert!(
             entries.iter().any(|e| e.command.contains("git log")),
             "query 'git-log' should match 'git log' (dash normalized), got: {:?}",
