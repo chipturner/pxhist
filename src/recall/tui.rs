@@ -343,7 +343,11 @@ fn format_duration(secs: i64) -> String {
     }
 }
 
-pub struct RecallTui {
+/// The pure recall UI state machine: entries, cache, query, selection,
+/// scroll, keymaps, and frame rendering -- everything except the terminal
+/// itself. Constructible without a tty, so key handling, scroll math, cache
+/// coverage, and drawing (into any `Write`) are all unit-testable.
+pub struct RecallState {
     engine: SearchEngine,
     filter_mode: FilterMode,
     host_filter: HostFilter,
@@ -353,7 +357,6 @@ pub struct RecallTui {
     query: String,
     selected_index: usize,
     scroll_offset: usize, // Index of entry at top of visible area
-    tty: File,
     term_height: u16,
     term_width: u16,
     keymap_mode: KeymapMode,
@@ -365,31 +368,20 @@ pub struct RecallTui {
     flash_until: Option<Instant>, // For visual feedback on unrecognized keys
     status_message: Option<(String, Instant)>,
     needs_redraw: bool,
+}
+
+/// The terminal adapter: raw mode, /dev/tty, keyboard enhancement, and the
+/// restore-exactly-once guard. The only piece of recall that needs a real
+/// terminal; everything behind it renders to a plain `Write`.
+struct RecallTerminal {
+    tty: File,
     cleaned_up: bool, // Terminal already restored; Drop must not repeat it
     #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
 }
 
-impl RecallTui {
-    pub fn new(
-        mut engine: SearchEngine,
-        initial_mode: FilterMode,
-        initial_query: Option<String>,
-        config: &RecallConfig,
-        shell_mode: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let query = initial_query.as_deref().unwrap_or("").to_string();
-        let host_filter = HostFilter::default();
-        let parsed_query = RecallQuery::parse(&query);
-        let db_query_used =
-            (query.len() >= 3 && parsed_query.has_prefilter()).then(|| parsed_query.clone());
-        let mut entries = deduplicate_entries(engine.load_entries(
-            initial_mode,
-            host_filter,
-            db_query_used.as_ref(),
-        )?);
-        entries.truncate(engine.result_limit());
-
+impl RecallTerminal {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
 
@@ -411,7 +403,164 @@ impl RecallTui {
         )?;
         tty.flush()?;
 
+        Ok(RecallTerminal {
+            tty,
+            cleaned_up: false,
+            #[cfg(not(target_os = "windows"))]
+            keyboard_enhanced,
+        })
+    }
+
+    fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.cleaned_up = true;
+        #[cfg(not(target_os = "windows"))]
+        if self.keyboard_enhanced {
+            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
+        }
+        execute!(self.tty, Show, LeaveAlternateScreen)?;
+        terminal::disable_raw_mode()?;
+        Ok(())
+    }
+
+    /// Copy text to the user's clipboard via an OSC 52 escape sequence.
+    fn write_clipboard(&mut self, text: &str) {
+        let encoded = base64_encode(text.as_bytes());
+        let _ = write!(self.tty, "\x1b]52;c;{encoded}\x07");
+        let _ = self.tty.flush();
+    }
+}
+
+impl Drop for RecallTerminal {
+    fn drop(&mut self) {
+        if self.cleaned_up {
+            return;
+        }
+        #[cfg(not(target_os = "windows"))]
+        if self.keyboard_enhanced {
+            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
+        }
+        let _ = execute!(self.tty, Show, LeaveAlternateScreen);
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
+/// The interactive recall UI: a `RecallState` driven by events from a
+/// `RecallTerminal`.
+pub struct RecallTui {
+    state: RecallState,
+    terminal: RecallTerminal,
+}
+
+impl RecallTui {
+    pub fn new(
+        engine: SearchEngine,
+        initial_mode: FilterMode,
+        initial_query: Option<String>,
+        config: &RecallConfig,
+        shell_mode: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        // Build the state (including the initial DB load) before touching the
+        // terminal, so failures leave the terminal untouched.
+        let mut state = RecallState::new(engine, initial_mode, initial_query, config, shell_mode)?;
+        let terminal = RecallTerminal::new()?;
         let (term_width, term_height) = terminal::size()?;
+        state.set_dimensions(term_width, term_height);
+        state.adjust_scroll_for_selection();
+        Ok(RecallTui { state, terminal })
+    }
+
+    fn draw_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Get fresh terminal size each frame
+        let (term_width, term_height) = terminal::size()?;
+        self.state.set_dimensions(term_width, term_height);
+        // Use buffered writer to batch all terminal writes into a single syscall
+        let mut w = BufWriter::new(&self.terminal.tty);
+        self.state.draw(&mut w)
+    }
+
+    pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+        loop {
+            if self.state.expire_timed_effects() {
+                self.state.needs_redraw = true;
+            }
+
+            if self.state.needs_redraw {
+                self.draw_frame()?;
+                self.state.needs_redraw = false;
+            }
+
+            if !event::poll(Duration::from_millis(100))? {
+                continue;
+            }
+
+            match event::read()? {
+                Event::Key(key) => {
+                    self.state.needs_redraw = true;
+                    let action = self.state.handle_key(key)?;
+                    match action {
+                        KeyAction::Continue => continue,
+                        KeyAction::Copy(text) => {
+                            self.terminal.write_clipboard(&text);
+                            continue;
+                        }
+                        KeyAction::Select | KeyAction::Edit | KeyAction::EditBeginning => {
+                            self.terminal.cleanup()?;
+                            if !self.state.shell_mode {
+                                self.state.print_entry_details();
+                                return Ok(None);
+                            }
+                            let prefix = match action {
+                                KeyAction::Select => "run",
+                                KeyAction::EditBeginning => "edit-a",
+                                _ => "edit",
+                            };
+                            let result = self
+                                .state
+                                .get_selected_command()
+                                .map(|cmd| format!("{prefix}:{cmd}"));
+                            return Ok(result);
+                        }
+                        KeyAction::Cancel => {
+                            self.terminal.cleanup()?;
+                            return Ok(None);
+                        }
+                    }
+                }
+                Event::Resize(_, _) => {
+                    self.state.needs_redraw = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Draw once and exit (for profiling)
+    pub fn draw_once(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        self.draw_frame()?;
+        self.terminal.cleanup()?;
+        Ok(())
+    }
+}
+
+impl RecallState {
+    fn new(
+        mut engine: SearchEngine,
+        initial_mode: FilterMode,
+        initial_query: Option<String>,
+        config: &RecallConfig,
+        shell_mode: bool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let query = initial_query.as_deref().unwrap_or("").to_string();
+        let host_filter = HostFilter::default();
+        let parsed_query = RecallQuery::parse(&query);
+        let db_query_used =
+            (query.len() >= 3 && parsed_query.has_prefilter()).then(|| parsed_query.clone());
+        let mut entries = deduplicate_entries(engine.load_entries(
+            initial_mode,
+            host_filter,
+            db_query_used.as_ref(),
+        )?);
+        entries.truncate(engine.result_limit());
 
         // Apply initial fuzzy filtering
         let filtered_indices = if query.is_empty() {
@@ -420,7 +569,7 @@ impl RecallTui {
             engine.filter_entries(&entries, &parsed_query)
         };
 
-        let mut tui = RecallTui {
+        Ok(RecallState {
             engine,
             filter_mode: initial_mode,
             host_filter,
@@ -429,9 +578,8 @@ impl RecallTui {
             query,
             selected_index: 0,
             scroll_offset: 0,
-            tty,
-            term_height,
-            term_width,
+            term_height: 0,
+            term_width: 0,
             keymap_mode: config.initial_keymap_mode(),
             show_preview: config.show_preview,
             preview_config: config.preview.clone(),
@@ -441,13 +589,31 @@ impl RecallTui {
             flash_until: None,
             status_message: None,
             needs_redraw: true,
-            cleaned_up: false,
-            #[cfg(not(target_os = "windows"))]
-            keyboard_enhanced,
-        };
+        })
+    }
 
-        tui.adjust_scroll_for_selection();
-        Ok(tui)
+    fn set_dimensions(&mut self, width: u16, height: u16) {
+        self.term_width = width;
+        self.term_height = height;
+    }
+
+    /// Clear expired timed effects (status message, flash); returns true if
+    /// anything changed and a redraw is needed.
+    fn expire_timed_effects(&mut self) -> bool {
+        let mut changed = false;
+        if let Some((_, until)) = self.status_message
+            && Instant::now() >= until
+        {
+            self.status_message = None;
+            changed = true;
+        }
+        if let Some(until) = self.flash_until
+            && Instant::now() >= until
+        {
+            self.flash_until = None;
+            changed = true;
+        }
+        changed
     }
 
     fn results_height(&self) -> usize {
@@ -495,8 +661,9 @@ impl RecallTui {
     }
 
     /// Reload entries from database and re-apply fuzzy filtering.
-    /// Called when mode (directory/global) or host filter changes and after
-    /// deletions -- all of which invalidate previously cached candidate sets.
+    /// Called when mode (directory/global) or host filter changes, which
+    /// invalidates previously cached candidate sets. (Deletion keeps the
+    /// live set and clears the cache in place instead.)
     /// Always loads the broad set (no query filter at DB level).
     fn reload_entries(&mut self) {
         self.entry_cache.clear();
@@ -594,14 +761,16 @@ impl RecallTui {
         self.flash_until.is_some_and(|until| Instant::now() < until)
     }
 
-    /// Copy the selected command to clipboard via OSC 52 escape sequence.
-    fn copy_to_clipboard(&mut self) {
-        if let Some(cmd) = self.get_selected_command() {
-            let encoded = base64_encode(cmd.as_bytes());
-            let _ = write!(self.tty, "\x1b]52;c;{encoded}\x07");
-            let _ = self.tty.flush();
-            self.status_message =
-                Some(("(copied)".to_string(), Instant::now() + Duration::from_secs(1)));
+    /// Stage the selected command for a clipboard copy. The terminal adapter
+    /// performs the actual OSC 52 write; state only records the feedback.
+    fn copy_selected(&mut self) -> KeyAction {
+        match self.get_selected_command() {
+            Some(cmd) => {
+                self.status_message =
+                    Some(("(copied)".to_string(), Instant::now() + Duration::from_secs(1)));
+                KeyAction::Copy(cmd)
+            }
+            None => KeyAction::Continue,
         }
     }
 
@@ -613,6 +782,9 @@ impl RecallTui {
         };
         let command = self.entries[entry_idx].command.clone();
         if let Ok(n) = self.engine.delete_entries_by_command(&command) {
+            // Cached candidate sets may still contain the deleted rows;
+            // drop them so a later backspace can't resurrect the command.
+            self.entry_cache.clear();
             self.entries.remove(entry_idx);
             // Rebuild filtered indices -- adjust all indices >= entry_idx
             self.filtered_indices.retain_mut(|(idx, _)| {
@@ -646,66 +818,6 @@ impl RecallTui {
             FilterMode::Global => FilterMode::Directory,
         };
         self.reload_entries();
-    }
-
-    pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
-        loop {
-            // Check if timed effects have expired
-            if let Some((_, until)) = self.status_message
-                && Instant::now() >= until
-            {
-                self.status_message = None;
-                self.needs_redraw = true;
-            }
-            if let Some(until) = self.flash_until
-                && Instant::now() >= until
-            {
-                self.flash_until = None;
-                self.needs_redraw = true;
-            }
-
-            if self.needs_redraw {
-                self.draw()?;
-                self.needs_redraw = false;
-            }
-
-            if !event::poll(Duration::from_millis(100))? {
-                continue;
-            }
-
-            match event::read()? {
-                Event::Key(key) => {
-                    self.needs_redraw = true;
-                    let action = self.handle_key(key)?;
-                    match action {
-                        KeyAction::Continue => continue,
-                        KeyAction::Select | KeyAction::Edit | KeyAction::EditBeginning => {
-                            self.cleanup()?;
-                            if !self.shell_mode {
-                                self.print_entry_details();
-                                return Ok(None);
-                            }
-                            let prefix = match action {
-                                KeyAction::Select => "run",
-                                KeyAction::EditBeginning => "edit-a",
-                                _ => "edit",
-                            };
-                            let result =
-                                self.get_selected_command().map(|cmd| format!("{prefix}:{cmd}"));
-                            return Ok(result);
-                        }
-                        KeyAction::Cancel => {
-                            self.cleanup()?;
-                            return Ok(None);
-                        }
-                    }
-                }
-                Event::Resize(_, _) => {
-                    self.needs_redraw = true;
-                }
-                _ => {}
-            }
-        }
     }
 
     fn print_entry_details(&self) {
@@ -776,24 +888,6 @@ impl RecallTui {
         }
     }
 
-    /// Draw once and exit (for profiling)
-    pub fn draw_once(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.draw()?;
-        self.cleanup()?;
-        Ok(())
-    }
-
-    fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        self.cleaned_up = true;
-        #[cfg(not(target_os = "windows"))]
-        if self.keyboard_enhanced {
-            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
-        }
-        execute!(self.tty, Show, LeaveAlternateScreen)?;
-        terminal::disable_raw_mode()?;
-        Ok(())
-    }
-
     fn get_selected_command(&self) -> Option<String> {
         self.filtered_indices
             .get(self.selected_index)
@@ -862,8 +956,7 @@ impl RecallTui {
                 Some(KeyAction::EditBeginning)
             }
             KeyCode::Char('y') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.copy_to_clipboard();
-                Some(KeyAction::Continue)
+                Some(self.copy_selected())
             }
             KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.delete_selected_entry();
@@ -903,8 +996,7 @@ impl RecallTui {
                 Ok(KeyAction::Continue)
             }
             KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::ALT) => {
-                self.copy_to_clipboard();
-                Ok(KeyAction::Continue)
+                Ok(self.copy_selected())
             }
             KeyCode::Char(_) if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.flash();
@@ -1154,19 +1246,15 @@ impl RecallTui {
         Ok(())
     }
 
-    fn draw(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Get fresh terminal size each frame
-        let (term_width, term_height) = terminal::size()?;
-        self.term_width = term_width;
-        self.term_height = term_height;
-
+    /// Render a full frame into `w` using the current dimensions (see
+    /// `set_dimensions`). Generic over the writer so tests can render into a
+    /// buffer; the live path hands in a buffered /dev/tty.
+    fn draw<W: Write>(&mut self, w: &mut W) -> Result<(), Box<dyn std::error::Error>> {
+        let (term_width, term_height) = (self.term_width, self.term_height);
         let results_height = self.results_height();
         let preview_start_y = results_height as u16;
         let input_y = term_height.saturating_sub(2);
         let help_y = term_height.saturating_sub(1);
-
-        // Use buffered writer to batch all terminal writes into a single syscall
-        let mut w = BufWriter::new(&self.tty);
 
         // Check if we're in flash mode for visual feedback
         let flashing = self.is_flashing();
@@ -1285,7 +1373,7 @@ impl RecallTui {
 
         // Draw preview pane if enabled
         if self.show_preview {
-            self.draw_preview(&mut w, preview_start_y, term_width)?;
+            self.draw_preview(w, preview_start_y, term_width)?;
         }
 
         // Draw input line
@@ -1363,26 +1451,16 @@ impl RecallTui {
     }
 }
 
+#[derive(Debug, PartialEq)]
 enum KeyAction {
     Continue,
+    /// Copy this text to the clipboard (an OSC 52 write only the terminal
+    /// adapter can perform).
+    Copy(String),
     Select,
     Edit,
     EditBeginning,
     Cancel,
-}
-
-impl Drop for RecallTui {
-    fn drop(&mut self) {
-        if self.cleaned_up {
-            return;
-        }
-        #[cfg(not(target_os = "windows"))]
-        if self.keyboard_enhanced {
-            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(self.tty, Show, LeaveAlternateScreen);
-        let _ = terminal::disable_raw_mode();
-    }
 }
 
 #[cfg(test)]
@@ -1664,6 +1742,244 @@ mod tests {
         assert_eq!(deduped[1].command, "cmd2");
         assert_eq!(deduped[0].use_count, 2, "collapsed duplicates should be counted");
         assert_eq!(deduped[1].use_count, 1);
+    }
+
+    /// A RecallState over an in-memory DB seeded with `commands` -- no
+    /// terminal involved, which is the whole point of the state/terminal
+    /// split.
+    fn test_state(commands: &[&str]) -> super::RecallState {
+        use crate::recall::engine::SearchEngine;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::initialize_base_schema(&conn).unwrap();
+        crate::run_schema_migrations(&conn).unwrap();
+        for (i, cmd) in commands.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO command_history (session_id, full_command, shellname, hostname,
+                                              start_unix_timestamp)
+                 VALUES (1, CAST(? AS blob), 'zsh', CAST('host1' AS blob), ?)",
+                rusqlite::params![cmd, 1000 + i as i64],
+            )
+            .unwrap();
+        }
+        let engine = SearchEngine::new(
+            conn,
+            std::path::PathBuf::from("/tmp"),
+            vec![bstr::BString::from("host1")],
+            100,
+        );
+        let mut state = super::RecallState::new(
+            engine,
+            FilterMode::Global,
+            None,
+            &RecallConfig::default(),
+            true,
+        )
+        .unwrap();
+        state.set_dimensions(80, 24);
+        state
+    }
+
+    fn press(
+        state: &mut super::RecallState,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> super::KeyAction {
+        state.handle_key(KeyEvent::new(code, modifiers)).unwrap()
+    }
+
+    fn type_str(state: &mut super::RecallState, s: &str) {
+        for c in s.chars() {
+            press(state, KeyCode::Char(c), KeyModifiers::NONE);
+        }
+    }
+
+    fn visible_commands(state: &super::RecallState) -> Vec<String> {
+        state.filtered_indices.iter().map(|(idx, _)| state.entries[*idx].command.clone()).collect()
+    }
+
+    #[test]
+    fn test_delete_selected_entry_invalidates_cached_candidate_sets() {
+        // Regression: Ctrl-K deleted the entry from the DB and the live set,
+        // but cached candidate snapshots kept it -- so backspacing to a query
+        // served from the cache resurrected the deleted command, which could
+        // then be selected and run.
+        let mut state = test_state(&["ghost-cmd", "alpha", "beta"]);
+
+        // Type a >=3-char digging query; the broad set gets cached.
+        type_str(&mut state, "gho");
+        assert_eq!(visible_commands(&state), ["ghost-cmd"]);
+
+        // Ctrl-K the selected (only) match.
+        press(&mut state, KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert!(visible_commands(&state).is_empty());
+
+        // Backspace to a query the cache can serve.
+        for _ in 0..3 {
+            press(&mut state, KeyCode::Backspace, KeyModifiers::NONE);
+        }
+        assert!(
+            !visible_commands(&state).iter().any(|c| c == "ghost-cmd"),
+            "deleted command must not resurrect from a cached candidate set"
+        );
+    }
+
+    #[test]
+    fn test_emacs_query_editing_updates_filter() {
+        let mut state = test_state(&["alpha one", "beta two", "gamma three"]);
+        assert_eq!(visible_commands(&state).len(), 3);
+
+        type_str(&mut state, "beta");
+        assert_eq!(visible_commands(&state), ["beta two"]);
+
+        // Ctrl-W deletes the last word; everything matches again.
+        press(&mut state, KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(state.query, "");
+        assert_eq!(visible_commands(&state).len(), 3);
+
+        type_str(&mut state, "gamma");
+        press(&mut state, KeyCode::Char('u'), KeyModifiers::CONTROL);
+        assert_eq!(state.query, "");
+        assert_eq!(visible_commands(&state).len(), 3);
+    }
+
+    #[test]
+    fn test_emacs_enter_and_escape_actions() {
+        let mut state = test_state(&["alpha"]);
+        assert_eq!(press(&mut state, KeyCode::Enter, KeyModifiers::NONE), super::KeyAction::Select);
+        assert_eq!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE), super::KeyAction::Cancel);
+        assert_eq!(
+            press(&mut state, KeyCode::Char('c'), KeyModifiers::CONTROL),
+            super::KeyAction::Cancel
+        );
+        assert_eq!(press(&mut state, KeyCode::Tab, KeyModifiers::NONE), super::KeyAction::Edit);
+        assert_eq!(
+            press(&mut state, KeyCode::Char('a'), KeyModifiers::CONTROL),
+            super::KeyAction::EditBeginning
+        );
+    }
+
+    #[test]
+    fn test_vim_keymap_mode_transitions() {
+        use super::super::config::KeymapMode;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::initialize_base_schema(&conn).unwrap();
+        crate::run_schema_migrations(&conn).unwrap();
+        let engine = crate::recall::engine::SearchEngine::new(
+            conn,
+            std::path::PathBuf::from("/tmp"),
+            vec![bstr::BString::from("host1")],
+            100,
+        );
+        let config = RecallConfig { keymap: "vim".to_string(), ..RecallConfig::default() };
+        let mut state =
+            super::RecallState::new(engine, FilterMode::Global, None, &config, true).unwrap();
+        state.set_dimensions(80, 24);
+
+        assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
+        press(&mut state, KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(state.keymap_mode, KeymapMode::VimNormal);
+        // Esc in normal mode cancels; 'i' re-enters insert.
+        press(&mut state, KeyCode::Char('i'), KeyModifiers::NONE);
+        assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
+    }
+
+    #[test]
+    fn test_quick_select_advances_selection() {
+        let mut state = test_state(&["one", "two", "three", "four"]);
+        // Alt-2 selects the entry after the current selection.
+        assert_eq!(
+            press(&mut state, KeyCode::Char('2'), KeyModifiers::ALT),
+            super::KeyAction::Select
+        );
+        assert_eq!(state.selected_index, 1);
+        // Alt-9 past the end is a no-op.
+        assert_eq!(
+            press(&mut state, KeyCode::Char('9'), KeyModifiers::ALT),
+            super::KeyAction::Continue
+        );
+        assert_eq!(state.selected_index, 1);
+    }
+
+    #[test]
+    fn test_copy_selected_returns_command_and_sets_status() {
+        let mut state = test_state(&["copy-me"]);
+        match press(&mut state, KeyCode::Char('y'), KeyModifiers::CONTROL) {
+            super::KeyAction::Copy(text) => assert_eq!(text, "copy-me"),
+            other => panic!("expected Copy action, got {other:?}"),
+        }
+        assert!(state.status_message.is_some(), "copy should surface '(copied)' feedback");
+    }
+
+    #[test]
+    fn test_selection_stays_visible_and_scroll_clamps() {
+        let commands: Vec<String> = (0..50).map(|i| format!("cmd-{i:02}")).collect();
+        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
+        let mut state = test_state(&refs);
+        let height = state.results_height();
+        assert!(height > 0);
+
+        // Walk selection through the whole list (Up = older): the selected
+        // entry must always stay within the visible window and the scroll
+        // offset within the valid range.
+        for _ in 0..60 {
+            press(&mut state, KeyCode::Up, KeyModifiers::NONE);
+            let view_bottom = state.scroll_offset;
+            let view_top = view_bottom + height - 1;
+            assert!(
+                (view_bottom..=view_top).contains(&state.selected_index),
+                "selection {} outside visible window {view_bottom}..={view_top}",
+                state.selected_index
+            );
+            assert!(state.scroll_offset <= state.filtered_indices.len().saturating_sub(height));
+        }
+        assert_eq!(state.selected_index, 49, "selection clamps at the oldest entry");
+
+        // And back down (newer) to the start.
+        for _ in 0..60 {
+            press(&mut state, KeyCode::Down, KeyModifiers::NONE);
+        }
+        assert_eq!(state.selected_index, 0);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_page_up_down_bounded() {
+        let commands: Vec<String> = (0..50).map(|i| format!("cmd-{i:02}")).collect();
+        let refs: Vec<&str> = commands.iter().map(String::as_str).collect();
+        let mut state = test_state(&refs);
+
+        press(&mut state, KeyCode::PageUp, KeyModifiers::NONE);
+        assert!(state.selected_index > 0);
+        for _ in 0..20 {
+            press(&mut state, KeyCode::PageUp, KeyModifiers::NONE);
+        }
+        assert_eq!(state.selected_index, 49, "PageUp clamps at the oldest entry");
+        for _ in 0..20 {
+            press(&mut state, KeyCode::PageDown, KeyModifiers::NONE);
+        }
+        assert_eq!(state.selected_index, 0, "PageDown clamps at the newest entry");
+    }
+
+    #[test]
+    fn test_draw_renders_into_plain_buffer() {
+        let mut state = test_state(&["hello world", "goodbye"]);
+        type_str(&mut state, "hello");
+
+        let mut frame: Vec<u8> = Vec::new();
+        state.draw(&mut frame).unwrap();
+        let rendered = String::from_utf8_lossy(&frame);
+        assert!(rendered.contains("> hello"), "input line with query");
+        assert!(rendered.contains("hello world"), "matching command drawn");
+        assert!(!rendered.contains("goodbye"), "non-matching command not drawn");
+        assert!(rendered.contains("Enter Run"), "help line drawn");
+
+        // Degenerate dimensions must not panic.
+        state.set_dimensions(5, 3);
+        let mut tiny: Vec<u8> = Vec::new();
+        state.draw(&mut tiny).unwrap();
+        state.set_dimensions(0, 0);
+        let mut zero: Vec<u8> = Vec::new();
+        state.draw(&mut zero).unwrap();
     }
 
     fn cache_snapshot(db_query: Option<&str>, n_entries: usize) -> super::EntrySnapshot {
