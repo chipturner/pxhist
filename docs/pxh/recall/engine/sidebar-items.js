@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["directory_boost","format_relative_time","frecency_boost","frequency_boost","is_recall_separator","normalize_recall_char"],"struct":["HistoryEntry","SearchEngine"]};
+window.SIDEBAR_ITEMS = {"fn":["directory_boost","format_relative_time","frecency_boost","frequency_boost"],"struct":["HistoryEntry","SearchEngine"]};
