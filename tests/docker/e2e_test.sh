@@ -45,12 +45,16 @@ export PXH_DB_PATH="${DB_PATH}"
 
 # -- 1. Install -----------------------------------------------------------
 step "Install"
-touch "${HOME}/.bashrc" "${HOME}/.zshrc"
+mkdir -p "${HOME}/.config/fish"
+touch "${HOME}/.bashrc" "${HOME}/.zshrc" "${HOME}/.config/fish/config.fish"
 check "install bash" pxh install bash
 check "install zsh" pxh install zsh
+check "install fish" pxh install fish
 check ".bashrc contains pxh" grep -q "pxh shell-config" "${HOME}/.bashrc"
 check ".zshrc contains pxh" grep -q "pxh shell-config" "${HOME}/.zshrc"
+check ".config/fish/config.fish contains pxh" grep -q "pxh shell-config" "${HOME}/.config/fish/config.fish"
 check "install bash idempotent" pxh install bash
+check "install fish idempotent" pxh install fish
 
 # -- 2. Record commands (bash hooks) --------------------------------------
 step "Record commands (bash)"

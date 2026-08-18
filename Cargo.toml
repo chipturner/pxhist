@@ -6,12 +6,12 @@ rust-version = "1.95"
 authors = [ "Chip Turner <cturner@pattern.net>" ]
 description = """
 pxh is a fast, cross-shell history mining tool with interactive fuzzy search,
-secret scanning, and bidirectional sync across machines. It indexes bash and
-zsh history in SQLite with rich metadata for powerful recall."""
+secret scanning, and bidirectional sync across machines. It indexes bash,
+zsh, and fish history in SQLite with rich metadata for powerful recall."""
 documentation = "https://github.com/chipturner/pxhist"
 homepage = "https://github.com/chipturner/pxhist"
 repository = "https://github.com/chipturner/pxhist"
-keywords = ["shell", "history", "search", "bash", "zsh"]
+keywords = ["shell", "history", "search", "bash", "zsh", "fish"]
 categories = ["command-line-utilities"]
 license = "MIT"
 
