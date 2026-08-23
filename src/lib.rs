@@ -1117,6 +1117,21 @@ pub mod test_utils {
     use rand::{RngExt, distr::Alphanumeric};
     use tempfile::TempDir;
 
+    /// Return the `detail` column of `EXPLAIN QUERY PLAN` for `sql`, one
+    /// string per plan node. Hot-path tests assert on these to pin the
+    /// O(window) vs O(table) behaviour of a query independent of timing.
+    pub fn explain_query_plan(
+        conn: &rusqlite::Connection,
+        sql: &str,
+        params: &[&dyn rusqlite::types::ToSql],
+    ) -> Vec<String> {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        stmt.query_map(params, |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
     pub fn pxh_path() -> PathBuf {
         let mut path = std::env::current_exe().unwrap();
         path.pop(); // Remove test binary name

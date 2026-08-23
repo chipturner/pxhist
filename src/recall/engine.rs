@@ -80,28 +80,40 @@ impl SearchEngine {
         host_filter: HostFilter,
         query: Option<&RecallQuery>,
     ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        let entries = match filter_mode {
-            FilterMode::Directory => self.load_entries_for_directory(host_filter, query)?,
-            FilterMode::Global => self.load_all_entries(host_filter, query)?,
-        };
+        let (sql, params) = self.recall_query(filter_mode, host_filter, query);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let entries = stmt
+            .query_map(param_refs.as_slice(), |row| self.row_to_entry(row))?
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(entries)
     }
 
-    fn load_all_entries(
+    /// Build the recall SQL and its bound parameters. Oversamples by 3x and
+    /// relies on the caller's `deduplicate_entries()` for dedup -- avoids the
+    /// expensive CTE self-join that caused double table scans at scale. The
+    /// ORDER BY must stay satisfiable by `history_start_time` so LIMIT bounds
+    /// the work to the window rather than the table (see the plan tests).
+    fn recall_query(
         &self,
+        filter_mode: FilterMode,
         host_filter: HostFilter,
         query: Option<&RecallQuery>,
-    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
+    ) -> (String, Vec<String>) {
         let mut where_conditions = Vec::new();
         let mut params: Vec<String> = Vec::new();
+
+        if filter_mode == FilterMode::Directory {
+            where_conditions.push("working_directory = CAST(? as blob)".to_string());
+            params.push(self.working_directory.to_string_lossy().to_string());
+        }
 
         if host_filter == HostFilter::ThisHost {
             let placeholders: String =
                 self.host_set.iter().map(|_| "CAST(? as blob)").collect::<Vec<_>>().join(", ");
             where_conditions.push(format!("hostname IN ({placeholders})"));
-            for h in &self.host_set {
-                params.push(h.to_string());
-            }
+            params.extend(self.host_set.iter().map(|h| h.to_string()));
         }
 
         Self::push_query_conditions(query, &mut where_conditions, &mut params);
@@ -112,8 +124,21 @@ impl SearchEngine {
             format!("WHERE {}", where_conditions.join(" AND "))
         };
 
-        let entries = self.run_recall_query(&where_clause, &params)?;
-        Ok(entries)
+        let sql = format!(
+            r#"
+SELECT id, full_command, start_unix_timestamp, working_directory,
+       hostname, exit_status,
+       CASE WHEN end_unix_timestamp IS NOT NULL
+            THEN end_unix_timestamp - start_unix_timestamp
+            ELSE NULL END as duration
+  FROM command_history
+  {where_clause}
+ ORDER BY start_unix_timestamp DESC, id DESC
+ LIMIT {}
+"#,
+            self.result_limit * 3
+        );
+        (sql, params)
     }
 
     fn row_to_entry(&self, row: &rusqlite::Row) -> rusqlite::Result<HistoryEntry> {
@@ -134,64 +159,6 @@ impl SearchEngine {
             duration_secs,
             use_count: 1,
         })
-    }
-
-    fn load_entries_for_directory(
-        &self,
-        host_filter: HostFilter,
-        query: Option<&RecallQuery>,
-    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        let mut where_conditions = vec!["working_directory = CAST(? as blob)".to_string()];
-        let dir_str = self.working_directory.to_string_lossy().to_string();
-        let mut params: Vec<String> = vec![dir_str];
-
-        if host_filter == HostFilter::ThisHost {
-            let placeholders: String =
-                self.host_set.iter().map(|_| "CAST(? as blob)").collect::<Vec<_>>().join(", ");
-            where_conditions.push(format!("hostname IN ({placeholders})"));
-            for h in &self.host_set {
-                params.push(h.to_string());
-            }
-        }
-
-        Self::push_query_conditions(query, &mut where_conditions, &mut params);
-
-        let where_clause = format!("WHERE {}", where_conditions.join(" AND "));
-
-        let entries = self.run_recall_query(&where_clause, &params)?;
-        Ok(entries)
-    }
-
-    /// Shared query logic for loading recall entries. Oversamples by 3x and
-    /// relies on the caller's `deduplicate_entries()` for dedup -- avoids the
-    /// expensive CTE self-join that caused double table scans at scale.
-    fn run_recall_query(
-        &self,
-        where_clause: &str,
-        params: &[String],
-    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
-        let sql = format!(
-            r#"
-SELECT id, full_command, start_unix_timestamp, working_directory,
-       hostname, exit_status,
-       CASE WHEN end_unix_timestamp IS NOT NULL
-            THEN end_unix_timestamp - start_unix_timestamp
-            ELSE NULL END as duration
-  FROM command_history
-  {where_clause}
- ORDER BY start_unix_timestamp DESC, id DESC
- LIMIT {}
-"#,
-            self.result_limit * 3
-        );
-
-        let mut stmt = self.conn.prepare(&sql)?;
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
-        let entries: Vec<HistoryEntry> = stmt
-            .query_map(param_refs.as_slice(), |row| self.row_to_entry(row))?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(entries)
     }
 
     /// Delete all history entries matching a command (trimmed), since the
@@ -1111,5 +1078,51 @@ mod tests {
                 as i64;
         assert_eq!(format_relative_time(Some(now - 86400 * 2)), " 2d");
         assert_eq!(format_relative_time(Some(now - 86400 * 5)), " 5d");
+    }
+
+    /// Every recall query must walk `history_start_time` newest-first so
+    /// `LIMIT` stops after the window, never sort the whole table.
+    fn assert_window_plan(plan: &[String], label: &str) {
+        let joined = plan.join(" | ");
+        assert!(
+            joined.contains("USING INDEX history_start_time"),
+            "{label}: expected to walk history_start_time, got: {joined}"
+        );
+        assert!(!joined.contains("TEMP B-TREE"), "{label}: plan sorts the whole table: {joined}");
+    }
+
+    #[test]
+    fn test_recall_query_plans_walk_timestamp_index_without_sort() {
+        let conn = test_db();
+        insert_command(&conn, "echo hi", "host1", "/tmp", 1000);
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let query = q("ech");
+        for mode in [FilterMode::Global, FilterMode::Directory] {
+            for host in [HostFilter::ThisHost, HostFilter::AllHosts] {
+                for query in [None, Some(&query)] {
+                    let (sql, params) = engine.recall_query(mode, host, query);
+                    let refs: Vec<&dyn rusqlite::types::ToSql> =
+                        params.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
+                    let plan = crate::test_utils::explain_query_plan(&engine.conn, &sql, &refs);
+                    assert_window_plan(&plan, &format!("{mode:?}/{host:?}/query={query:?}"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_dropping_timestamp_index_forces_full_sort() {
+        // Proves the assertion above has teeth: without the index SQLite must
+        // materialise and sort every row before applying LIMIT.
+        let conn = test_db();
+        conn.execute_batch("DROP INDEX history_start_time").unwrap();
+        let engine =
+            SearchEngine::new(conn, PathBuf::from("/tmp"), vec![BString::from("host1")], 100);
+        let (sql, params) = engine.recall_query(FilterMode::Global, HostFilter::AllHosts, None);
+        let refs: Vec<&dyn rusqlite::types::ToSql> =
+            params.iter().map(|p| p as &dyn rusqlite::types::ToSql).collect();
+        let plan = crate::test_utils::explain_query_plan(&engine.conn, &sql, &refs).join(" | ");
+        assert!(plan.contains("TEMP B-TREE"), "expected a sort without the index: {plan}");
     }
 }

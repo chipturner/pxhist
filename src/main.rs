@@ -568,20 +568,30 @@ fi"#
     }
 }
 
+/// Seal's hot-path UPDATE: MAX(id) per session is a covering-index seek on
+/// `idx_session_id_desc`; the outer match is a rowid seek (see plan tests).
+const SEAL_SQL: &str = r#"
+UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
+ WHERE exit_status is NULL
+   AND end_unix_timestamp IS NULL
+   AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"#;
+
+/// Autosuggest walks `history_start_time` newest-first and stops at the first
+/// prefix match, so cost is bounded by recency rather than table size.
+const AUTOSUGGEST_SQL: &str = r#"
+SELECT full_command
+  FROM command_history
+ WHERE substr(full_command, 1, ?) = CAST(? AS BLOB)
+ ORDER BY start_unix_timestamp DESC, id DESC
+ LIMIT 1"#;
+
 impl SealCommand {
     fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         // Short busy_timeout: let our own jittered retry loop handle contention
         // so a single waiter can't burn the full timeout while others slip past.
         conn.busy_timeout(Duration::from_millis(100))?;
         pxh::with_write_retry(&mut conn, Duration::from_secs(1), |tx| {
-            tx.execute(
-                r#"
-UPDATE command_history SET exit_status = ?, end_unix_timestamp = ?
- WHERE exit_status is NULL
-   AND end_unix_timestamp IS NULL
-   AND id = (SELECT MAX(id) FROM command_history hi WHERE hi.session_id = ?)"#,
-                (self.exit_status, self.end_unix_timestamp, self.session_id),
-            )?;
+            tx.execute(SEAL_SQL, (self.exit_status, self.end_unix_timestamp, self.session_id))?;
             Ok(())
         })
     }
@@ -594,14 +604,7 @@ impl AutosuggestCommand {
             return Ok(());
         }
 
-        let mut stmt = conn.prepare(
-            r#"
-SELECT full_command
-  FROM command_history
- WHERE substr(full_command, 1, ?) = CAST(? AS BLOB)
- ORDER BY start_unix_timestamp DESC, id DESC
- LIMIT 1"#,
-        )?;
+        let mut stmt = conn.prepare(AUTOSUGGEST_SQL)?;
 
         let suggestion: Option<Vec<u8>> =
             stmt.query_row((prefix.len() as i64, prefix), |row| row.get(0)).ok();
@@ -2702,4 +2705,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use pxh::test_utils::explain_query_plan;
+    use rusqlite::Connection;
+
+    use super::*;
+
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        pxh::initialize_base_schema(&conn).unwrap();
+        pxh::run_schema_migrations(&conn).unwrap();
+        conn
+    }
+
+    #[test]
+    fn seal_query_plan_uses_session_index_and_rowid() {
+        let conn = test_db();
+        let plan = explain_query_plan(&conn, SEAL_SQL, &[&0i32, &1i64, &1i64]).join(" | ");
+        assert!(
+            plan.contains("USING INTEGER PRIMARY KEY"),
+            "outer UPDATE should seek by rowid: {plan}"
+        );
+        assert!(
+            plan.contains("COVERING INDEX") && plan.contains("(session_id=?)"),
+            "MAX(id) per session should be a covering index seek: {plan}"
+        );
+        assert!(!plan.contains("SCAN"), "seal must never scan the table: {plan}");
+    }
+
+    #[test]
+    fn autosuggest_query_plan_walks_timestamp_index_without_sort() {
+        let conn = test_db();
+        let plan =
+            explain_query_plan(&conn, AUTOSUGGEST_SQL, &[&2i64, &b"ec".as_slice()]).join(" | ");
+        assert!(
+            plan.contains("USING INDEX history_start_time"),
+            "should walk newest-first: {plan}"
+        );
+        assert!(!plan.contains("TEMP B-TREE"), "autosuggest must not sort the table: {plan}");
+    }
 }
