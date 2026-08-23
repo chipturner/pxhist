@@ -3,33 +3,38 @@ use rexpect::session::spawn_command;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-// Selecting an entry must emit LeaveAlternateScreen exactly once. A second
-// one (e.g. from Drop after an explicit cleanup) makes some terminals
-// restore a stale saved cursor position, so the shell prompt printed after
-// exit overwrites the start of the selection details.
-#[test]
-fn test_recall_select_leaves_alternate_screen_once() -> Result<()> {
-    let helper = PxhTestHelper::new();
+const LEAVE_ALT_SCREEN: &str = "\x1b[?1049l";
+/// Part of the recall status bar; its appearance means the TUI is up.
+const TUI_READY: &str = "Enter Run";
+
+fn seed(helper: &PxhTestHelper, command: &str) -> Result<()> {
     let status = helper
         .command_with_args(&[
             "insert",
             "--shellname",
             "zsh",
             "--hostname",
-            "testhost",
+            &helper.hostname,
             "--username",
-            "tester",
+            &helper.username,
             "--session-id",
             "42",
             "--exit-status",
             "0",
-            "echo hello recall",
+            "--start-unix-timestamp",
+            "1700000000",
+            command,
         ])
         .status()?;
     assert!(status.success(), "insert should succeed");
+    Ok(())
+}
 
-    let cmd = helper.command_with_args(&["recall", "-q", "hello"]);
-    let mut session = spawn_command(cmd, Some(10_000))?;
+/// Spawn `pxh recall` on a sized pty and wait for the first frame.
+fn spawn_recall(helper: &PxhTestHelper, args: &[&str]) -> Result<rexpect::session::PtySession> {
+    let mut argv = vec!["recall"];
+    argv.extend_from_slice(args);
+    let mut session = spawn_command(helper.command_with_args(&argv), Some(10_000))?;
     // rexpect ptys start 0x0; give the TUI a real size (SIGWINCH redraws).
     {
         use std::os::fd::AsRawFd;
@@ -38,17 +43,123 @@ fn test_recall_select_leaves_alternate_screen_once() -> Result<()> {
         // SAFETY: valid fd and pointer for the duration of the call.
         unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
     }
-    // Wait for the TUI to draw (status bar is part of every frame).
-    session.exp_string("Enter Run")?;
+    session.exp_string(TUI_READY)?;
+    Ok(session)
+}
+
+/// Press `key` in a running recall and return what it printed after leaving
+/// the alternate screen -- i.e. exactly what the shell widget receives.
+fn press_and_collect(mut session: rexpect::session::PtySession, key: &str) -> Result<String> {
+    session.send(key)?;
+    session.flush()?;
+    let tail = session.exp_eof()?;
+    let after = tail.rsplit_once(LEAVE_ALT_SCREEN).map(|(_, after)| after).unwrap_or(&tail);
+    Ok(after.trim().to_string())
+}
+
+// Selecting an entry must emit LeaveAlternateScreen exactly once. A second
+// one (e.g. from Drop after an explicit cleanup) makes some terminals
+// restore a stale saved cursor position, so the shell prompt printed after
+// exit overwrites the start of the selection details.
+#[test]
+fn test_recall_select_leaves_alternate_screen_once() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    seed(&helper, "echo hello recall")?;
+    let mut session = spawn_recall(&helper, &["-q", "hello"])?;
     session.send("\r")?;
     session.flush()?;
     let tail = session.exp_eof()?;
 
-    let leaves = tail.matches("\x1b[?1049l").count();
+    let leaves = tail.matches(LEAVE_ALT_SCREEN).count();
     assert_eq!(leaves, 1, "expected exactly one LeaveAlternateScreen, got {leaves}: {tail:?}");
     // The selected command must survive in the post-TUI output.
     assert!(tail.contains("echo hello recall"), "selection details missing: {tail:?}");
     Ok(())
+}
+
+// `--shell-mode` is the contract with pxh.bash/pxh.zsh: a `<action>:<command>`
+// line the widget parses, or nothing at all on cancel.
+mod shell_mode {
+    use super::*;
+
+    fn exit_key(key: &str) -> Result<String> {
+        let helper = PxhTestHelper::new();
+        seed(&helper, "echo hello recall")?;
+        let session = spawn_recall(&helper, &["--shell-mode", "-q", "hello"])?;
+        press_and_collect(session, key)
+    }
+
+    #[test]
+    fn enter_emits_run_prefix() -> Result<()> {
+        assert_eq!(exit_key("\r")?, "run:echo hello recall");
+        Ok(())
+    }
+
+    #[test]
+    fn tab_emits_edit_prefix() -> Result<()> {
+        assert_eq!(exit_key("\t")?, "edit:echo hello recall");
+        Ok(())
+    }
+
+    #[test]
+    fn ctrl_e_emits_edit_prefix() -> Result<()> {
+        assert_eq!(exit_key("\x05")?, "edit:echo hello recall");
+        Ok(())
+    }
+
+    #[test]
+    fn ctrl_a_emits_edit_at_beginning_prefix() -> Result<()> {
+        assert_eq!(exit_key("\x01")?, "edit-a:echo hello recall");
+        Ok(())
+    }
+
+    #[test]
+    fn ctrl_c_emits_nothing() -> Result<()> {
+        assert_eq!(exit_key("\x03")?, "");
+        Ok(())
+    }
+
+    #[test]
+    fn alt_digit_selects_and_runs() -> Result<()> {
+        let helper = PxhTestHelper::new();
+        seed(&helper, "echo newer")?;
+        let status = helper
+            .command_with_args(&[
+                "insert",
+                "--shellname",
+                "zsh",
+                "--hostname",
+                &helper.hostname,
+                "--username",
+                &helper.username,
+                "--session-id",
+                "42",
+                "--exit-status",
+                "0",
+                "--start-unix-timestamp",
+                "1600000000",
+                "echo older",
+            ])
+            .status()?;
+        assert!(status.success());
+        let session = spawn_recall(&helper, &["--shell-mode"])?;
+        // Alt-2 = second entry (older) -- sent as ESC followed by the digit.
+        assert_eq!(press_and_collect(session, "\x1b2")?, "run:echo older");
+        Ok(())
+    }
+
+    /// Without --shell-mode, a selection prints human-readable details and
+    /// never the machine prefix.
+    #[test]
+    fn plain_mode_has_no_prefix() -> Result<()> {
+        let helper = PxhTestHelper::new();
+        seed(&helper, "echo hello recall")?;
+        let session = spawn_recall(&helper, &["-q", "hello"])?;
+        let out = press_and_collect(session, "\r")?;
+        assert!(!out.starts_with("run:"), "{out:?}");
+        assert!(out.contains("echo hello recall"), "{out:?}");
+        Ok(())
+    }
 }
 
 #[test]
@@ -75,9 +186,11 @@ fn test_recall_visible_alias() -> Result<()> {
     assert!(output.status.success(), "help should succeed");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("recall"), "help should list the recall command: {stdout}");
+    let recall_line = stdout.lines().find(|l| l.trim_start().starts_with("recall"));
     assert!(
-        stdout.contains("recall") || stdout.contains("r"),
-        "help should mention recall command"
+        recall_line.is_some_and(|l| l.contains("[alias: r]")),
+        "help should show `r` as a visible alias of recall: {recall_line:?}"
     );
 
     Ok(())

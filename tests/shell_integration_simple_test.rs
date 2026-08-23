@@ -317,3 +317,53 @@ fn test_install_rejects_invalid_shell() -> Result<()> {
 
     Ok(())
 }
+
+// -- Ctrl-R binding control --------------------------------------------------
+
+fn shell_config(helper: &pxh::test_utils::PxhTestHelper, args: &[&str]) -> String {
+    let mut argv = vec!["shell-config"];
+    argv.extend_from_slice(args);
+    let output = helper.command_with_args(&argv).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn binding_marker(shell: &str) -> &'static str {
+    match shell {
+        "bash" => "bind '\"\\C-r\"",
+        _ => "bindkey '^R'",
+    }
+}
+
+#[test]
+fn test_shell_config_binds_ctrl_r_by_default() {
+    let helper = pxh::test_utils::PxhTestHelper::new();
+    for shell in ["bash", "zsh"] {
+        let out = shell_config(&helper, &[shell]);
+        assert!(out.contains(binding_marker(shell)), "{shell}: Ctrl-R should be bound:\n{out}");
+    }
+}
+
+#[test]
+fn test_shell_config_no_ctrl_r_flag_strips_binding_but_keeps_hooks() {
+    let helper = pxh::test_utils::PxhTestHelper::new();
+    for (shell, hook) in [("bash", "preexec()"), ("zsh", "_pxh_addhistory()")] {
+        let out = shell_config(&helper, &[shell, "--no-ctrl-r"]);
+        assert!(!out.contains(binding_marker(shell)), "{shell}: Ctrl-R still bound:\n{out}");
+        assert!(!out.contains("PXH_CTRL_R_BINDING"), "{shell}: tagged lines should be gone");
+        assert!(out.contains(hook), "{shell}: recording hooks must survive:\n{out}");
+    }
+}
+
+#[test]
+fn test_shell_config_honors_disable_ctrl_r_in_config() -> Result<()> {
+    let helper = pxh::test_utils::PxhTestHelper::new();
+    let config_dir = helper.home_dir().join(".config/pxh");
+    fs::create_dir_all(&config_dir)?;
+    fs::write(config_dir.join("config.toml"), "[shell]\ndisable_ctrl_r = true\n")?;
+    for shell in ["bash", "zsh"] {
+        let out = shell_config(&helper, &[shell]);
+        assert!(!out.contains(binding_marker(shell)), "{shell}: config should disable Ctrl-R");
+    }
+    Ok(())
+}
