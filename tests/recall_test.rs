@@ -77,6 +77,40 @@ fn test_recall_select_leaves_alternate_screen_once() -> Result<()> {
     Ok(())
 }
 
+// `--timing` is the manual perf instrumentation; keep its output stable since
+// the perf guard parses it.
+#[test]
+fn test_print_timing_reports_phases_on_stderr() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    seed(&helper, "echo hello recall")?;
+    let output = helper.command_with_args(&["recall", "--print", "--timing"]).output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("echo hello recall"), "results go to stdout: {stdout}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for field in ["Config load:", "DB query:", "Total:", "Entries:      1"] {
+        assert!(stderr.contains(field), "timing should report {field:?}: {stderr}");
+    }
+    Ok(())
+}
+
+#[test]
+fn test_paint_then_exit_draws_one_frame_and_reports_timing() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    seed(&helper, "echo hello recall")?;
+    let mut session = spawn_command(
+        helper.command_with_args(&["recall", "--paint-then-exit", "--timing"]),
+        Some(10_000),
+    )?;
+    let out = session.exp_eof()?;
+    assert_eq!(out.matches(TUI_READY).count(), 1, "exactly one frame: {out:?}");
+    assert_eq!(out.matches(LEAVE_ALT_SCREEN).count(), 1, "terminal restored once: {out:?}");
+    for field in ["TUI init:", "Draw:", "Total:"] {
+        assert!(out.contains(field), "timing should report {field:?}: {out}");
+    }
+    Ok(())
+}
+
 // `--shell-mode` is the contract with pxh.bash/pxh.zsh: a `<action>:<command>`
 // line the widget parses, or nothing at all on cancel.
 mod shell_mode {
