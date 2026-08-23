@@ -200,13 +200,15 @@ fn doctor_fix_merges_legacy_db() -> Result<()> {
 fn doctor(home: &Path, db: &Path, shell: &str, extra: &[&str]) -> Result<(String, bool)> {
     let mut args = vec!["--db", db.to_str().unwrap(), "doctor", "--verbose"];
     args.extend_from_slice(extra);
-    let output = pxh_command()
-        .env_clear()
-        .env("HOME", home)
-        .env("SHELL", shell)
-        .env("PATH", env::var("PATH").unwrap_or_default())
-        .args(args)
-        .output()?;
+    let mut cmd = pxh_command();
+    cmd.env_clear().env("HOME", home).env("SHELL", shell).args(args);
+    // env_clear dropped the coverage variables pxh_command propagated.
+    for key in ["PATH", "LLVM_PROFILE_FILE", "CARGO_LLVM_COV"] {
+        if let Ok(value) = env::var(key) {
+            cmd.env(key, value);
+        }
+    }
+    let output = cmd.output()?;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     Ok((format!("{stdout}{stderr}"), output.status.success()))
