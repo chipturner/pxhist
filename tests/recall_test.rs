@@ -148,6 +148,96 @@ mod shell_mode {
         Ok(())
     }
 
+    const VIM_READY: &str = "Esc Mode";
+
+    /// Seed two entries and start recall with `keymap = "vim"`; returns the
+    /// session positioned in insert mode on the newest entry.
+    fn spawn_vim(helper: &PxhTestHelper) -> Result<rexpect::session::PtySession> {
+        seed(helper, "echo newer")?;
+        let status = helper
+            .command_with_args(&[
+                "insert",
+                "--shellname",
+                "zsh",
+                "--hostname",
+                &helper.hostname,
+                "--username",
+                &helper.username,
+                "--session-id",
+                "42",
+                "--exit-status",
+                "0",
+                "--start-unix-timestamp",
+                "1600000000",
+                "echo older",
+            ])
+            .status()?;
+        assert!(status.success());
+        let config = helper.home_dir().join(".pxh/config.toml");
+        let mut contents = std::fs::read_to_string(&config)?;
+        contents.push_str("\n[recall]\nkeymap = \"vim\"\n");
+        std::fs::write(&config, contents)?;
+
+        let mut argv = vec!["recall", "--shell-mode"];
+        argv.push("-q");
+        argv.push("echo");
+        let mut session = spawn_command(helper.command_with_args(&argv), Some(10_000))?;
+        {
+            use std::os::fd::AsRawFd;
+            let master = session.process().get_file_handle()?;
+            let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+            // SAFETY: valid fd and pointer for the duration of the call.
+            unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+        }
+        session.exp_string(VIM_READY)?;
+        Ok(session)
+    }
+
+    /// Esc switches to normal mode; the frame redraw that follows re-prints
+    /// the status line, which is the sleep-free signal that Esc was consumed
+    /// on its own rather than as the start of an Alt chord.
+    fn enter_normal_mode(session: &mut rexpect::session::PtySession) -> Result<()> {
+        session.send("\x1b")?;
+        session.flush()?;
+        session.exp_string(VIM_READY)?;
+        Ok(())
+    }
+
+    #[test]
+    fn vim_normal_mode_k_moves_to_older_and_enter_runs() -> Result<()> {
+        let helper = PxhTestHelper::new();
+        let mut session = spawn_vim(&helper)?;
+        enter_normal_mode(&mut session)?;
+        // The newest entry sits at the bottom, so 'k' (up) selects the older
+        // one. In insert mode 'k' would instead narrow the query to nothing.
+        session.send("k")?;
+        session.flush()?;
+        session.exp_string(VIM_READY)?;
+        assert_eq!(press_and_collect(session, "\r")?, "run:echo older");
+        Ok(())
+    }
+
+    #[test]
+    fn vim_normal_mode_l_edits_selection() -> Result<()> {
+        let helper = PxhTestHelper::new();
+        let mut session = spawn_vim(&helper)?;
+        enter_normal_mode(&mut session)?;
+        assert_eq!(press_and_collect(session, "l")?, "edit:echo newer");
+        Ok(())
+    }
+
+    #[test]
+    fn vim_insert_mode_types_into_query() -> Result<()> {
+        let helper = PxhTestHelper::new();
+        let mut session = spawn_vim(&helper)?;
+        // Still in insert mode: typing refines the query to the older entry.
+        session.send(" old")?;
+        session.flush()?;
+        session.exp_string(VIM_READY)?;
+        assert_eq!(press_and_collect(session, "\r")?, "run:echo older");
+        Ok(())
+    }
+
     /// Without --shell-mode, a selection prints human-readable details and
     /// never the machine prefix.
     #[test]
