@@ -2034,3 +2034,125 @@ fn config_prefers_visual_and_reports_editor_failure() {
     assert!(!out.status.success(), "a failing $VISUAL must be reported");
     assert!(String::from_utf8_lossy(&out.stderr).contains("false exited with"));
 }
+
+// -- Atuin migration ---------------------------------------------------------
+
+/// `contrib/atuin-to-pxh` converts an Atuin SQLite history into the JSON that
+/// `pxh import --shellname json` accepts. Build a small Atuin database with
+/// Atuin's real schema and run the documented pipeline end to end.
+#[test]
+fn atuin_converter_output_imports_cleanly() {
+    assert!(
+        which::which("sqlite3").is_ok(),
+        "sqlite3 CLI is required (the converter depends on it); install it on this runner"
+    );
+    let helper = PxhTestHelper::new();
+    let atuin_db = helper.home_dir().join("atuin-history.db");
+    let conn = Connection::open(&atuin_db).unwrap();
+    conn.execute_batch(
+        r#"
+        CREATE TABLE history (
+            id text primary key, timestamp integer not null, duration integer not null,
+            exit integer not null, command text not null, cwd text not null,
+            session text not null, hostname text not null, deleted_at integer
+        );
+        INSERT INTO history VALUES
+          ('a', 1700000000000000000, 2000000000, 0, 'cargo build', '/work', 's1', 'h', NULL),
+          ('b', 1700000010000000000, 500000000, 1, 'git push', '/work', 's1', 'h', NULL),
+          ('c', 1700000020000000000, 0, 0, 'deleted-cmd', '/work', 's2', 'h', 1700000030);
+        "#,
+    )
+    .unwrap();
+    drop(conn);
+
+    let converter = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("contrib/atuin-to-pxh");
+    let json = std::process::Command::new("sh")
+        .arg(&converter)
+        .arg(&atuin_db)
+        .env("SHELL", "/bin/zsh")
+        .env("USER", "tester")
+        .output()
+        .unwrap();
+    assert!(json.status.success(), "{}", String::from_utf8_lossy(&json.stderr));
+    let json_path = helper.home_dir().join("atuin.json");
+    fs::write(&json_path, &json.stdout).unwrap();
+
+    let out = helper
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "json",
+            "--histfile",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let mut imported = export_json(&helper);
+    imported.sort_by_key(|i| i.start_unix_timestamp);
+    let commands: Vec<String> = imported.iter().map(|i| i.command.to_string()).collect();
+    assert_eq!(commands, ["cargo build", "git push"], "deleted rows must be skipped");
+    let build = &imported[0];
+    assert_eq!(build.shellname, "zsh");
+    assert_eq!(build.username.as_ref().unwrap(), "tester");
+    assert_eq!(build.working_directory.as_ref().unwrap(), "/work");
+    assert_eq!(build.exit_status, Some(0));
+    assert_eq!(build.start_unix_timestamp, Some(1700000000));
+    assert_eq!(build.end_unix_timestamp, Some(1700000002), "duration is nanoseconds");
+    assert_eq!(imported[1].exit_status, Some(1));
+    assert_eq!(imported[0].session_id, imported[1].session_id, "same Atuin session");
+}
+
+/// Non-UTF8 command bytes are exported as byte arrays and must come back
+/// bit-for-bit through `import --shellname json`.
+#[test]
+fn export_import_preserves_non_utf8_command_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let raw = b"echo \xff\xfe latin1-\xe9 done";
+    let source = PxhTestHelper::new();
+    let out = source
+        .command()
+        .args([
+            "insert",
+            "--shellname",
+            "zsh",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "1",
+            "--start-unix-timestamp",
+            "1700000000",
+            "--",
+        ])
+        .arg(std::ffi::OsStr::from_bytes(raw))
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let exported = source.command_with_args(&["export"]).output().unwrap().stdout;
+    assert!(
+        String::from_utf8_lossy(&exported).contains("[101,99,104,111,32,255,254"),
+        "non-UTF8 commands export as byte arrays: {}",
+        String::from_utf8_lossy(&exported)
+    );
+    let json_path = source.home_dir().join("raw.json");
+    fs::write(&json_path, &exported).unwrap();
+
+    let target = PxhTestHelper::new();
+    let out = target
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "json",
+            "--histfile",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let back = export_json(&target);
+    assert_eq!(back.len(), 1);
+    assert_eq!(back[0].command.as_slice(), raw);
+}

@@ -8,7 +8,8 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 
 ## Build Commands
 - Build: `cargo build` or `cargo build --release`
-- Quick validation: `just check` (runs clippy + tests)
+- Quick validation: `just check` (fmt-check + clippy incl. tests + tests; mirrors the CI gate)
+- Perf guard: `just perf` (release build, 550k synthetic rows, ~1 min)
 - Run tests: `just test` (cargo-nextest; filter with e.g. `just test sync`)
 - Run full suite repeatedly to catch flakes: `just stress` (default 10 runs)
 - Docker end-to-end suite: `just docker-e2e`
@@ -20,7 +21,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Clean coverage data: `just coverage-clean`
 
 ## Workflow
-- After tests pass, run `cargo clippy -- -D warnings` to catch any warnings
+- After tests pass, run `cargo clippy --all-targets -- -D warnings` to catch any warnings (CI lints tests too)
 - After validation and reaching a stopping point, run `cargo build --release` in the background
 
 ## Architecture Overview
@@ -90,9 +91,19 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/shell_integration_simple_test.rs`**: Simple shell integration tests
 - **`tests/shell_hooks_test.rs`**: Shell hook (preexec/precmd) testing
 - **`tests/doctor_test.rs`**: Doctor command diagnostics tests
-- **`tests/docker/`**: Dockerized end-to-end shell integration (run via `just docker-e2e`)
+- **`tests/perf_test.rs`**: Recall-latency guard, `#[ignore]`d by default. Times the hot paths (recall load in each mode, TUI init, insert, seal, autosuggest) against 50k- and 500k-row databases and fails if any scales with table size. Run with `just perf` (release build); CI runs it in the `perf` job.
+- **`tests/property_test.rs`**: proptest properties for byte-level paths (zsh unmetafy, continuation-line joining, JSON import round trip of arbitrary bytes)
+- **`tests/docker/`**: Clean-machine user journey on stock Debian: fresh HOME, `pxh install`, commands typed into real interactive bash and zsh via `script(1)`, then search/import/export/scan/scrub/sync (run via `just docker-e2e`)
 - **`tests/common/mod.rs`**: Shared test utilities and compatibility wrappers
 - **`tests/resources/`**: Sample histfiles for import testing (bash simple/timestamped, zsh incl. malformed/multiline)
+
+### Test Conventions
+- **No sleeps.** Interactive tests synchronise on a sentinel prompt (`ShellSession` in `interactive_shell_test.rs`): the rc file pins `PS1`/`PROMPT`, and `run()` waits for it, which proves the synchronous hooks finished. When a recall selection is involved, wait for a marker only *execution* can print (e.g. `echo pxh-ran-$((6*7))` -> `pxh-ran-42`), never for the command text, which the TUI and readline also echo.
+- **Missing tools fail, never skip.** bash, zsh, and `sqlite3` are required; a silent early return is a green test that tested nothing.
+- **No network.** SSH sync tests pass a stub script via `--ssh-cmd` that records argv.
+- **Pin complexity with `EXPLAIN QUERY PLAN`.** Hot-path SQL lives in named consts/builders (`SEAL_SQL`, `AUTOSUGGEST_SQL`, `SearchEngine::recall_query`) so plan tests exercise the exact production SQL via `test_utils::explain_query_plan`. Recall/autosuggest must walk `history_start_time` with no `TEMP B-TREE`; seal must be a covering-index seek.
+- **Readline needs echo.** rexpect forks ptys with echo off and GNU readline skips redisplay on a no-echo terminal; shell rc preludes run `stty echo`.
+- `PxhTestHelper` seeds `~/.pxh/config.toml` with `ignore_patterns = []`, so trivial commands (`false`, `cd`, ...) are recorded in tests but not by default.
 
 ### Test Helpers
 Located in `pxh::test_utils` (src/lib.rs) and `tests/common/mod.rs`:
