@@ -505,6 +505,24 @@ pub fn join_continuation_lines(buf: &[u8]) -> Vec<Vec<u8>> {
     result
 }
 
+/// Undo zsh's internal "metafication": bytes in its token range are stored as
+/// `0x83` followed by the byte XOR `0x20`. Most CJK and emoji UTF-8 sequences
+/// contain such bytes, so history written by zsh must be decoded before use.
+pub fn unmetafy(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut iter = bytes.iter();
+    while let Some(&b) = iter.next() {
+        match (b, iter.clone().next()) {
+            (0x83, Some(&next)) => {
+                out.push(next ^ 0x20);
+                iter.next();
+            }
+            _ => out.push(b),
+        }
+    }
+    out
+}
+
 pub fn import_zsh_history(
     histfile: &Path,
     hostname: Option<BString>,
@@ -565,7 +583,7 @@ pub fn import_zsh_history(
                 }
             };
         let invocation = Invocation {
-            command: BString::from(command),
+            command: BString::from(unmetafy(command)),
             shellname: "zsh".into(),
             hostname: Some(BString::from(hostname.as_bytes())),
             username: Some(BString::from(username.as_bytes())),
@@ -1345,6 +1363,15 @@ mod tests {
         config.host.aliases = vec![current, "other".to_string()];
         let hosts = effective_host_set(&config);
         assert_eq!(hosts.len(), 2);
+    }
+
+    #[test]
+    fn test_unmetafy_decodes_pairs_and_leaves_plain_bytes() {
+        assert_eq!(unmetafy(b"plain ascii"), b"plain ascii");
+        // U+1F600 as zsh stores it: 9F -> 83 BF, 98 -> 83 B8.
+        assert_eq!(unmetafy(&[0xF0, 0x83, 0xBF, 0x83, 0xB8, 0x80]), "😀".as_bytes());
+        // A trailing lone Meta byte has nothing to decode and is kept.
+        assert_eq!(unmetafy(&[b'x', 0x83]), [b'x', 0x83]);
     }
 
     #[test]

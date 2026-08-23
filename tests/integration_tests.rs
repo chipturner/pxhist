@@ -1612,11 +1612,49 @@ fn insert_records_when_ignore_patterns_empty() {
 
 #[test]
 fn stats_command() {
-    let caller = PxhTestHelper::new();
-    let output = caller.command_with_args(&["stats"]).output().unwrap();
+    let helper = PxhTestHelper::new();
+    let insert = |cmd: &str, session: &str, ts: &str| {
+        let status = helper
+            .command_with_args(&[
+                "insert",
+                "--shellname",
+                "zsh",
+                "--hostname",
+                "h",
+                "--username",
+                "u",
+                "--session-id",
+                session,
+                "--start-unix-timestamp",
+                ts,
+                cmd,
+            ])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    // 3 commands, 2 unique, 2 sessions, spanning 10 days.
+    insert("ls", "1", "1700000000");
+    insert("ls", "1", "1700400000");
+    insert("pwd", "2", "1700864000");
+
+    let output = helper.command_with_args(&["stats"]).output().unwrap();
     assert!(output.status.success(), "stats should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.is_empty(), "stats should produce output");
+    assert!(stdout.contains("Commands:   3 total, 2 unique"), "{stdout}");
+    assert!(stdout.contains("Sessions:   2"), "{stdout}");
+    assert!(stdout.contains("Period:     2023-11-1"), "{stdout}");
+    assert!(stdout.contains("(10 days)"), "{stdout}");
+}
+
+#[test]
+fn stats_on_empty_database_has_no_period() {
+    let helper = PxhTestHelper::new();
+    let output = helper.command_with_args(&["stats"]).output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Commands:   0 total, 0 unique"), "{stdout}");
+    assert!(!stdout.contains("Period:"), "no period without timestamps: {stdout}");
 }
 
 #[test]
@@ -1740,4 +1778,259 @@ fn insert_accepts_hyphen_prefixed_commands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("-la"), "command '-la' should be in history");
     assert!(stdout.contains("-rf"), "command '-rf' should be in history");
+}
+
+// -- Import / export round trips ---------------------------------------------
+
+fn insert_full(helper: &PxhTestHelper, cmd: &str, dir: &str, status: &str, ts: &str) {
+    let out = helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "zsh",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "9",
+            "--working-directory",
+            dir,
+            "--exit-status",
+            status,
+            "--start-unix-timestamp",
+            ts,
+            "--end-unix-timestamp",
+            &(ts.parse::<i64>().unwrap() + 3).to_string(),
+            cmd,
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+}
+
+fn export_json(helper: &PxhTestHelper) -> Vec<pxh::Invocation> {
+    let out = helper.command_with_args(&["export"]).output().unwrap();
+    assert!(out.status.success());
+    serde_json::from_slice(&out.stdout).unwrap()
+}
+
+/// `pxh import --shellname json` must accept `pxh export` output verbatim and
+/// preserve every field -- this is the documented cross-machine and Atuin
+/// migration path.
+#[test]
+fn json_export_import_roundtrip_preserves_metadata() {
+    let source = PxhTestHelper::new();
+    insert_full(&source, "cargo test", "/work/pxh", "0", "1700000000");
+    insert_full(&source, "git push", "/work/pxh", "1", "1700000100");
+    let exported = export_json(&source);
+    let json_path = source.home_dir().join("export.json");
+    fs::write(&json_path, serde_json::to_vec(&exported).unwrap()).unwrap();
+
+    let target = PxhTestHelper::new();
+    let out = target
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "json",
+            "--histfile",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let mut reimported = export_json(&target);
+    let mut original = exported;
+    let key = |i: &pxh::Invocation| (i.start_unix_timestamp, i.command.to_string());
+    reimported.sort_by_key(key);
+    original.sort_by_key(key);
+    assert_eq!(reimported.len(), 2);
+    for (a, b) in original.iter().zip(&reimported) {
+        assert_eq!(a.command, b.command);
+        assert_eq!(a.working_directory, b.working_directory);
+        assert_eq!(a.exit_status, b.exit_status);
+        assert_eq!(a.start_unix_timestamp, b.start_unix_timestamp);
+        assert_eq!(a.end_unix_timestamp, b.end_unix_timestamp);
+        assert_eq!(a.hostname, b.hostname);
+        assert_eq!(a.shellname, b.shellname);
+    }
+
+    // Importing the same file again is a no-op thanks to the unique index.
+    let out = target
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "json",
+            "--histfile",
+            json_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    assert_eq!(export_json(&target).len(), 2, "re-import must not duplicate rows");
+}
+
+#[test]
+fn json_import_requires_histfile() {
+    let helper = PxhTestHelper::new();
+    let out = helper.command_with_args(&["import", "--shellname", "json"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--histfile is required"));
+}
+
+#[test]
+fn import_defaults_to_histfile_env_var() {
+    let helper = PxhTestHelper::new();
+    let histfile = helper.home_dir().join("custom_history");
+    fs::write(&histfile, "echo from-histfile-env\nls -la\n").unwrap();
+    let out = helper
+        .command_with_args(&["import", "--shellname", "bash"])
+        .env("HISTFILE", &histfile)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let commands: Vec<String> =
+        export_json(&helper).iter().map(|i| i.command.to_string()).collect();
+    assert!(commands.contains(&"echo from-histfile-env".to_string()), "{commands:?}");
+}
+
+#[test]
+fn import_defaults_to_home_history_file() {
+    let helper = PxhTestHelper::new();
+    fs::write(helper.home_dir().join(".zsh_history"), ": 1700000000:0;echo from-home-zsh\n")
+        .unwrap();
+    let out = helper.command_with_args(&["import", "--shellname", "zsh"]).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let commands: Vec<String> =
+        export_json(&helper).iter().map(|i| i.command.to_string()).collect();
+    assert_eq!(commands, ["echo from-home-zsh"]);
+}
+
+/// zsh writes bytes in its internal token range metafied: 0x83 followed by
+/// the byte XOR 0x20. Most CJK and emoji UTF-8 sequences contain such bytes,
+/// so a faithful import must unmetafy them.
+#[test]
+fn zsh_import_unmetafies_high_bytes() {
+    let helper = PxhTestHelper::new();
+    let histfile = helper.home_dir().join("metafied");
+    // "echo 😀" -- U+1F600 is F0 9F 98 80; zsh stores 9F as 83 BF and 98 as 83 B8.
+    let mut line = b": 1700000000:0;echo ".to_vec();
+    line.extend_from_slice(&[0xF0, 0x83, 0xBF, 0x83, 0xB8, 0x80, b'\n']);
+    fs::write(&histfile, &line).unwrap();
+    let out = helper
+        .command_with_args(&[
+            "import",
+            "--shellname",
+            "zsh",
+            "--histfile",
+            histfile.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let exported = export_json(&helper);
+    assert_eq!(exported.len(), 1);
+    assert_eq!(exported[0].command, "echo 😀");
+}
+
+// -- Sync --export-only ------------------------------------------------------
+
+#[test]
+fn sync_export_only_publishes_without_importing() {
+    let helper = PxhTestHelper::new();
+    insert_full(&helper, "echo mine", "/", "0", "1700000000");
+    let sync_dir = helper.home_dir().join("sync");
+    fs::create_dir(&sync_dir).unwrap();
+
+    // Another machine's database already in the shared directory.
+    let other_db = sync_dir.join("other.db");
+    let status = helper
+        .command_with_args(&[
+            "--db",
+            other_db.to_str().unwrap(),
+            "insert",
+            "--shellname",
+            "zsh",
+            "--hostname",
+            "other",
+            "--username",
+            "u",
+            "--session-id",
+            "1",
+            "--start-unix-timestamp",
+            "1700000500",
+            "echo theirs",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let out = helper
+        .command_with_args(&["sync", "--export-only", sync_dir.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    let mine: Vec<String> = export_json(&helper).iter().map(|i| i.command.to_string()).collect();
+    assert_eq!(mine, ["echo mine"], "--export-only must not pull in other databases");
+
+    let published = sync_dir.join(format!("{}.db", helper.hostname));
+    assert!(published.exists(), "our database should be published as <hostname>.db");
+    let published_cmds: Vec<String> = {
+        let out = helper
+            .command_with_args(&["--db", published.to_str().unwrap(), "export"])
+            .output()
+            .unwrap();
+        serde_json::from_slice::<Vec<pxh::Invocation>>(&out.stdout)
+            .unwrap()
+            .iter()
+            .map(|i| i.command.to_string())
+            .collect()
+    };
+    assert_eq!(published_cmds, ["echo mine"]);
+}
+
+// -- Config ------------------------------------------------------------------
+
+#[test]
+fn config_creates_default_file_and_opens_editor() {
+    let helper = PxhTestHelper::new();
+    let editor_log = helper.home_dir().join("editor.log");
+    let editor = helper.home_dir().join("fake-editor");
+    fs::write(&editor, format!("#!/bin/sh\nprintf '%s' \"$1\" > '{}'\n", editor_log.display()))
+        .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    // The helper seeds a config file; remove it so creation is exercised.
+    let path_out = helper.command_with_args(&["config", "--path"]).output().unwrap();
+    let config_path = PathBuf::from(String::from_utf8_lossy(&path_out.stdout).trim());
+    fs::remove_file(&config_path).unwrap();
+
+    let out = helper.command_with_args(&["config"]).env("EDITOR", &editor).output().unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    assert!(config_path.exists(), "config should create a default file");
+    let contents = fs::read_to_string(&config_path).unwrap();
+    assert!(
+        contents.parse::<toml::Table>().is_ok(),
+        "default config must be valid TOML: {contents}"
+    );
+    assert_eq!(fs::read_to_string(&editor_log).unwrap(), config_path.to_str().unwrap());
+}
+
+#[test]
+fn config_prefers_visual_and_reports_editor_failure() {
+    let helper = PxhTestHelper::new();
+    let out = helper
+        .command_with_args(&["config"])
+        .env("VISUAL", "false")
+        .env("EDITOR", "true")
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "a failing $VISUAL must be reported");
+    assert!(String::from_utf8_lossy(&out.stderr).contains("false exited with"));
 }
