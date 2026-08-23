@@ -33,15 +33,22 @@ jobs:
       with:
         components: llvm-tools-preview
     
-    - name: Install cargo-llvm-cov
-      uses: taiki-e/install-action@cargo-llvm-cov
-    
+    - name: Install cargo-llvm-cov and cargo-nextest
+      uses: taiki-e/install-action@v2
+      with:
+        tool: cargo-llvm-cov,nextest
+
+    # nextest runs each test in its own process, matching the main test job;
+    # libtest's shared-process model is not what the suite is written for.
     - name: Generate code coverage
       run: |
         export CC=clang
         export CXX=clang++
         export LLVM_PROFILE_FILE="pxhist-%p-%m.profraw"
-        cargo llvm-cov test --all-features --workspace --include-ffi --lcov --output-path lcov.info
+        cargo llvm-cov nextest --all-features --workspace --include-ffi --lcov --output-path lcov.info
+
+    - name: Enforce coverage floor
+      run: cargo llvm-cov report --include-ffi --fail-under-lines 80
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v5

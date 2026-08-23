@@ -27,8 +27,10 @@ jobs:
     - name: Run tests
       run: cargo nextest run --locked
 
+  # crates.io publishes cannot be retried for the same version, so this runs
+  # only after the GitHub release (which can be re-run) has succeeded.
   publish:
-    needs: [test, build]
+    needs: [release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -90,7 +92,7 @@ jobs:
 
   release:
     name: GitHub Release
-    needs: [publish, build]
+    needs: [test, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

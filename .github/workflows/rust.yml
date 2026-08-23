@@ -46,11 +46,16 @@ jobs:
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
 
+    # Interactive tests drive real bash and zsh and fail (not skip) if absent.
+    - name: Ensure zsh is available
+      if: runner.os == 'Linux'
+      run: which zsh || (sudo apt-get update && sudo apt-get install -y zsh)
+
     - name: Check formatting
       run: cargo fmt --check
 
-    - name: Run clippy
-      run: cargo clippy --locked -- -D warnings
+    - name: Run clippy (including tests)
+      run: cargo clippy --all-targets --locked -- -D warnings
 
     - name: Run tests
       run: cargo nextest run --locked
@@ -68,7 +73,7 @@ jobs:
       with:
         submodules: recursive
 
-    - name: Build and run Docker e2e test
+    - name: Build clean-machine image and run the install journey
       run: |
         docker build -t pxh-e2e -f tests/docker/Dockerfile .
         docker run --rm pxh-e2e
@@ -98,5 +103,40 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-msrv-
 
-    - name: Build with MSRV
-      run: cargo build --locked
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+
+    - name: Ensure zsh is available
+      run: which zsh || (sudo apt-get update && sudo apt-get install -y zsh)
+
+    - name: Test with MSRV
+      run: cargo nextest run --locked
+
+  perf:
+    name: Recall latency at 500k rows
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        submodules: recursive
+
+    - uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-perf-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-perf-
+
+    - name: Install cargo-nextest
+      uses: taiki-e/install-action@nextest
+
+    - name: Run perf guard (release build, ignored-by-default tests)
+      run: cargo nextest run --release --locked --run-ignored only --test perf_test --no-capture

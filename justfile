@@ -7,10 +7,15 @@ default:
 build:
 	cargo build
 
-# Clippy (strict) + nextest -- the pre-push gate
+# fmt-check + clippy (strict, incl. tests) + nextest -- mirrors the CI gate
 check:
-	cargo clippy -- -D warnings
+	cargo fmt -- --check
+	cargo clippy --all-targets -- -D warnings
 	cargo nextest run
+
+# Recall latency guard at 500k rows (release build; ignored in `just test`)
+perf:
+	cargo nextest run --release --run-ignored only --test perf_test --no-capture
 
 fmt:
 	cargo fmt
@@ -26,7 +31,7 @@ test *args:
 cargo-upgrade *args:
 	cargo-upgrade upgrade {{ args }}
 	cargo update
-	cargo clippy -- -D warnings
+	cargo clippy --all-targets -- -D warnings
 	cargo nextest run
 
 # Run full suite N times and report pass/fail tally
