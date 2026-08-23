@@ -1,1249 +1,509 @@
-use std::{fs, thread, time::Duration};
+//! Drive real interactive bash and zsh sessions over a PTY and verify that
+//! the pxh hooks record what the user typed.
+//!
+//! Synchronisation is by prompt, never by sleeping: each rc file sets a
+//! sentinel prompt, and `ShellSession::run` waits for it to reappear. Because
+//! the hooks run synchronously inside preexec/precmd, the prompt coming back
+//! proves the insert and seal for the previous command have both completed.
 
-use pxh::test_utils::PxhTestHelper;
-use rexpect::session::spawn_command;
+use std::{fs, os::fd::AsRawFd};
+
+use pxh::{Invocation, test_utils::PxhTestHelper};
+use rexpect::session::{PtySession, spawn_command};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-// Shell type enum for parameterized tests
-#[derive(Clone, Copy)]
+const PROMPT: &str = "PXHT> ";
+
+#[derive(Clone, Copy, Debug)]
 enum Shell {
     Bash,
     Zsh,
 }
 
 impl Shell {
-    fn name(&self) -> &'static str {
+    fn name(self) -> &'static str {
         match self {
             Shell::Bash => "bash",
             Shell::Zsh => "zsh",
         }
     }
 
-    fn rc_file(&self) -> &'static str {
+    fn rc_file(self) -> &'static str {
         match self {
             Shell::Bash => ".bashrc",
             Shell::Zsh => ".zshrc",
         }
     }
 
-    fn is_available(&self) -> bool {
-        which::which(self.name()).is_ok()
+    /// rc prelude that pins the prompt so tests can synchronise on it.
+    ///
+    /// rexpect forks the pty with echo off, and GNU readline skips redisplay
+    /// entirely on a no-echo terminal -- which would hide the line it
+    /// rebuilds after a recall edit. `stty echo` here runs before readline's
+    /// first terminal prep, so the setting is seen deterministically.
+    fn rc_prelude(self) -> String {
+        match self {
+            Shell::Bash => format!("stty echo\nPS1='{PROMPT}'\n"),
+            Shell::Zsh => {
+                format!("stty echo\nPROMPT='{PROMPT}'\nunsetopt zle_bracketed_paste\n")
+            }
+        }
     }
 }
 
-// Helper to count commands in a database using pxh
-fn count_commands(helper: &PxhTestHelper) -> Result<usize> {
-    let output = helper.command_with_args(&["show", "--suppress-headers"]).output()?;
-
-    if !output.status.success() {
-        return Ok(0);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().count())
+struct ShellSession {
+    pty: PtySession,
 }
 
-// Helper to get commands from database using pxh export
-fn get_commands(helper: &PxhTestHelper) -> Result<Vec<String>> {
+impl ShellSession {
+    /// Install pxh into a fresh rc file, spawn the shell, and wait for the
+    /// first prompt. Panics (rather than silently passing) if the shell is
+    /// missing -- CI images are expected to provide both.
+    fn spawn(helper: &PxhTestHelper, shell: Shell) -> Result<Self> {
+        assert!(
+            which::which(shell.name()).is_ok(),
+            "{} is required for interactive tests but was not found in PATH",
+            shell.name()
+        );
+        fs::write(helper.home_dir().join(shell.rc_file()), shell.rc_prelude())?;
+        let install = helper.command_with_args(&["install", shell.name()]).output()?;
+        assert!(
+            install.status.success(),
+            "install {} failed: {}",
+            shell.name(),
+            String::from_utf8_lossy(&install.stderr)
+        );
+
+        let pty = spawn_command(helper.shell_command(shell.name()), Some(30_000))?;
+        // rexpect ptys start 0x0; give the shell (and any TUI it spawns) a
+        // real size.
+        let master = pty.process().get_file_handle()?;
+        let ws = libc::winsize { ws_row: 24, ws_col: 80, ws_xpixel: 0, ws_ypixel: 0 };
+        // SAFETY: valid fd and pointer for the duration of the call.
+        unsafe { libc::ioctl(master.as_raw_fd(), libc::TIOCSWINSZ, &ws) };
+
+        let mut session = ShellSession { pty };
+        session.wait_prompt()?;
+        Ok(session)
+    }
+
+    /// Block until the sentinel prompt is printed; returns everything
+    /// emitted before it.
+    fn wait_prompt(&mut self) -> Result<String> {
+        Ok(self.pty.exp_string(PROMPT)?)
+    }
+
+    /// Type a command, wait for the next prompt, and return the transcript
+    /// (echoed command plus output).
+    fn run(&mut self, cmd: &str) -> Result<String> {
+        self.pty.send_line(cmd)?;
+        self.wait_prompt()
+    }
+
+    /// Wait for `marker` (something only *executing* a command can print,
+    /// never its echo or a TUI rendering of it), then for the next prompt.
+    fn expect_output(&mut self, marker: &str) -> Result<()> {
+        self.pty.exp_string(marker)?;
+        self.wait_prompt()?;
+        Ok(())
+    }
+
+    fn exit(mut self) -> Result<()> {
+        self.pty.send_line("exit")?;
+        self.pty.exp_eof()?;
+        Ok(())
+    }
+}
+
+fn export(helper: &PxhTestHelper) -> Result<Vec<Invocation>> {
     let output = helper.command_with_args(&["export"]).output()?;
+    assert!(output.status.success(), "export failed: {}", String::from_utf8_lossy(&output.stderr));
+    Ok(serde_json::from_slice(&output.stdout)?)
+}
 
-    if !output.status.success() {
-        return Ok(vec![]);
+fn commands(helper: &PxhTestHelper) -> Result<Vec<String>> {
+    Ok(export(helper)?.into_iter().map(|inv| inv.command.to_string()).collect())
+}
+
+fn find<'a>(invocations: &'a [Invocation], needle: &str) -> Option<&'a Invocation> {
+    invocations.iter().find(|inv| inv.command.to_string().contains(needle))
+}
+
+/// Pre-seed history with a command whose *output* differs from its text, so
+/// a test can tell "the shell executed it" apart from "the TUI displayed it".
+fn seed_history(helper: &PxhTestHelper, command: &str) -> Result<()> {
+    let status = helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            &helper.hostname,
+            "--username",
+            &helper.username,
+            "--session-id",
+            "7",
+            "--exit-status",
+            "0",
+            "--start-unix-timestamp",
+            "1700000000",
+            command,
+        ])
+        .status()?;
+    assert!(status.success(), "seed insert should succeed");
+    Ok(())
+}
+
+/// Generate a `#[test]` per shell for a body that takes a `Shell`.
+macro_rules! for_each_shell {
+    ($body:ident) => {
+        mod $body {
+            use super::*;
+            #[test]
+            fn bash() -> Result<()> {
+                super::$body(Shell::Bash)
+            }
+            #[test]
+            fn zsh() -> Result<()> {
+                super::$body(Shell::Zsh)
+            }
+        }
+    };
+}
+
+fn records_basic_commands(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+
+    let transcript = session.run("echo PXH_DB_PATH=$PXH_DB_PATH")?;
+    assert!(
+        transcript.contains(&format!("PXH_DB_PATH={}", helper.db_path().display())),
+        "shell should see the test DB path: {transcript}"
+    );
+    let transcript = session.run("echo 'Hello from interactive shell'")?;
+    assert!(transcript.contains("Hello from interactive shell"));
+    session.run("pwd")?;
+    session.run("ls /tmp > /dev/null 2>&1")?;
+    session.run("false")?;
+    session.exit()?;
+
+    let recorded = commands(&helper)?;
+    for expected in
+        ["echo 'Hello from interactive shell'", "pwd", "ls /tmp > /dev/null 2>&1", "false"]
+    {
+        assert!(recorded.iter().any(|c| c == expected), "missing {expected:?} in {recorded:?}");
     }
-
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-    Ok(invocations.into_iter().map(|inv| inv.command.to_string()).collect())
+    Ok(())
 }
+for_each_shell!(records_basic_commands);
 
-#[test]
-fn test_bash_interactive_shell() -> Result<()> {
-    // Create test helper
+fn records_exit_status(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let home_dir = helper.home_dir();
-    let bashrc_path = home_dir.join(".bashrc");
-    let pxh_db_path = helper.db_path();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    session.run("true")?;
+    session.run("false")?;
+    session.run("sh -c 'exit 42'")?;
+    session.exit()?;
 
-    // Create empty .bashrc
-    fs::write(&bashrc_path, "")?;
+    let invocations = export(&helper)?;
+    let status = |cmd: &str| invocations.iter().find(|i| i.command == cmd).map(|i| i.exit_status);
+    assert_eq!(status("true"), Some(Some(0)));
+    assert_eq!(status("false"), Some(Some(1)));
+    assert_eq!(status("sh -c 'exit 42'"), Some(Some(42)));
+    Ok(())
+}
+for_each_shell!(records_exit_status);
 
-    // First, install pxh for bash
-    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
+fn records_working_directory(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let dir1 = helper.home_dir().join("test1");
+    let dir2 = helper.home_dir().join("test2");
+    fs::create_dir(&dir1)?;
+    fs::create_dir(&dir2)?;
 
-    eprintln!("Install output stdout: {}", String::from_utf8_lossy(&install_output.stdout));
-    eprintln!("Install output stderr: {}", String::from_utf8_lossy(&install_output.stderr));
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    session.run(&format!("cd {}", dir1.display()))?;
+    session.run("echo 'in test1'")?;
+    session.run(&format!("cd {}", dir2.display()))?;
+    session.run("echo 'in test2'")?;
+    session.exit()?;
 
-    assert!(
-        install_output.status.success(),
-        "Install failed: {}",
-        String::from_utf8_lossy(&install_output.stderr)
-    );
-
-    // Verify bashrc was modified
-    let bashrc_content = fs::read_to_string(&bashrc_path)?;
-    eprintln!("Bashrc content after install:\n{}", bashrc_content);
-    assert!(bashrc_content.contains("pxh shell-config bash"));
-
-    // Now spawn an interactive bash session with proper environment
-    let cmd = helper.shell_command("bash");
-    eprintln!("Spawning bash with command: {:?}", cmd);
-    let mut session = spawn_command(cmd, Some(30_000))?;
-
-    // Wait for shell initialization and rc file loading
-    thread::sleep(Duration::from_millis(1000));
-
-    // Check if pxh is available
-    session.send_line("which pxh")?;
-    session.exp_regex(r"(/[^\r\n]+/pxh)")?;
-
-    // Check environment variables
-    session.send_line("echo PXH_DB_PATH=$PXH_DB_PATH")?;
-    session.exp_string(&format!("PXH_DB_PATH={}", pxh_db_path.display()))?;
-
-    // Give shell more time to initialize with preexec/precmd
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run some test commands
-    session.send_line("echo 'Hello from interactive bash'")?;
-    session.exp_string("Hello from interactive bash")?;
-
-    session.send_line("pwd")?;
-    session.exp_regex(r"(/[^\r\n]+)")?;
-
-    session.send_line("ls /tmp > /dev/null 2>&1")?;
-    thread::sleep(Duration::from_millis(100));
-
-    // Run a command that will fail
-    session.send_line("false")?;
-    thread::sleep(Duration::from_millis(100));
-
-    // Exit the shell
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    // Give a moment for any final writes
-    thread::sleep(Duration::from_millis(500));
-
-    // Now verify that commands were recorded
-    let command_count = count_commands(&helper)?;
-
-    // Debug: Check if the database exists and has content
-    if command_count == 0 {
-        eprintln!("Debug: No commands found. Checking database path: {:?}", pxh_db_path);
-        eprintln!("Debug: Database exists: {}", pxh_db_path.exists());
-
-        // Try running pxh show directly to see what's happening
-        let show_output = helper.command_with_args(&["show", "--suppress-headers"]).output()?;
-        eprintln!("Debug: pxh show exit status: {}", show_output.status);
-        eprintln!("Debug: pxh show stdout: {}", String::from_utf8_lossy(&show_output.stdout));
-        eprintln!("Debug: pxh show stderr: {}", String::from_utf8_lossy(&show_output.stderr));
+    let invocations = export(&helper)?;
+    for (marker, dir) in [("in test1", "test1"), ("in test2", "test2")] {
+        let inv = find(&invocations, marker).expect(marker);
+        let cwd = inv.working_directory.as_ref().map(|d| d.to_string()).unwrap_or_default();
+        assert!(cwd.ends_with(dir), "{marker} recorded in {cwd}, expected {dir}");
     }
-
-    assert!(
-        command_count >= 4,
-        "Expected at least 4 commands (echo, pwd, ls, false), found {}",
-        command_count
-    );
-
-    let commands = get_commands(&helper)?;
-    assert!(
-        commands.iter().any(|c| c.contains("echo 'Hello from interactive bash'")),
-        "Should have recorded echo command"
-    );
-    assert!(commands.iter().any(|c| c == "pwd"), "Should have recorded pwd command");
-    assert!(commands.iter().any(|c| c.contains("ls /tmp")), "Should have recorded ls command");
-    assert!(commands.iter().any(|c| c == "false"), "Should have recorded false command");
-
-    // Also verify using pxh show command
-    let show_output = helper.command_with_args(&["show", "--limit", "10"]).output()?;
-
-    assert!(show_output.status.success(), "Show command should succeed");
-    let history = String::from_utf8_lossy(&show_output.stdout);
-    assert!(history.contains("Hello from interactive bash"), "History should contain echo command");
-
     Ok(())
 }
+for_each_shell!(records_working_directory);
 
-#[test]
-fn test_zsh_interactive_shell() -> Result<()> {
-    // Skip test if zsh is not available
-    if which::which("zsh").is_err() {
-        eprintln!("Skipping zsh integration test: zsh not found in PATH");
-        return Ok(());
+fn records_timing(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    session.run("sleep 1")?;
+    session.exit()?;
+
+    let invocations = export(&helper)?;
+    let inv = find(&invocations, "sleep 1").expect("sleep should be recorded");
+    let start = inv.start_unix_timestamp.expect("start timestamp");
+    let end = inv.end_unix_timestamp.expect("seal should record an end timestamp");
+    assert!(end > start, "sleep 1 should take at least a second: {start}..{end}");
+    Ok(())
+}
+for_each_shell!(records_timing);
+
+fn records_pipelines(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    session.run("echo 'hello world' | grep hello")?;
+    session.run("printf 'b\\na\\nc\\n' | sort | head -1")?;
+    session.run("echo 'test output' | cat > /dev/null")?;
+    session.exit()?;
+
+    let recorded = commands(&helper)?;
+    assert!(recorded.iter().any(|c| c == "echo 'hello world' | grep hello"), "{recorded:?}");
+    assert!(recorded.iter().any(|c| c.contains("sort | head -1")), "{recorded:?}");
+    assert!(recorded.iter().any(|c| c.contains("cat > /dev/null")), "{recorded:?}");
+    Ok(())
+}
+for_each_shell!(records_pipelines);
+
+fn records_compound_commands(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    assert!(session.run("true && echo 'and succeeded'")?.contains("and succeeded"));
+    assert!(session.run("false || echo 'or fallback'")?.contains("or fallback"));
+    session.run("echo 'first'; echo 'second'")?;
+    session.exit()?;
+
+    let recorded = commands(&helper)?;
+    for expected in [
+        "true && echo 'and succeeded'",
+        "false || echo 'or fallback'",
+        "echo 'first'; echo 'second'",
+    ] {
+        assert!(recorded.iter().any(|c| c == expected), "missing {expected:?} in {recorded:?}");
     }
-
-    // Create test helper
-    let helper = PxhTestHelper::new();
-    let home_dir = helper.home_dir();
-    let zshrc_path = home_dir.join(".zshrc");
-
-    // Create empty .zshrc
-    fs::write(&zshrc_path, "")?;
-
-    // Install pxh for zsh
-    let install_output = helper.command_with_args(&["install", "zsh"]).output()?;
-
-    assert!(
-        install_output.status.success(),
-        "Install failed: {}",
-        String::from_utf8_lossy(&install_output.stderr)
-    );
-
-    // Verify zshrc was modified
-    let zshrc_content = fs::read_to_string(&zshrc_path)?;
-    assert!(zshrc_content.contains("pxh shell-config zsh"));
-
-    // Spawn an interactive zsh session with proper environment
-    let cmd = helper.shell_command("zsh");
-    let mut session = spawn_command(cmd, Some(30_000))?;
-
-    // Wait for shell initialization and rc file loading
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run test commands
-    session.send_line("echo 'Hello from interactive zsh'")?;
-    session.exp_string("Hello from interactive zsh")?;
-
-    session.send_line("date +%Y-%m-%d")?;
-    session.exp_regex(r"\d{4}-\d{2}-\d{2}")?;
-
-    session.send_line("cd /tmp && pwd")?;
-    session.exp_string("/tmp")?;
-
-    // Exit the shell
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    // Verify commands were recorded
-    let command_count = count_commands(&helper)?;
-    assert!(command_count >= 3, "Expected at least 3 commands, found {}", command_count);
-
-    let commands = get_commands(&helper)?;
-    assert!(
-        commands.iter().any(|c| c.contains("echo 'Hello from interactive zsh'")),
-        "Should have recorded echo command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("date +%Y-%m-%d")),
-        "Should have recorded date command"
-    );
-
     Ok(())
 }
+for_each_shell!(records_compound_commands);
 
-#[test]
-fn test_bash_command_with_exit_status() -> Result<()> {
-    // This test verifies that exit statuses are properly recorded
+fn records_multiline_commands(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let home_dir = helper.home_dir();
-    let bashrc_path = home_dir.join(".bashrc");
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    // Backslash continuations: only the last line returns to the prompt.
+    session.pty.send_line("echo 'line1' \\")?;
+    session.pty.send_line("'line2' \\")?;
+    let transcript = session.run("'line3'")?;
+    assert!(transcript.contains("line1 line2 line3"), "{transcript}");
 
-    fs::write(&bashrc_path, "")?;
+    session.pty.send_line("cat << 'ENDMARKER'")?;
+    session.pty.send_line("heredoc content")?;
+    let transcript = session.run("ENDMARKER")?;
+    assert!(transcript.contains("heredoc content"), "{transcript}");
+    session.exit()?;
 
-    // Install pxh
-    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
-
-    assert!(install_output.status.success());
-
-    // Spawn bash session with proper environment
-    let cmd = helper.shell_command("bash");
-    let mut session = spawn_command(cmd, Some(30_000))?;
-
-    // Wait for shell initialization
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run a successful command
-    session.send_line("true")?;
-    thread::sleep(Duration::from_millis(100));
-
-    // Run a failing command
-    session.send_line("false")?;
-    thread::sleep(Duration::from_millis(100));
-
-    // Run a command with specific exit code
-    session.send_line("exit 42")?;
-    session.exp_eof()?;
-
-    // Check the database for exit statuses using pxh export
-    let output = helper.command_with_args(&["export"]).output()?;
-    assert!(output.status.success(), "Export should succeed");
-
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    // Verify exit statuses
+    let recorded = commands(&helper)?;
     assert!(
-        invocations.iter().any(|inv| inv.command == "true" && inv.exit_status == Some(0)),
-        "true command should have exit status 0"
+        recorded.iter().any(|c| c.contains("line1") && c.contains("line2") && c.contains("line3")),
+        "multiline echo should be recorded as one entry: {recorded:?}"
     );
     assert!(
-        invocations.iter().any(|inv| inv.command == "false" && inv.exit_status == Some(1)),
-        "false command should have exit status 1"
+        recorded.iter().any(|c| c.contains("ENDMARKER") && c.contains("heredoc content")),
+        "heredoc should be recorded with its body: {recorded:?}"
     );
-
     Ok(())
 }
+for_each_shell!(records_multiline_commands);
 
-#[test]
-fn test_bash_working_directory_tracking() -> Result<()> {
-    // Test that working directories are properly tracked
+fn records_background_commands(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let home_dir = helper.home_dir();
-    let bashrc_path = home_dir.join(".bashrc");
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    session.run("sleep 0.2 &")?;
+    assert!(session.run("echo 'foreground'")?.contains("foreground"));
+    session.run("wait")?;
+    session.exit()?;
 
-    fs::write(&bashrc_path, "")?;
-
-    // Create test directories
-    let test_dir1 = home_dir.join("test1");
-    let test_dir2 = home_dir.join("test2");
-    fs::create_dir(&test_dir1)?;
-    fs::create_dir(&test_dir2)?;
-
-    // Install pxh
-    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
-
-    assert!(install_output.status.success());
-
-    // Spawn bash session with proper environment
-    let cmd = helper.shell_command("bash");
-    let mut session = spawn_command(cmd, Some(30_000))?;
-
-    // Wait for shell initialization
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run commands in different directories
-    // First cd to test1, then run a command
-    session.send_line(&format!("cd {}", test_dir1.display()))?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("echo 'in test1'")?;
-    session.exp_string("in test1")?;
-
-    // Now cd to test2 and run another command
-    session.send_line(&format!("cd {}", test_dir2.display()))?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("echo 'in test2'")?;
-    session.exp_string("in test2")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    // Verify working directories were recorded using pxh export
-    let output = helper.command_with_args(&["export"]).output()?;
-    assert!(output.status.success(), "Export should succeed");
-
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    assert!(
-        invocations.iter().any(|inv| inv.command.to_string().contains("in test1")
-            && inv
-                .working_directory
-                .as_ref()
-                .map(|d| d.to_string().ends_with("test1"))
-                .unwrap_or(false)),
-        "Should record test1 directory"
-    );
-    assert!(
-        invocations.iter().any(|inv| inv.command.to_string().contains("in test2")
-            && inv
-                .working_directory
-                .as_ref()
-                .map(|d| d.to_string().ends_with("test2"))
-                .unwrap_or(false)),
-        "Should record test2 directory"
-    );
-
+    let recorded = commands(&helper)?;
+    assert!(recorded.iter().any(|c| c == "sleep 0.2 &"), "{recorded:?}");
+    assert!(recorded.iter().any(|c| c == "echo 'foreground'"), "{recorded:?}");
     Ok(())
 }
+for_each_shell!(records_background_commands);
 
-#[test]
-fn test_multiple_sessions() -> Result<()> {
-    // Test that multiple concurrent sessions each get unique session IDs
+fn records_subshells_and_substitution(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let home_dir = helper.home_dir();
-    let bashrc_path = home_dir.join(".bashrc");
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    assert!(session.run("(cd /tmp && pwd)")?.contains("/tmp"));
+    session.run("echo \"today is $(date +%Y)\"")?;
+    session.exit()?;
 
-    fs::write(&bashrc_path, "")?;
-
-    // Install pxh
-    let install_output = helper.command_with_args(&["install", "bash"]).output()?;
-
-    assert!(install_output.status.success());
-
-    // Spawn two bash sessions with proper environment
-    let cmd1 = helper.shell_command("bash");
-    let cmd2 = helper.shell_command("bash");
-
-    let mut session1 = spawn_command(cmd1, Some(30_000))?;
-    let mut session2 = spawn_command(cmd2, Some(30_000))?;
-
-    // Wait for shell initialization
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run commands in both sessions
-    for (i, session) in [&mut session1, &mut session2].iter_mut().enumerate() {
-        // Run a unique command in each session
-        session.send_line(&format!("echo 'Hello from session {}'", i + 1))?;
-        session.exp_string(&format!("Hello from session {}", i + 1))?;
+    let recorded = commands(&helper)?;
+    assert!(recorded.iter().any(|c| c.contains("today is $(date +%Y)")), "{recorded:?}");
+    let subshell_recorded = recorded.iter().any(|c| c.contains("(cd /tmp"));
+    match shell {
+        // KNOWN LIMITATION: bash-preexec does not fire for a bare
+        // parenthesised subshell. Pin it so a change in behaviour is noticed.
+        Shell::Bash => assert!(!subshell_recorded, "bash-preexec now captures subshells?"),
+        Shell::Zsh => assert!(subshell_recorded, "{recorded:?}"),
     }
-
-    // Exit both sessions
-    session1.send_line("exit")?;
-    session1.exp_eof()?;
-
-    session2.send_line("exit")?;
-    session2.exp_eof()?;
-
-    // Verify that we have commands from two different sessions using pxh export
-    let output = helper.command_with_args(&["export"]).output()?;
-    assert!(output.status.success(), "Export should succeed");
-
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    // Count unique session IDs
-    let unique_sessions: std::collections::HashSet<_> =
-        invocations.iter().map(|inv| inv.session_id).collect();
-
-    assert_eq!(unique_sessions.len(), 2, "Should have exactly 2 different session IDs");
-
-    // Verify each session has its command
-    assert!(
-        invocations.iter().any(|inv| inv.command.to_string().contains("Hello from session 1")),
-        "Should have command from session 1"
-    );
-    assert!(
-        invocations.iter().any(|inv| inv.command.to_string().contains("Hello from session 2")),
-        "Should have command from session 2"
-    );
-
     Ok(())
 }
+for_each_shell!(records_subshells_and_substitution);
 
-// ============================================================================
-// SHELL PARITY TESTS - Ensure bash and zsh have equivalent coverage
-// ============================================================================
+fn records_special_characters(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    assert!(session.run("echo 'single quoted $VAR'")?.contains("single quoted $VAR"));
+    assert!(session.run("VAR=test; echo \"double quoted $VAR\"")?.contains("double quoted test"));
+    assert!(session.run("echo \"quotes: \\\"nested\\\"\"")?.contains("quotes: \"nested\""));
+    assert!(session.run("echo 'asterisk * and question ?'")?.contains("asterisk * and question ?"));
+    session.exit()?;
 
-/// Helper to set up a shell session and return the session handle
-fn setup_shell_session(
-    shell: Shell,
-    helper: &PxhTestHelper,
-) -> Result<rexpect::session::PtySession> {
-    let home_dir = helper.home_dir();
-    let rc_path = home_dir.join(shell.rc_file());
-
-    // Create empty rc file
-    fs::write(&rc_path, "")?;
-
-    // Install pxh for the shell
-    let install_output = helper.command_with_args(&["install", shell.name()]).output()?;
-    assert!(
-        install_output.status.success(),
-        "Install failed for {}: {}",
-        shell.name(),
-        String::from_utf8_lossy(&install_output.stderr)
-    );
-
-    // Spawn shell session
-    let cmd = helper.shell_command(shell.name());
-    let session = spawn_command(cmd, Some(30_000))?;
-
-    Ok(session)
-}
-
-// ----------------------------------------------------------------------------
-// ZSH PARITY: Exit status tracking (matches test_bash_command_with_exit_status)
-// ----------------------------------------------------------------------------
-
-#[test]
-fn test_zsh_command_with_exit_status() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
+    let recorded = commands(&helper)?;
+    for expected in [
+        "echo 'single quoted $VAR'",
+        "VAR=test; echo \"double quoted $VAR\"",
+        "echo \"quotes: \\\"nested\\\"\"",
+        "echo 'asterisk * and question ?'",
+    ] {
+        assert!(recorded.iter().any(|c| c == expected), "missing {expected:?} in {recorded:?}");
     }
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run a successful command
-    session.send_line("true")?;
-    thread::sleep(Duration::from_millis(100));
-
-    // Run a failing command
-    session.send_line("false")?;
-    thread::sleep(Duration::from_millis(100));
-
-    // Exit
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    // Check the database for exit statuses
-    let output = helper.command_with_args(&["export"]).output()?;
-    assert!(output.status.success(), "Export should succeed");
-
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    assert!(
-        invocations.iter().any(|inv| inv.command == "true" && inv.exit_status == Some(0)),
-        "true command should have exit status 0"
-    );
-    assert!(
-        invocations.iter().any(|inv| inv.command == "false" && inv.exit_status == Some(1)),
-        "false command should have exit status 1"
-    );
-
     Ok(())
 }
+for_each_shell!(records_special_characters);
 
-// ----------------------------------------------------------------------------
-// ZSH PARITY: Working directory tracking (matches test_bash_working_directory_tracking)
-// ----------------------------------------------------------------------------
+fn records_control_structures(shell: Shell) -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, shell)?;
+    session.run("for i in 1 2 3; do echo $i; done")?;
+    assert!(session.run("if true; then echo 'condition met'; fi")?.contains("condition met"));
+    session.run("x=0; while [ $x -lt 2 ]; do echo $x; x=$((x+1)); done")?;
+    session.exit()?;
 
-#[test]
-fn test_zsh_working_directory_tracking() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
+    let recorded = commands(&helper)?;
+    for expected in [
+        "for i in 1 2 3; do echo $i; done",
+        "if true; then echo 'condition met'; fi",
+        "x=0; while [ $x -lt 2 ]; do echo $x; x=$((x+1)); done",
+    ] {
+        assert!(recorded.iter().any(|c| c == expected), "missing {expected:?} in {recorded:?}");
     }
-
-    let helper = PxhTestHelper::new();
-    let home_dir = helper.home_dir();
-
-    // Create test directories
-    let test_dir1 = home_dir.join("zsh_test1");
-    let test_dir2 = home_dir.join("zsh_test2");
-    fs::create_dir(&test_dir1)?;
-    fs::create_dir(&test_dir2)?;
-
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run commands in different directories
-    session.send_line(&format!("cd {}", test_dir1.display()))?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("echo 'in zsh_test1'")?;
-    session.exp_string("in zsh_test1")?;
-
-    session.send_line(&format!("cd {}", test_dir2.display()))?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("echo 'in zsh_test2'")?;
-    session.exp_string("in zsh_test2")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    // Verify working directories were recorded
-    let output = helper.command_with_args(&["export"]).output()?;
-    assert!(output.status.success(), "Export should succeed");
-
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    assert!(
-        invocations.iter().any(|inv| inv.command.to_string().contains("in zsh_test1")
-            && inv
-                .working_directory
-                .as_ref()
-                .map(|d| d.to_string().ends_with("zsh_test1"))
-                .unwrap_or(false)),
-        "Should record zsh_test1 directory"
-    );
-    assert!(
-        invocations.iter().any(|inv| inv.command.to_string().contains("in zsh_test2")
-            && inv
-                .working_directory
-                .as_ref()
-                .map(|d| d.to_string().ends_with("zsh_test2"))
-                .unwrap_or(false)),
-        "Should record zsh_test2 directory"
-    );
-
     Ok(())
 }
-
-// ============================================================================
-// PIPED COMMANDS - Test command pipelines
-// ============================================================================
+for_each_shell!(records_control_structures);
 
 #[test]
-fn test_bash_piped_commands() -> Result<()> {
+fn concurrent_sessions_get_distinct_session_ids() -> Result<()> {
     let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
+    let mut first = ShellSession::spawn(&helper, Shell::Bash)?;
+    // Second spawn re-runs install; it is idempotent.
+    let mut second = ShellSession::spawn(&helper, Shell::Bash)?;
+    first.run("echo 'Hello from session 1'")?;
+    second.run("echo 'Hello from session 2'")?;
+    first.exit()?;
+    second.exit()?;
 
-    thread::sleep(Duration::from_millis(1000));
-
-    // Simple pipe
-    session.send_line("echo 'hello world' | grep hello")?;
-    session.exp_string("hello world")?;
-
-    // Multi-stage pipeline
-    session.send_line("echo -e 'b\\na\\nc' | sort | head -1")?;
-    session.exp_string("a")?;
-
-    // Pipeline with redirection
-    session.send_line("echo 'test output' | cat > /dev/null")?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("echo 'hello world' | grep hello")),
-        "Should record simple pipe command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("sort") && c.contains("head")),
-        "Should record multi-stage pipeline"
-    );
-
+    let invocations = export(&helper)?;
+    let s1 = find(&invocations, "session 1").expect("session 1 recorded").session_id;
+    let s2 = find(&invocations, "session 2").expect("session 2 recorded").session_id;
+    assert_ne!(s1, s2, "each interactive shell must get its own session id");
     Ok(())
 }
 
-#[test]
-fn test_zsh_piped_commands() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
+// -- Ctrl-R round trip -----------------------------------------------------
+//
+// These exercise the full contract between `pxh recall --shell-mode` and the
+// shell-side widgets: the TUI prints `run:`/`edit:` prefixed output and the
+// widget turns it into an executed or editable command line.
+//
+// The seeded command's *output* (`pxh-ran-42`) differs from its text, so
+// tests can tell "the shell executed it" apart from "the TUI displayed it" or
+// "readline echoed it".
 
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
+const CTRL_R: &str = "\x12";
+const CTRL_C: &str = "\x03";
+const ENTER: &str = "\r";
+const TAB: &str = "\t";
+const LEAVE_ALT_SCREEN: &str = "\x1b[?1049l";
+/// Part of the recall status bar; its appearance means the TUI is up.
+const TUI_READY: &str = "Enter Run";
+const SEED: &str = "echo pxh-ran-$((6*7))";
+const SEED_OUTPUT: &str = "pxh-ran-42";
 
-    thread::sleep(Duration::from_millis(1000));
-
-    // Simple pipe
-    session.send_line("echo 'hello world' | grep hello")?;
-    session.exp_string("hello world")?;
-
-    // Multi-stage pipeline
-    session.send_line("echo -e 'b\\na\\nc' | sort | head -1")?;
-    session.exp_string("a")?;
-
-    // Pipeline with redirection
-    session.send_line("echo 'test output' | cat > /dev/null")?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("echo 'hello world' | grep hello")),
-        "Should record simple pipe command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("sort") && c.contains("head")),
-        "Should record multi-stage pipeline"
-    );
-
+fn open_recall(session: &mut ShellSession) -> Result<()> {
+    session.pty.send(CTRL_R)?;
+    session.pty.flush()?;
+    session.pty.exp_string(TUI_READY)?;
     Ok(())
 }
 
-// ============================================================================
-// COMPOUND COMMANDS - Test &&, ||, and ; operators
-// ============================================================================
-
-#[test]
-fn test_bash_compound_commands() -> Result<()> {
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // AND operator
-    session.send_line("true && echo 'and succeeded'")?;
-    session.exp_string("and succeeded")?;
-
-    // OR operator
-    session.send_line("false || echo 'or fallback'")?;
-    session.exp_string("or fallback")?;
-
-    // Semicolon chaining
-    session.send_line("echo 'first'; echo 'second'")?;
-    session.exp_string("first")?;
-    session.exp_string("second")?;
-
-    // Mixed operators
-    session.send_line("true && echo 'yes' || echo 'no'")?;
-    session.exp_string("yes")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("&&") && c.contains("and succeeded")),
-        "Should record AND compound command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("||") && c.contains("or fallback")),
-        "Should record OR compound command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains(";") && c.contains("first") && c.contains("second")),
-        "Should record semicolon-chained command"
-    );
-
+fn press(session: &mut ShellSession, key: &str) -> Result<()> {
+    session.pty.send(key)?;
+    session.pty.flush()?;
     Ok(())
 }
 
-#[test]
-fn test_zsh_compound_commands() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
+fn ctrl_r_enter_runs_selected_command(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
+    seed_history(&helper, SEED)?;
+    let mut session = ShellSession::spawn(&helper, shell)?;
 
-    thread::sleep(Duration::from_millis(1000));
+    open_recall(&mut session)?;
+    press(&mut session, ENTER)?;
+    session.expect_output(SEED_OUTPUT)?;
+    session.exit()?;
 
-    // AND operator
-    session.send_line("true && echo 'and succeeded'")?;
-    session.exp_string("and succeeded")?;
-
-    // OR operator
-    session.send_line("false || echo 'or fallback'")?;
-    session.exp_string("or fallback")?;
-
-    // Semicolon chaining
-    session.send_line("echo 'first'; echo 'second'")?;
-    session.exp_string("first")?;
-    session.exp_string("second")?;
-
-    // Mixed operators
-    session.send_line("true && echo 'yes' || echo 'no'")?;
-    session.exp_string("yes")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("&&") && c.contains("and succeeded")),
-        "Should record AND compound command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("||") && c.contains("or fallback")),
-        "Should record OR compound command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains(";") && c.contains("first") && c.contains("second")),
-        "Should record semicolon-chained command"
-    );
-
+    let invocations = export(&helper)?;
+    let runs: Vec<_> = invocations.iter().filter(|i| i.command == SEED).collect();
+    assert_eq!(runs.len(), 2, "seed plus the recalled execution: {invocations:?}");
+    assert!(runs.iter().any(|i| i.shellname == shell.name()), "recalled run recorded via hooks");
     Ok(())
 }
+for_each_shell!(ctrl_r_enter_runs_selected_command);
 
-// ============================================================================
-// MULTILINE COMMANDS - Test backslash continuation
-// ============================================================================
-
-#[test]
-fn test_bash_multiline_commands() -> Result<()> {
+fn ctrl_r_tab_edits_without_running(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
+    seed_history(&helper, SEED)?;
+    let mut session = ShellSession::spawn(&helper, shell)?;
 
-    thread::sleep(Duration::from_millis(1000));
+    open_recall(&mut session)?;
+    press(&mut session, TAB)?;
+    // The shell redraws its line with the selection in place, unexecuted.
+    session.pty.exp_string(LEAVE_ALT_SCREEN)?;
+    session.pty.exp_string(SEED)?;
+    // Append to prove the buffer is editable, then run it.
+    session.pty.send_line("; echo pxh-edited")?;
+    session.pty.exp_string(SEED_OUTPUT)?;
+    session.expect_output("pxh-edited")?;
+    session.exit()?;
 
-    // Backslash continuation - send as separate lines
-    session.send_line("echo 'line1' \\")?;
-    thread::sleep(Duration::from_millis(50));
-    session.send_line("'line2' \\")?;
-    thread::sleep(Duration::from_millis(50));
-    session.send_line("'line3'")?;
-    session.exp_string("line1 line2 line3")?;
-
-    // Simple heredoc (inline for easier testing)
-    session.send_line("cat << 'ENDMARKER'\nheredoc content\nENDMARKER")?;
-    session.exp_string("heredoc content")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    // The multiline command should be recorded - exact format may vary by shell
-    // At minimum, the content should be captured
-    assert!(
-        commands.iter().any(|c| c.contains("line1") && c.contains("line2") && c.contains("line3")),
-        "Should record multiline echo command. Commands: {:?}",
-        commands
-    );
-
+    let recorded = commands(&helper)?;
+    assert!(recorded.iter().any(|c| c == &format!("{SEED}; echo pxh-edited")), "{recorded:?}");
     Ok(())
 }
+for_each_shell!(ctrl_r_tab_edits_without_running);
 
-#[test]
-fn test_zsh_multiline_commands() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
+fn ctrl_r_ctrl_c_leaves_line_untouched(shell: Shell) -> Result<()> {
     let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
+    seed_history(&helper, SEED)?;
+    let mut session = ShellSession::spawn(&helper, shell)?;
 
-    thread::sleep(Duration::from_millis(1000));
+    open_recall(&mut session)?;
+    // Ctrl-C rather than Esc: a lone ESC byte immediately followed by typed
+    // text is indistinguishable from an Alt-chord to the TUI's input parser.
+    press(&mut session, CTRL_C)?;
+    // Wait for the TUI to release the terminal so the next keystrokes reach
+    // the shell rather than a still-exiting recall process.
+    session.pty.exp_string(LEAVE_ALT_SCREEN)?;
+    session.pty.send_line("echo pxh-ok-$((1+1))")?;
+    session.expect_output("pxh-ok-2")?;
+    session.exit()?;
 
-    // Backslash continuation - send as separate lines
-    session.send_line("echo 'line1' \\")?;
-    thread::sleep(Duration::from_millis(50));
-    session.send_line("'line2' \\")?;
-    thread::sleep(Duration::from_millis(50));
-    session.send_line("'line3'")?;
-    session.exp_string("line1 line2 line3")?;
-
-    // Simple heredoc (inline for easier testing)
-    session.send_line("cat << 'ENDMARKER'\nheredoc content\nENDMARKER")?;
-    session.exp_string("heredoc content")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    // The multiline command should be recorded - exact format may vary by shell
-    assert!(
-        commands.iter().any(|c| c.contains("line1") && c.contains("line2") && c.contains("line3")),
-        "Should record multiline echo command. Commands: {:?}",
-        commands
-    );
-
+    let recorded = commands(&helper)?;
+    assert_eq!(recorded.iter().filter(|c| c.as_str() == SEED).count(), 1, "{recorded:?}");
     Ok(())
 }
-
-// ============================================================================
-// BACKGROUND PROCESSES - Test & operator
-// ============================================================================
-
-#[test]
-fn test_bash_background_commands() -> Result<()> {
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Background command
-    session.send_line("sleep 0.1 &")?;
-    thread::sleep(Duration::from_millis(200));
-
-    // Another command while background runs
-    session.send_line("echo 'foreground'")?;
-    session.exp_string("foreground")?;
-
-    // Wait for background to complete
-    session.send_line("wait")?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    // Background command should be recorded
-    assert!(
-        commands.iter().any(|c| c.contains("sleep") && c.contains("&")),
-        "Should record background command. Commands: {:?}",
-        commands
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("foreground")),
-        "Should record foreground command while background runs"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_zsh_background_commands() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Background command
-    session.send_line("sleep 0.1 &")?;
-    thread::sleep(Duration::from_millis(200));
-
-    // Another command while background runs
-    session.send_line("echo 'foreground'")?;
-    session.exp_string("foreground")?;
-
-    // Wait for background to complete
-    session.send_line("wait")?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    // Background command should be recorded
-    assert!(
-        commands.iter().any(|c| c.contains("sleep") && c.contains("&")),
-        "Should record background command. Commands: {:?}",
-        commands
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("foreground")),
-        "Should record foreground command while background runs"
-    );
-
-    Ok(())
-}
-
-// ============================================================================
-// SUBSHELLS - Test ( ) syntax
-// Note: bash-preexec has known limitations with subshells
-// ============================================================================
-
-#[test]
-fn test_bash_subshell_commands() -> Result<()> {
-    // NOTE: bash-preexec has documented limitations with subshells.
-    // Commands run inside ( ) are NOT captured - this is a known limitation.
-    // However, command substitution $(...) within an outer command IS captured.
-    // This test documents the current behavior.
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Parenthesized subshell - NOT captured by bash-preexec (known limitation)
-    session.send_line("(cd /tmp && pwd)")?;
-    session.exp_string("/tmp")?;
-
-    // Command substitution - the outer command IS captured
-    session.send_line("echo \"today is $(date +%Y)\"")?;
-    session.exp_regex(r"today is \d{4}")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    // Parenthesized subshells (cd /tmp && pwd) are NOT captured - known bash-preexec limitation
-    // But command substitution in echo is captured
-    assert!(
-        commands.iter().any(|c| c.contains("today is $(date")),
-        "Should record command substitution. Commands: {:?}",
-        commands
-    );
-
-    // Document the limitation: parenthesized subshells are not captured
-    assert!(
-        !commands.iter().any(|c| c.contains("(cd /tmp")),
-        "KNOWN LIMITATION: Parenthesized subshells are not captured by bash-preexec"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_zsh_subshell_commands() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Subshell command
-    session.send_line("(cd /tmp && pwd)")?;
-    session.exp_string("/tmp")?;
-
-    // Command substitution
-    session.send_line("echo \"today is $(date +%Y)\"")?;
-    session.exp_regex(r"today is \d{4}")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    // Zsh should capture subshell commands
-    assert!(
-        commands.iter().any(|c| c.contains("cd /tmp") || c.contains("(cd")),
-        "Should record subshell command. Commands: {:?}",
-        commands
-    );
-
-    Ok(())
-}
-
-// ============================================================================
-// SPECIAL CHARACTERS - Test quoting and escaping
-// ============================================================================
-
-#[test]
-fn test_bash_special_characters() -> Result<()> {
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Single quotes
-    session.send_line("echo 'single quoted $VAR'")?;
-    session.exp_string("single quoted $VAR")?;
-
-    // Double quotes with variable
-    session.send_line("VAR=test; echo \"double quoted $VAR\"")?;
-    session.exp_string("double quoted test")?;
-
-    // Escaped characters
-    session.send_line("echo \"quotes: \\\"nested\\\"\"")?;
-    session.exp_string("quotes: \"nested\"")?;
-
-    // Special shell characters
-    session.send_line("echo 'asterisk * and question ?'")?;
-    session.exp_string("asterisk * and question ?")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("single quoted")),
-        "Should record single-quoted command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("double quoted")),
-        "Should record double-quoted command"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_zsh_special_characters() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Single quotes
-    session.send_line("echo 'single quoted $VAR'")?;
-    session.exp_string("single quoted $VAR")?;
-
-    // Double quotes with variable
-    session.send_line("VAR=test; echo \"double quoted $VAR\"")?;
-    session.exp_string("double quoted test")?;
-
-    // Escaped characters
-    session.send_line("echo \"quotes: \\\"nested\\\"\"")?;
-    session.exp_string("quotes: \"nested\"")?;
-
-    // Special shell characters
-    session.send_line("echo 'asterisk * and question ?'")?;
-    session.exp_string("asterisk * and question ?")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("single quoted")),
-        "Should record single-quoted command"
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("double quoted")),
-        "Should record double-quoted command"
-    );
-
-    Ok(())
-}
-
-// ============================================================================
-// CONTROL STRUCTURES - Test loops and conditionals
-// ============================================================================
-
-#[test]
-fn test_bash_control_structures() -> Result<()> {
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // For loop (single line)
-    session.send_line("for i in 1 2 3; do echo $i; done")?;
-    session.exp_string("1")?;
-    session.exp_string("2")?;
-    session.exp_string("3")?;
-
-    // If statement (single line)
-    session.send_line("if true; then echo 'condition met'; fi")?;
-    session.exp_string("condition met")?;
-
-    // While loop (single line)
-    session.send_line("x=0; while [ $x -lt 2 ]; do echo $x; x=$((x+1)); done")?;
-    session.exp_string("0")?;
-    session.exp_string("1")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("for") && c.contains("do") && c.contains("done")),
-        "Should record for loop. Commands: {:?}",
-        commands
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("if") && c.contains("then") && c.contains("fi")),
-        "Should record if statement. Commands: {:?}",
-        commands
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_zsh_control_structures() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // For loop (single line)
-    session.send_line("for i in 1 2 3; do echo $i; done")?;
-    session.exp_string("1")?;
-    session.exp_string("2")?;
-    session.exp_string("3")?;
-
-    // If statement (single line)
-    session.send_line("if true; then echo 'condition met'; fi")?;
-    session.exp_string("condition met")?;
-
-    // While loop (single line)
-    session.send_line("x=0; while [ $x -lt 2 ]; do echo $x; x=$((x+1)); done")?;
-    session.exp_string("0")?;
-    session.exp_string("1")?;
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let commands = get_commands(&helper)?;
-
-    assert!(
-        commands.iter().any(|c| c.contains("for") && c.contains("do") && c.contains("done")),
-        "Should record for loop. Commands: {:?}",
-        commands
-    );
-    assert!(
-        commands.iter().any(|c| c.contains("if") && c.contains("then") && c.contains("fi")),
-        "Should record if statement. Commands: {:?}",
-        commands
-    );
-
-    Ok(())
-}
-
-// ============================================================================
-// TIMING AND DURATION - Verify command timing is recorded
-// ============================================================================
-
-#[test]
-fn test_bash_command_timing() -> Result<()> {
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Bash, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run a command that takes measurable time
-    session.send_line("sleep 0.5")?;
-    thread::sleep(Duration::from_millis(600));
-
-    // Run a quick command
-    session.send_line("true")?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let output = helper.command_with_args(&["export"]).output()?;
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    // Find the sleep command and verify it has timing
-    let sleep_cmd = invocations.iter().find(|inv| inv.command.to_string().contains("sleep"));
-
-    assert!(sleep_cmd.is_some(), "Should have recorded sleep command");
-
-    // Verify start timestamp exists
-    assert!(
-        sleep_cmd.unwrap().start_unix_timestamp.is_some(),
-        "Sleep command should have start timestamp"
-    );
-
-    Ok(())
-}
-
-#[test]
-fn test_zsh_command_timing() -> Result<()> {
-    if !Shell::Zsh.is_available() {
-        eprintln!("Skipping zsh test: zsh not found in PATH");
-        return Ok(());
-    }
-
-    let helper = PxhTestHelper::new();
-    let mut session = setup_shell_session(Shell::Zsh, &helper)?;
-
-    thread::sleep(Duration::from_millis(1000));
-
-    // Run a command that takes measurable time
-    session.send_line("sleep 0.5")?;
-    thread::sleep(Duration::from_millis(600));
-
-    // Run a quick command
-    session.send_line("true")?;
-    thread::sleep(Duration::from_millis(100));
-
-    session.send_line("exit")?;
-    session.exp_eof()?;
-
-    let output = helper.command_with_args(&["export"]).output()?;
-    let invocations: Vec<pxh::Invocation> = serde_json::from_slice(&output.stdout)?;
-
-    // Find the sleep command and verify it has timing
-    let sleep_cmd = invocations.iter().find(|inv| inv.command.to_string().contains("sleep"));
-
-    assert!(sleep_cmd.is_some(), "Should have recorded sleep command");
-
-    // Verify start timestamp exists
-    assert!(
-        sleep_cmd.unwrap().start_unix_timestamp.is_some(),
-        "Sleep command should have start timestamp"
-    );
-
-    Ok(())
-}
+for_each_shell!(ctrl_r_ctrl_c_leaves_line_untouched);
