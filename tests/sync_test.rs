@@ -1301,6 +1301,42 @@ fn test_directory_sync_handles_pre_migration_db() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_directory_sync_skips_bad_peer_and_still_publishes() -> Result<()> {
+    // A foreign or corrupt .db in the shared directory is warned about and
+    // skipped; the good peers still merge and our own file is still published.
+    let temp_dir = TempDir::new()?;
+    let sync_dir = temp_dir.path().join("sync_dir");
+    std::fs::create_dir(&sync_dir)?;
+    insert_test_command(&sync_dir.join("peer.db"), "echo from_peer", None)?;
+    std::fs::write(sync_dir.join("junk.db"), "definitely not a database")?;
+
+    let local_db = temp_dir.path().join("local.db");
+    insert_test_command(&local_db, "echo local", None)?;
+
+    let output = pxh_command()
+        .args([
+            "--db",
+            local_db.to_str().unwrap(),
+            "sync",
+            "--no-secret-filter",
+            sync_dir.to_str().unwrap(),
+        ])
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "a bad peer must not fail the sync: {stderr}");
+    assert!(stderr.contains("junk.db"), "the skipped file should be named: {stderr}");
+    assert_eq!(count_commands(&local_db)?, 2, "the good peer should still be merged");
+
+    let published: Vec<_> = std::fs::read_dir(&sync_dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.ends_with(".db") && n != "peer.db" && n != "junk.db")
+        .collect();
+    assert_eq!(published.len(), 1, "our own database should still be published: {published:?}");
+    Ok(())
+}
+
 // =============================================================================
 // Incremental directory-sync (machine_id watermark) tests
 // =============================================================================

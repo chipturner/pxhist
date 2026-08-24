@@ -1578,12 +1578,17 @@ impl SyncCommand {
                     if conn.path().is_some_and(|own| is_same_file(Path::new(own), &path)) {
                         continue;
                     }
-                    Self::sync_from_directory_source(
+                    // One unreadable or foreign .db must not stop the merge of
+                    // the others or the publish of our own file below.
+                    if let Err(e) = Self::sync_from_directory_source(
                         &mut conn,
-                        path,
+                        path.clone(),
                         secret_filter.as_ref(),
                         &mut seen_machine_ids,
-                    )?;
+                    ) {
+                        println!(" failed");
+                        eprintln!("Warning: skipping {}: {e}", path.display());
+                    }
                 }
             }
         }
