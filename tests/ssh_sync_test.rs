@@ -49,6 +49,52 @@ fn test_ssh_sync_command_help() {
     }
 }
 
+/// The commonest first-run failure: pxh is not installed on the remote. ssh
+/// relays the shell's error and exits 127 without ever reading stdin, so the
+/// client's database write hits a closed pipe.
+#[test]
+fn test_remote_without_pxh_fails_with_its_exit_status_not_sigpipe() -> Result<()> {
+    for mode in [None, Some("--send-only"), Some("--receive-only")] {
+        let helper = PxhTestHelper::new();
+        // Enough history that the snapshot cannot fit in the pipe buffer.
+        helper.command_with_args(&["stats"]).output()?; // creates the db
+        {
+            let conn = rusqlite::Connection::open(helper.db_path())?;
+            let tx = conn.unchecked_transaction()?;
+            for i in 0..4000 {
+                tx.execute(
+                    "INSERT INTO command_history (session_id, full_command, shellname,
+                                                  start_unix_timestamp)
+                     VALUES (1, CAST(? AS blob), 'bash', ?)",
+                    rusqlite::params![format!("echo {i} {}", "x".repeat(1000)), 1_700_000_000 + i],
+                )?;
+            }
+            tx.commit()?;
+        }
+        let script = helper.home_dir().join("fake-ssh");
+        fs::write(&script, "#!/bin/sh\necho 'sh: pxh: command not found' >&2\nexit 127\n")?;
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))?;
+        let script = script.display().to_string();
+
+        let mut args = vec!["sync", "--ssh-cmd", &script, "--remote", "somehost"];
+        args.extend(mode);
+        let output = helper.command_with_args(&args).output()?;
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{mode:?}: must exit normally, not die of SIGPIPE: {:?}\n{stderr}",
+            output.status
+        );
+        assert!(stderr.contains("Remote sync failed"), "{mode:?}: {stderr}");
+        assert!(
+            stderr.contains("127"),
+            "{mode:?}: remote exit status should be reported: {stderr}"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 fn test_ssh_failure_is_surfaced_for_each_mode() -> Result<()> {
     for mode in [None, Some("--send-only"), Some("--receive-only")] {

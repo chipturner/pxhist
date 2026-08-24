@@ -1203,6 +1203,17 @@ fn sync_secret_filter(
 
 /// True when both paths refer to the same file (by device + inode), so
 /// symlinked or hard-linked aliases of the same database are caught too.
+/// Writes to a peer that has already exited must come back as EPIPE errors,
+/// not kill the process. `main` resets SIGPIPE to SIG_DFL so `pxh show | head`
+/// exits quietly; for remote sync that default would end the run with exit 141
+/// and no message when the remote pxh is missing or too old.
+fn ignore_sigpipe() {
+    // SAFETY: changes a signal disposition only; installs no handler.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+    }
+}
+
 fn is_same_file(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
     match (fs::metadata(a), fs::metadata(b)) {
@@ -1591,6 +1602,8 @@ impl SyncCommand {
     }
 
     fn handle_remote_sync(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+        ignore_sigpipe();
+
         // Determine sync mode
         let mode = if self.send_only {
             "send"
@@ -1635,7 +1648,7 @@ impl SyncCommand {
         };
 
         // Handle stdin/stdout directly or through SSH child process
-        let (mut stdin_writer, mut stdout_reader) = if self.stdin_stdout {
+        let (stdin_writer, mut stdout_reader) = if self.stdin_stdout {
             // Use actual stdin/stdout
             (
                 Box::new(std::io::stdout()) as Box<dyn Write>,
@@ -1652,44 +1665,54 @@ impl SyncCommand {
             }
         };
 
-        // Send mode to server
-        stdin_writer.write_all(mode.as_bytes())?;
-        stdin_writer.write_all(b"\n")?;
-        stdin_writer.flush()?;
+        let exchange = self.exchange(mode, stdin_writer, &mut stdout_reader, conn);
 
-        // Execute the appropriate sync operations
-        match mode {
-            "send" => {
-                self.send_database(&mut stdin_writer, conn)?;
-                drop(stdin_writer);
-            }
-            "receive" => {
-                // For receive-only, we need to close stdin
-                drop(stdin_writer);
-                self.receive_database(&mut stdout_reader, conn)?;
-            }
-            "bidirectional" => {
-                self.send_database(&mut stdin_writer, conn)?;
-                // Close stdin to signal we're done sending
-                drop(stdin_writer);
-                self.receive_database(&mut stdout_reader, conn)?;
-            }
-            _ => unreachable!(),
-        }
-
-        // Wait for child process if using SSH
+        // The remote's exit status is the better diagnostic: a remote that
+        // exits before reading (pxh missing, too old for --server) surfaces
+        // above only as EPIPE or a short read.
         if let Some(mut child) = child {
             let status = child.wait()?;
             if !status.success() {
-                return Err(Box::from("Remote sync failed"));
+                return Err(
+                    format!("Remote sync failed: remote command exited with {status}").into()
+                );
             }
         }
+        exchange?;
 
         if !self.stdin_stdout {
             println!("Sync completed successfully");
         }
 
         Ok(())
+    }
+
+    /// Client side of the sync protocol. Takes the writer by value so the
+    /// remote's stdin is closed as soon as we have sent everything -- on
+    /// success and on error alike, so the caller can always `wait()`.
+    fn exchange(
+        &self,
+        mode: &str,
+        mut writer: Box<dyn Write>,
+        reader: &mut Box<dyn Read>,
+        conn: &mut Connection,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        writer.write_all(mode.as_bytes())?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        match mode {
+            "send" => self.send_database(&mut writer, conn),
+            "receive" => {
+                drop(writer);
+                self.receive_database(reader, conn)
+            }
+            "bidirectional" => {
+                self.send_database(&mut writer, conn)?;
+                drop(writer);
+                self.receive_database(reader, conn)
+            }
+            _ => unreachable!(),
+        }
     }
 
     /// Sync from one source DB during a directory-mode merge. Reads the source's
@@ -2235,6 +2258,8 @@ impl ScrubCommand {
             .remote_db
             .as_ref()
             .map_or_else(pxh::helpers::default_remote_db_expr, |p| p.display().to_string());
+
+        ignore_sigpipe();
 
         // Parse SSH command
         let (ssh_cmd, ssh_args) = pxh::helpers::parse_ssh_command(&self.ssh_cmd);
