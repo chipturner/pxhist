@@ -2700,8 +2700,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             pxh::with_write_retry(&mut conn, Duration::from_secs(1), |tx| invocation.insert(tx))?;
         }
         Commands::Doctor(cmd) => {
-            let conn = make_conn().ok();
-            cmd.go(conn, &args.db)?;
+            cmd.go(&args.db)?;
         }
     }
     Ok(())

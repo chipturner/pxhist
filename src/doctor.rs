@@ -1,4 +1,7 @@
-use std::path::PathBuf;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use clap::Parser;
 use rusqlite::Connection;
@@ -62,11 +65,9 @@ impl CheckResult {
 use pxh::CURRENT_SCHEMA_VERSION;
 
 impl DoctorCommand {
-    pub fn go(
-        &self,
-        conn: Option<Connection>,
-        db_path: &Option<PathBuf>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn go(&self, db_path: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+        let conn = db_path.as_deref().and_then(Self::open_for_inspection);
+
         // Only migrate when --fix is set; a diagnostic command should not mutate state
         if self.fix
             && let Some(c) = &conn
@@ -100,6 +101,21 @@ impl DoctorCommand {
         }
 
         Ok(())
+    }
+
+    /// Open the database exactly as it sits on disk: no directory creation,
+    /// no chmod, no schema migration. The regular connection path repairs
+    /// all of those silently, which would leave doctor nothing to report and
+    /// `--fix` nothing to do. Returns None for a missing or non-SQLite file.
+    fn open_for_inspection(path: &Path) -> Option<Connection> {
+        if !path.exists() {
+            return None;
+        }
+        let conn = Connection::open(path).ok()?;
+        conn.busy_timeout(Duration::from_secs(5)).ok()?;
+        // A non-SQLite file opens fine and only fails on the first read.
+        conn.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0)).ok()?;
+        Some(conn)
     }
 
     // ── Checks ──────────────────────────────────────────────────────────
@@ -690,6 +706,7 @@ impl DoctorCommand {
                 && let Some(c) = conn
             {
                 self.apply_fix("Run schema migrations", || {
+                    pxh::initialize_base_schema(c)?;
                     pxh::run_schema_migrations(c)?;
                     Ok(())
                 })?;
