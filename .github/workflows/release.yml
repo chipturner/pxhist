@@ -24,6 +24,10 @@ jobs:
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
 
+    # Interactive tests drive real bash and zsh and fail (not skip) if absent.
+    - name: Ensure zsh is available
+      run: which zsh || (sudo apt-get update && sudo apt-get install -y zsh)
+
     - name: Run tests
       run: cargo nextest run --locked
 

@@ -1283,6 +1283,11 @@ pub mod test_utils {
             // For bash to properly load rc files in a minimal environment
             cmd.env("BASH_ENV", self.home_dir.join(".bashrc"));
 
+            // Ubuntu's /etc/zsh/zshrc runs compinit for every interactive
+            // shell unless this is set; on hosts with an insecure fpath
+            // directory (GitHub runners) compinit prompts and hangs the pty.
+            cmd.env("skip_global_compinit", "1");
+
             cmd
         }
     }

@@ -433,6 +433,24 @@ const TUI_READY: &str = "Enter Run";
 const SEED: &str = "echo pxh-ran-$((6*7))";
 const SEED_OUTPUT: &str = "pxh-ran-42";
 
+/// Debian-family `/etc/zsh/zshrc` runs `compinit` for every interactive
+/// shell on Ubuntu hosts (GitHub runners included). When `compaudit` flags
+/// an insecure `fpath` directory there, compinit stops to ask "[y] or abort
+/// [n]?" and the session never reaches its prompt. The helper must opt out
+/// via the documented `skip_global_compinit` knob.
+#[test]
+fn zsh_session_skips_global_compinit() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let mut session = ShellSession::spawn(&helper, Shell::Zsh)?;
+    let transcript =
+        session.run("echo skip=$skip_global_compinit compinit=${+functions[compinit]}")?;
+    assert!(
+        transcript.contains("skip=1 compinit=0"),
+        "global compinit should be skipped: {transcript}"
+    );
+    session.exit()
+}
+
 fn open_recall(session: &mut ShellSession) -> Result<()> {
     session.pty.send(CTRL_R)?;
     session.pty.flush()?;
