@@ -1232,7 +1232,8 @@ fn test_since_filter_removes_null_timestamps() -> Result<()> {
 
 #[test]
 fn test_directory_sync_handles_pre_migration_db() -> Result<()> {
-    // Bug 5: ATTACHed databases without machine_id column should be migrated
+    // A peer without the machine_id column is merged as-is; sync must never
+    // migrate or otherwise write to another machine's published file.
     let temp_dir = TempDir::new()?;
     let sync_dir = temp_dir.path().join("sync_dir");
     std::fs::create_dir(&sync_dir)?;
@@ -1264,6 +1265,8 @@ fn test_directory_sync_handles_pre_migration_db() -> Result<()> {
         )?;
     }
 
+    let peer_bytes_before = std::fs::read(&old_db)?;
+
     let output_db = temp_dir.path().join("output.db");
     insert_test_command(&output_db, "echo existing", None)?;
 
@@ -1293,6 +1296,7 @@ fn test_directory_sync_handles_pre_migration_db() -> Result<()> {
         )
         .map(|n| n > 0)?;
     assert!(has_old, "command from pre-migration DB should be merged");
+    assert_eq!(std::fs::read(&old_db)?, peer_bytes_before, "peer file must not be modified");
 
     Ok(())
 }

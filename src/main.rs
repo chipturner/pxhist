@@ -1704,9 +1704,7 @@ impl SyncCommand {
         secret_filter: Option<&regex::bytes::RegexSet>,
         seen_machine_ids: &mut std::collections::HashMap<u64, PathBuf>,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Quick read-only peek at the source for its machine_id. Open read-only
-        // so we don't touch the file before the merge function runs its own
-        // schema setup with a regular connection.
+        // Quick read-only peek at the source for its machine_id.
         let mut source_machine_id = {
             let other = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
             other.as_ref().and_then(pxh::read_local_machine_id)

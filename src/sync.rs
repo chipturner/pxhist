@@ -60,25 +60,43 @@ fn watermark_key(machine_id: u64) -> String {
 /// `id <= watermark`). The unsealed-row update always scans the whole source
 /// since seal info may sit at any id, watermark or not.
 ///
-/// The source file is schema-migrated in place before ATTACHing, so older
-/// databases (e.g. pre-machine_id) don't fail on missing columns.
+/// The source is attached read-only and never written to: peers in a shared
+/// directory may belong to other machines, be on read-only media, or not be
+/// pxh databases at all. Older schemas (pre-`machine_id`) are read as-is.
 pub fn merge_database_from_file(
     conn: &mut Connection,
     path: &Path,
     secret_filter: Option<&RegexSet>,
     watermark: Option<i64>,
 ) -> Result<MergeStats, Box<dyn std::error::Error>> {
-    {
-        let other = Connection::open(path)?;
-        crate::initialize_base_schema(&other)?;
-        crate::run_schema_migrations(&other)?;
-    }
-
-    use std::os::unix::ffi::OsStrExt;
-    conn.execute("ATTACH DATABASE ? AS other", (path.as_os_str().as_bytes(),))?;
+    conn.execute("ATTACH DATABASE ? AS other", [read_only_uri(path)])?;
     let result = merge_attached(conn, secret_filter, watermark);
     conn.execute("DETACH DATABASE other", ())?;
     result
+}
+
+/// `file:` URI that opens `path` read-only. Bytes outside the URI-safe set
+/// are percent-encoded so arbitrary (even non-UTF8) paths round-trip.
+fn read_only_uri(path: &Path) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let mut uri = String::from("file:");
+    for &b in path.as_os_str().as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                uri.push(b as char)
+            }
+            _ => uri.push_str(&format!("%{b:02X}")),
+        }
+    }
+    uri.push_str("?mode=ro");
+    uri
+}
+
+/// Column names of `other.command_history`; empty when the table is absent.
+fn source_columns(conn: &Connection) -> rusqlite::Result<Vec<String>> {
+    conn.prepare("PRAGMA other.table_info(command_history)")?
+        .query_map((), |row| row.get::<_, String>(1))?
+        .collect()
 }
 
 /// Merge `other.command_history` (already ATTACHed) into main.
@@ -96,6 +114,13 @@ fn merge_attached(
     secret_filter: Option<&RegexSet>,
     watermark: Option<i64>,
 ) -> Result<MergeStats, Box<dyn std::error::Error>> {
+    let columns = source_columns(conn)?;
+    if columns.is_empty() {
+        return Err("not a pxh database (no command_history table)".into());
+    }
+    // Sources written before schema v1 have no machine_id column.
+    let machine_id = if columns.iter().any(|c| c == "machine_id") { "machine_id" } else { "NULL" };
+
     // -1 sentinel matches all rows (id is AUTOINCREMENT, so always >= 1).
     let lo = watermark.unwrap_or(-1);
 
@@ -138,14 +163,14 @@ fn merge_attached(
                 Option<i64>,
             );
             let rows: Vec<SourceRow> = conn
-                .prepare(
+                .prepare(&format!(
                     r#"
 SELECT session_id, full_command, shellname, hostname, username,
-       working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
+       working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, {machine_id}
 FROM other.command_history
 WHERE id > ? AND id <= ?
-"#,
-                )?
+"#
+                ))?
                 .query_map((cursor, hi), |row| {
                     Ok((
                         row.get(0)?,
@@ -189,16 +214,18 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             // No filtering, bulk-copy the chunk in SQL.
             added += crate::with_write_retry(conn, WRITE_RETRY_BUDGET, |tx| {
                 tx.execute(
-                    r#"
+                    &format!(
+                        r#"
 INSERT OR IGNORE INTO main.command_history (
     session_id, full_command, shellname, hostname, username,
     working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
 )
 SELECT session_id, full_command, shellname, hostname, username,
-    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
+    working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, {machine_id}
 FROM other.command_history
 WHERE id > ? AND id <= ?
-"#,
+"#
+                    ),
                     (cursor, hi),
                 )
             })?;
@@ -398,6 +425,81 @@ mod tests {
 
         let stats = merge_database_from_file(&mut target, &source_path, None, Some(100)).unwrap();
         assert_eq!(stats, MergeStats { considered: 0, added: 0, filtered: 0, new_max_id: Some(1) });
+    }
+
+    /// A source with the pre-v1 schema (no machine_id column, user_version 0),
+    /// as an older pxh would publish it.
+    fn old_schema_source(path: &Path, cmd: &str) {
+        let conn = Connection::open(path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE command_history (
+                id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL,
+                full_command BLOB NOT NULL, shellname TEXT NOT NULL,
+                hostname BLOB, username BLOB, working_directory BLOB,
+                exit_status INTEGER, start_unix_timestamp INTEGER, end_unix_timestamp INTEGER);
+             CREATE TABLE settings (key TEXT PRIMARY KEY, value BLOB);",
+        )
+        .unwrap();
+        insert_row(&conn, cmd, 1000, Some(0));
+    }
+
+    #[test]
+    fn test_merge_never_writes_to_the_source() {
+        // Peers in a shared directory belong to other machines: merging must
+        // not migrate, stamp, or otherwise touch them -- even old-schema ones.
+        let (_dir, mut target, source_path, source) = merge_fixture();
+        drop(source);
+        std::fs::remove_file(&source_path).unwrap();
+        old_schema_source(&source_path, "from-old-peer");
+        let before = std::fs::read(&source_path).unwrap();
+
+        let stats = merge_database_from_file(&mut target, &source_path, None, None).unwrap();
+        assert_eq!(stats.added, 1);
+        assert_eq!(count(&target), 1);
+        assert_eq!(std::fs::read(&source_path).unwrap(), before, "source bytes changed");
+        let version: i32 = Connection::open(&source_path)
+            .unwrap()
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 0, "source must not be migrated");
+    }
+
+    #[test]
+    fn test_merge_reads_a_read_only_source() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, mut target, source_path, source) = merge_fixture();
+        insert_row(&source, "cmd", 1000, Some(0));
+        drop(source);
+        std::fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o444)).unwrap();
+
+        let stats = merge_database_from_file(&mut target, &source_path, None, None).unwrap();
+        assert_eq!(stats.added, 1);
+    }
+
+    #[test]
+    fn test_merge_rejects_a_non_pxh_database_untouched() {
+        let (_dir, mut target, source_path, source) = merge_fixture();
+        drop(source);
+        std::fs::remove_file(&source_path).unwrap();
+        Connection::open(&source_path)
+            .unwrap()
+            .execute_batch("CREATE TABLE notes(body TEXT); INSERT INTO notes VALUES('x');")
+            .unwrap();
+        let before = std::fs::read(&source_path).unwrap();
+
+        let err = merge_database_from_file(&mut target, &source_path, None, None).unwrap_err();
+        assert!(err.to_string().contains("not a pxh database"), "{err}");
+        assert_eq!(count(&target), 0);
+        assert_eq!(std::fs::read(&source_path).unwrap(), before, "foreign file was modified");
+        // The failed attach must not leave `other` attached.
+        merge_database_from_file(&mut target, &source_path, None, None).unwrap_err();
+    }
+
+    #[test]
+    fn test_read_only_uri_percent_encodes_unsafe_bytes() {
+        use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+        let path = Path::new(OsStr::from_bytes(b"/tmp/a b?#%\xff.db"));
+        assert_eq!(read_only_uri(path), "file:/tmp/a%20b%3F%23%25%FF.db?mode=ro");
     }
 
     #[test]
