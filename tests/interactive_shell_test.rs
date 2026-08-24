@@ -36,6 +36,26 @@ impl Shell {
         }
     }
 
+    /// The Ctrl-R widget needs `READLINE_LINE` (bash >= 4.0). Stock macOS
+    /// ships bash 3.2, where the binding is deliberately not installed, so
+    /// the round-trip tests cannot pass there; fail up front with a pointer
+    /// instead of timing out waiting for the selected command to run.
+    fn assert_supported_version(self) {
+        if !matches!(self, Shell::Bash) {
+            return;
+        }
+        let out = std::process::Command::new("bash")
+            .args(["-c", "echo ${BASH_VERSINFO[0]}"])
+            .output()
+            .expect("run bash");
+        let major: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or(0);
+        assert!(
+            major >= 4,
+            "bash >= 4 is required for interactive tests (found major version {major}); \
+             on macOS: brew install bash"
+        );
+    }
+
     /// rc prelude that pins the prompt so tests can synchronise on it.
     ///
     /// rexpect forks the pty with echo off, and GNU readline skips redisplay
@@ -66,6 +86,7 @@ impl ShellSession {
             "{} is required for interactive tests but was not found in PATH",
             shell.name()
         );
+        shell.assert_supported_version();
         fs::write(helper.home_dir().join(shell.rc_file()), shell.rc_prelude())?;
         let install = helper.command_with_args(&["install", shell.name()]).output()?;
         assert!(

@@ -76,11 +76,16 @@ _pxh_init() {
 
     # Bind Ctrl-R to pxh recall via macro chain: # PXH_CTRL_R_BINDING
     # \C-x1 runs recall, \C-x2 checks if we should execute, # PXH_CTRL_R_BINDING
-    # \C-x3 is dynamically bound to accept-line or no-op # PXH_CTRL_R_BINDING
-    bind -x '"\C-x1": _pxh_recall' # PXH_CTRL_R_BINDING
-    bind -x '"\C-x2": _pxh_check_run' # PXH_CTRL_R_BINDING
-    bind '"\C-x3": ""' # PXH_CTRL_R_BINDING
-    bind '"\C-r": "\C-x1\C-x2\C-x3"' # PXH_CTRL_R_BINDING
+    # \C-x3 is dynamically bound to accept-line or no-op. # PXH_CTRL_R_BINDING
+    # READLINE_LINE needs bash >= 4 (stock macOS bash is 3.2); without it # PXH_CTRL_R_BINDING
+    # the widget would open recall and then discard the selection, so # PXH_CTRL_R_BINDING
+    # leave readline's own reverse-search in place on older shells. # PXH_CTRL_R_BINDING
+    if (( BASH_VERSINFO[0] >= 4 )); then # PXH_CTRL_R_BINDING
+        bind -x '"\C-x1": _pxh_recall' # PXH_CTRL_R_BINDING
+        bind -x '"\C-x2": _pxh_check_run' # PXH_CTRL_R_BINDING
+        bind '"\C-x3": ""' # PXH_CTRL_R_BINDING
+        bind '"\C-r": "\C-x1\C-x2\C-x3"' # PXH_CTRL_R_BINDING
+    fi # PXH_CTRL_R_BINDING
 }
 
 _pxh_init

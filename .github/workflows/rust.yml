@@ -51,6 +51,14 @@ jobs:
       if: runner.os == 'Linux'
       run: which zsh || (sudo apt-get update && sudo apt-get install -y zsh)
 
+    # Stock macOS bash is 3.2, which lacks READLINE_LINE; the Ctrl-R tests
+    # need bash >= 4. Homebrew's bin precedes /bin on the runner PATH.
+    - name: Ensure bash >= 4 is available
+      if: runner.os == 'macOS'
+      run: |
+        brew list bash >/dev/null 2>&1 || brew install bash
+        bash --version | head -1
+
     - name: Check formatting
       run: cargo fmt --check
 
