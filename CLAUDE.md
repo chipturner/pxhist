@@ -32,6 +32,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates. Runs every connection (idempotent via `IF NOT EXISTS`); also sets up per-connection in-memory `memdb` tables. Schema migrations are version-tracked via `PRAGMA user_version` in `run_schema_migrations()` in `lib.rs`.
 - **`build.rs`**: Generates secret-detection patterns (used by Scan/Scrub) at build time from `src/vendor/rules-stable.yml` (vendored from the secrets-patterns-db submodule; the vendored copy is git-tracked, so CI never checks submodules out), filtered by a curated `CRITICAL_PATTERN_NAMES` allowlist. `src/secrets_patterns.rs` is just an `include!` of the generated code -- edit `build.rs`, not it. Refresh vendored files with `just vendor-update` (requires `git submodule update --init --recursive`).
 - **`src/doctor.rs`**: `pxh doctor` diagnostics and auto-fix (`--fix`) for installation/config issues
+- **`src/config.rs`**: TOML config (`~/.config/pxh/config.toml`), strict (`deny_unknown_fields`); `DEFAULT_CONFIG` embeds the repo-root `config.toml` template; `config_status()` is the tri-state doctor uses
 - **`src/ui.rs`**: diagnostic vocabulary (`warn`/`error`/`hint`, `count`); stdout is data, stderr goes through here
 - **`src/shell_configs/`**: Shell integration scripts for bash (`pxh.bash`) and zsh (`pxh.zsh`) using preexec hooks
 - **`src/recall/`**: Interactive TUI history search module
@@ -39,7 +40,6 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
   - `command.rs`: RecallCommand struct and FilterMode enum
   - `engine.rs`: SearchEngine with nucleo fuzzy matching, score-based ranking, HistoryEntry struct
   - `tui.rs`: Terminal UI using crossterm (drawing, key handling, vim/emacs modes)
-  - `config.rs`: TOML configuration loading from `~/.config/pxh/config.toml`
 
 ### Command Structure
 All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`. Key commands:
@@ -173,4 +173,4 @@ pxh supports a TOML configuration file at `~/.config/pxh/config.toml`:
 - **`[recall.preview]`** section:
   - `show_directory`, `show_timestamp`, `show_exit_status`, `show_duration`, `show_hostname`: booleans to control preview pane fields
 
-The config is loaded via `Config::load()` in `src/recall/config.rs` with sensible defaults if the file doesn't exist.
+The config is loaded via `Config::load()` in `src/config.rs` with sensible defaults if the file doesn't exist. Unknown keys are rejected (the file is ignored with a warning until fixed); the commented template at the repo root must stay equal to `Config::default()` (unit test `template_parses_to_defaults`).

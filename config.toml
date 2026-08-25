@@ -1,0 +1,36 @@
+# pxh configuration -- ~/.config/pxh/config.toml
+#
+# Every setting is optional and shown here at its default. Uncomment a line
+# to change it. Unknown keys are an error: `pxh doctor` reports them and pxh
+# falls back to defaults until the file is fixed.
+
+# Identity used to attribute history during sync. `hostname` and `machine_id`
+# are written for you by `pxh install` / `pxh config` and appear below once
+# set; leave them alone unless you know why. They have no default value, so
+# there is nothing to uncomment for them here.
+[host]
+# aliases = []
+
+[shell]
+# Keep the shell's own Ctrl-R instead of binding `pxh recall`.
+# disable_ctrl_r = false
+
+[history]
+# Regexes for commands that are not recorded. Set to [] to record everything.
+# ignore_patterns = ["^ls$", "^cd( .)?$", "^pwd$", "^exit$", "^clear$", "^fg$", "^bg$", "^jobs$", "^history$", "^true$", "^false$"]
+
+[recall]
+# Key bindings in the recall TUI: "emacs" or "vim".
+# keymap = "emacs"
+# Show the preview pane with the selected command's details.
+# show_preview = true
+# Maximum number of rows loaded into the fuzzy matcher.
+# result_limit = 5000
+
+[recall.preview]
+# Which fields the preview pane shows.
+# show_directory = true
+# show_timestamp = true
+# show_exit_status = true
+# show_hostname = false
+# show_duration = true

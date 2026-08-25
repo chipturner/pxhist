@@ -18,9 +18,9 @@ use crossterm::event::{
 };
 
 use super::command::{FilterMode, HostFilter};
-use super::config::{KeymapMode, PreviewConfig, RecallConfig};
 use super::engine::{HistoryEntry, SearchEngine, format_relative_time};
 use super::query::RecallQuery;
+use crate::config::{KeymapMode, PreviewConfig, RecallConfig};
 
 const SCROLL_MARGIN: usize = 5;
 
@@ -1860,7 +1860,7 @@ mod tests {
 
     #[test]
     fn test_vim_keymap_mode_transitions() {
-        use super::super::config::KeymapMode;
+        use crate::config::KeymapMode;
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::initialize_base_schema(&conn).unwrap();
         crate::run_schema_migrations(&conn).unwrap();

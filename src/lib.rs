@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
+pub mod config;
 pub mod recall;
 pub mod secrets_patterns;
 pub mod sync;
@@ -99,7 +100,7 @@ fn resolve_through_symlinks(path: &Path) -> PathBuf {
 }
 
 /// Resolve hostname: config > DB setting (legacy "original_hostname") > live hostname.
-pub fn resolve_hostname(config: &recall::config::Config, conn: &Connection) -> BString {
+pub fn resolve_hostname(config: &config::Config, conn: &Connection) -> BString {
     if let Some(ref h) = config.host.hostname {
         return BString::from(h.as_bytes());
     }
@@ -108,7 +109,7 @@ pub fn resolve_hostname(config: &recall::config::Config, conn: &Connection) -> B
 
 /// Build the set of hostnames that count as "this host" for recall filtering.
 /// Returns {current_hostname} ∪ {aliases}, deduped.
-pub fn effective_host_set(config: &recall::config::Config) -> Vec<BString> {
+pub fn effective_host_set(config: &config::Config) -> Vec<BString> {
     let current = get_hostname();
     let mut hosts = vec![current];
     for alias in &config.host.aliases {
@@ -127,11 +128,11 @@ pub fn effective_host_set(config: &recall::config::Config) -> Vec<BString> {
 /// - If config hostname doesn't match live hostname, move old to aliases and update.
 /// - If config lacks machine_id, generate one.
 pub fn migrate_host_settings(conn: &Connection) {
-    if recall::config::Config::has_parse_error() {
+    if config::Config::has_parse_error() {
         log::warn!("config.toml has parse errors; skipping host-settings migration");
         return;
     }
-    let config = recall::config::Config::load();
+    let config = config::Config::load();
     let mut updates: Vec<(&str, toml_edit::Item)> = Vec::new();
     let live_hostname = get_hostname();
 
@@ -169,7 +170,7 @@ pub fn migrate_host_settings(conn: &Connection) {
     }
 
     if !updates.is_empty()
-        && let Err(e) = recall::config::Config::update_default_config(&updates)
+        && let Err(e) = config::Config::update_default_config(&updates)
     {
         log::warn!("Failed to migrate host settings to config: {e}");
         return;
@@ -183,7 +184,7 @@ pub fn migrate_host_settings(conn: &Connection) {
     // Mirror machine_id into the DB so sync can identify this database by its
     // machine identity (independent of file path). Re-load config to pick up
     // any value we just wrote above.
-    if let Some(machine_id) = recall::config::Config::load().host.machine_id {
+    if let Some(machine_id) = config::Config::load().host.machine_id {
         let bs = BString::from(machine_id.to_string());
         let _ = set_setting(conn, "local_machine_id", &bs);
     }
@@ -1329,7 +1330,7 @@ mod tests {
     fn test_resolve_hostname_from_config() {
         let conn = test_connection();
 
-        let mut config = recall::config::Config::default();
+        let mut config = config::Config::default();
         config.host.hostname = Some("from-config".to_string());
         set_setting(&conn, "original_hostname", &BString::from("from-db")).unwrap();
 
@@ -1341,7 +1342,7 @@ mod tests {
     fn test_resolve_hostname_from_db() {
         let conn = test_connection();
 
-        let config = recall::config::Config::default();
+        let config = config::Config::default();
         set_setting(&conn, "original_hostname", &BString::from("from-db")).unwrap();
 
         let result = resolve_hostname(&config, &conn);
@@ -1352,21 +1353,21 @@ mod tests {
     fn test_resolve_hostname_live_fallback() {
         let conn = test_connection();
 
-        let config = recall::config::Config::default();
+        let config = config::Config::default();
         let result = resolve_hostname(&config, &conn);
         assert_eq!(result, get_hostname());
     }
 
     #[test]
     fn test_effective_host_set_no_aliases() {
-        let config = recall::config::Config::default();
+        let config = config::Config::default();
         let hosts = effective_host_set(&config);
         assert_eq!(hosts, vec![get_hostname()]);
     }
 
     #[test]
     fn test_effective_host_set_with_aliases() {
-        let mut config = recall::config::Config::default();
+        let mut config = config::Config::default();
         config.host.aliases = vec!["old-host".to_string(), "other-host".to_string()];
         let hosts = effective_host_set(&config);
         assert_eq!(hosts.len(), 3);
@@ -1377,7 +1378,7 @@ mod tests {
 
     #[test]
     fn test_effective_host_set_dedup() {
-        let mut config = recall::config::Config::default();
+        let mut config = config::Config::default();
         let current = get_hostname().to_string();
         config.host.aliases = vec![current, "other".to_string()];
         let hosts = effective_host_set(&config);

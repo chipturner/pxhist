@@ -467,7 +467,7 @@ impl ImportCommand {
 impl ShellConfigCommand {
     fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
         // Check if ctrl-r should be disabled (via flag or config)
-        let config = pxh::recall::Config::load();
+        let config = pxh::config::Config::load();
         let disable_ctrl_r = self.no_ctrl_r || config.shell.disable_ctrl_r;
 
         let contents = match self.shellname.as_str() {
@@ -850,7 +850,7 @@ pub struct ScanMatch {
 
 impl ConfigCommand {
     fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
-        use pxh::recall::config::Config;
+        use pxh::config::Config;
 
         let path = Config::default_config_path().ok_or("could not determine config path")?;
 
@@ -864,9 +864,8 @@ impl ConfigCommand {
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let default_config = Config::default();
-            let toml_str = toml::to_string_pretty(&default_config)?;
-            fs::write(&path, toml_str)?;
+            fs::write(&path, pxh::config::DEFAULT_CONFIG)?;
+            println!("created {}", path.display());
         }
 
         // Open in $EDITOR
@@ -1549,7 +1548,7 @@ impl SyncCommand {
             fs::create_dir(dirname)?;
         }
         let mut output_path = dirname.clone();
-        let config = pxh::recall::config::Config::load();
+        let config = pxh::config::Config::load();
         let hostname = pxh::resolve_hostname(&config, &conn);
         output_path.push(format!("{}.db", hostname.to_str_lossy()));
         // TODO: vacuum seems to want a plain text string path, unlike
@@ -2724,7 +2723,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Insert(cmd) => {
             // Load config before make_conn() since migrate_host_settings
             // (called during connection setup) may modify the config file
-            let config = pxh::recall::config::Config::load();
+            let config = pxh::config::Config::load();
             let mut conn = make_conn()?;
 
             // Check if command matches any ignore pattern

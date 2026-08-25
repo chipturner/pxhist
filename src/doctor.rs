@@ -358,7 +358,7 @@ impl DoctorCommand {
     fn check_config(&self) -> Vec<CheckResult> {
         let mut results = Vec::new();
 
-        let config = pxh::recall::config::Config::load();
+        let config = pxh::config::Config::load();
         let config_dir = pxh::pxh_config_dir();
 
         if let Some(dir) = &config_dir {

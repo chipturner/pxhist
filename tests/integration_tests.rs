@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use anyhow::Result;
 use assert_cmd::Command;
 use bstr::BString;
 use rand::RngExt;
@@ -2155,4 +2156,31 @@ fn export_import_preserves_non_utf8_command_bytes() {
     let back = export_json(&target);
     assert_eq!(back.len(), 1);
     assert_eq!(back[0].command.as_slice(), raw);
+}
+
+#[test]
+fn config_creates_the_commented_template_when_missing() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let out = helper.command_with_args(&["config", "--path"]).output()?;
+    let path = std::path::PathBuf::from(String::from_utf8(out.stdout)?.trim());
+    // PxhTestHelper seeds a config; remove it so the "missing" branch runs.
+    let _ = std::fs::remove_file(&path);
+
+    let out = helper
+        .command_with_args(&["config"])
+        .env("VISUAL", "true")
+        .env("EDITOR", "true")
+        .output()?;
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+
+    // The file is born from the commented template; the host identity the
+    // migration stamps in is the only thing added to it.
+    let written = std::fs::read_to_string(&path)?;
+    let without_identity: String = written
+        .lines()
+        .filter(|l| !l.starts_with("hostname = ") && !l.starts_with("machine_id = "))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    assert_eq!(without_identity, pxh::config::DEFAULT_CONFIG, "written config:\n{written}");
+    Ok(())
 }

@@ -1,12 +1,41 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
+/// Embedded default config template (repo root `config.toml`). Every key,
+/// commented out, at its default value. `pxh config` writes it when no
+/// config exists; `template_parses_to_defaults` keeps it honest.
+pub const DEFAULT_CONFIG: &str = include_str!("../config.toml");
+
+/// The strict answer to "what does pxh think of the config file?", for
+/// diagnostics. `Config::load()` collapses all three into a usable `Config`
+/// (falling back to defaults); doctor needs to tell them apart.
+#[derive(Debug)]
+pub enum ConfigStatus {
+    NotFound,
+    Valid(Box<Config>),
+    Invalid(String),
+}
+
+/// Strictly parse the config file at `path` -- the same parser `Config::load`
+/// uses, so doctor can never call "valid" a file that load would reject.
+pub fn config_status(path: &Path) -> ConfigStatus {
+    let content = match fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return ConfigStatus::NotFound,
+        Err(e) => return ConfigStatus::Invalid(format!("cannot read config: {e}")),
+    };
+    match toml::from_str(&content) {
+        Ok(cfg) => ConfigStatus::Valid(Box::new(cfg)),
+        Err(e) => ConfigStatus::Invalid(e.to_string()),
+    }
+}
+
 /// Configuration for history recording
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct HistoryConfig {
     /// Regex patterns for commands to ignore (not record).
     /// Set to [] to disable.
@@ -36,7 +65,8 @@ impl Default for HistoryConfig {
 }
 
 /// Main configuration struct
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub host: HostConfig,
@@ -49,8 +79,8 @@ pub struct Config {
 }
 
 /// Configuration for host identity
-#[derive(Debug, Deserialize, Serialize, Default)]
-#[serde(default)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct HostConfig {
     pub hostname: Option<String>,
     pub machine_id: Option<u64>,
@@ -58,16 +88,16 @@ pub struct HostConfig {
 }
 
 /// Configuration for shell integration
-#[derive(Debug, Deserialize, Serialize, Default)]
-#[serde(default)]
+#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
+#[serde(default, deny_unknown_fields)]
 pub struct ShellConfig {
     /// Disable Ctrl-R binding (keep shell's default behavior)
     pub disable_ctrl_r: bool,
 }
 
 /// Configuration for the recall TUI
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct RecallConfig {
     /// Keymap mode: "emacs" or "vim"
     pub keymap: String,
@@ -91,8 +121,8 @@ impl Default for RecallConfig {
 }
 
 /// Configuration for what to show in the preview pane
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PreviewConfig {
     pub show_directory: bool,
     pub show_timestamp: bool,
@@ -186,7 +216,9 @@ impl Config {
         path: &PathBuf,
         updates: &[(&str, toml_edit::Item)],
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let content = fs::read_to_string(path).unwrap_or_default();
+        // A config file born here starts from the commented template, so the
+        // file the user later opens explains every key it does not set.
+        let content = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
         let mut doc: DocumentMut = content.parse()?;
 
         for (dotted_key, item) in updates {
@@ -416,5 +448,62 @@ keymap = "vim"
 
         config.keymap = "unknown".to_string();
         assert_eq!(config.initial_keymap_mode(), KeymapMode::Emacs);
+    }
+
+    #[test]
+    fn unknown_keys_are_rejected() {
+        let err = toml::from_str::<Config>("[recall]\nkeymap = \"vim\"\nshow_previeww = true\n")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field `show_previeww`"), "{err}");
+    }
+
+    #[test]
+    fn unknown_sections_are_rejected() {
+        let err = toml::from_str::<Config>("[recal]\nkeymap = \"vim\"\n").unwrap_err().to_string();
+        assert!(err.contains("unknown field `recal`"), "{err}");
+    }
+
+    /// The template ships every key, commented, at its default value. If a
+    /// default changes and the template does not, this fails.
+    #[test]
+    fn template_parses_to_defaults() {
+        let parsed: Config = toml::from_str(DEFAULT_CONFIG).expect("template is valid");
+        assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn template_uncommented_parses_to_defaults() {
+        // Strip exactly one leading `# ` from commented key lines so the
+        // documented values are exercised, not just the comments.
+        let uncommented: String = DEFAULT_CONFIG
+            .lines()
+            .map(|l| l.strip_prefix("# ").filter(|r| r.contains(" = ")).unwrap_or(l))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let parsed: Config = toml::from_str(&uncommented).expect("uncommented template is valid");
+        assert_eq!(parsed, Config::default());
+    }
+
+    #[test]
+    fn config_status_distinguishes_missing_invalid_and_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        assert!(matches!(config_status(&path), ConfigStatus::NotFound));
+
+        std::fs::write(&path, "[recall]\nkeymap = ").unwrap();
+        assert!(matches!(config_status(&path), ConfigStatus::Invalid(_)));
+
+        std::fs::write(&path, "[recall]\nnope = 1\n").unwrap();
+        match config_status(&path) {
+            ConfigStatus::Invalid(msg) => assert!(msg.contains("unknown field `nope`"), "{msg}"),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+
+        std::fs::write(&path, "[recall]\nkeymap = \"vim\"\n").unwrap();
+        match config_status(&path) {
+            ConfigStatus::Valid(cfg) => assert_eq!(cfg.recall.keymap, "vim"),
+            other => panic!("expected Valid, got {other:?}"),
+        }
     }
 }

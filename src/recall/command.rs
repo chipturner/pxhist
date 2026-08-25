@@ -6,10 +6,10 @@ use std::{env, path::PathBuf};
 use clap::Parser;
 use rusqlite::Connection;
 
-use super::config::Config;
 use super::engine::{SearchEngine, format_relative_time};
 use super::query::RecallQuery;
 use super::tui::RecallTui;
+use crate::config::Config;
 #[derive(Parser, Debug)]
 pub struct RecallCommand {
     #[clap(long, help = "Search only in current directory", conflicts_with = "global")]
