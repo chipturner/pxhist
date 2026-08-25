@@ -2590,7 +2590,30 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
     regexes.iter().all(|regex| regex.is_match(row.command.as_slice()))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Every cause, joined: `open history database /x: unable to open database file`.
+///
+/// `{e:#}` alone is not enough. anyhow's chain-aware Display lives on
+/// `anyhow::Error`, and `?` drops it the moment the error is boxed into the
+/// `Box<dyn Error>` every pxh signature returns -- the box keeps `source()` but
+/// its Display is the outermost context alone. So walk `source()` ourselves.
+fn error_chain(e: &dyn std::error::Error) -> String {
+    let mut parts = vec![format!("{e:#}")];
+    let mut source = e.source();
+    while let Some(cause) = source {
+        parts.push(cause.to_string());
+        source = cause.source();
+    }
+    parts.join(": ")
+}
+
+fn main() {
+    if let Err(e) = run() {
+        pxh::ui::error(&error_chain(&*e));
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Reset SIGPIPE to default OS behavior so piping to head/grep exits cleanly
     // instead of producing a BrokenPipe error.
     unsafe {
@@ -2746,6 +2769,27 @@ mod tests {
         pxh::initialize_base_schema(&conn).unwrap();
         pxh::run_schema_migrations(&conn).unwrap();
         conn
+    }
+
+    #[test]
+    fn error_chain_joins_every_cause() {
+        #[derive(Debug)]
+        struct Layer(&'static str, Option<Box<Layer>>);
+        impl std::fmt::Display for Layer {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.0)
+            }
+        }
+        impl std::error::Error for Layer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.1.as_deref().map(|l| l as &(dyn std::error::Error + 'static))
+            }
+        }
+
+        let deep =
+            Layer("open history database /x", Some(Box::new(Layer("permission denied", None))));
+        assert_eq!(error_chain(&deep), "open history database /x: permission denied");
+        assert_eq!(error_chain(&Layer("just this", None)), "just this");
     }
 
     #[test]

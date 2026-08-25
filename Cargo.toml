@@ -35,6 +35,10 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+# Already linked in via clap; gives NO_COLOR / CLICOLOR / TERM=dumb handling and
+# strips ANSI when stderr is not a terminal.
+anstream = "1"
+anyhow = "1"
 bstr = { version = "1.13.1", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive", "env", "wrap_help"] }
 log = "0.4.33"

@@ -32,6 +32,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - **`src/base_schema.sql`**: SQLite schema with `command_history` and `settings` tables, plus unique constraint preventing duplicates. Runs every connection (idempotent via `IF NOT EXISTS`); also sets up per-connection in-memory `memdb` tables. Schema migrations are version-tracked via `PRAGMA user_version` in `run_schema_migrations()` in `lib.rs`.
 - **`build.rs`**: Generates secret-detection patterns (used by Scan/Scrub) at build time from `src/vendor/rules-stable.yml` (vendored from the secrets-patterns-db submodule; the vendored copy is git-tracked, so CI never checks submodules out), filtered by a curated `CRITICAL_PATTERN_NAMES` allowlist. `src/secrets_patterns.rs` is just an `include!` of the generated code -- edit `build.rs`, not it. Refresh vendored files with `just vendor-update` (requires `git submodule update --init --recursive`).
 - **`src/doctor.rs`**: `pxh doctor` diagnostics and auto-fix (`--fix`) for installation/config issues
+- **`src/ui.rs`**: diagnostic vocabulary (`warn`/`error`/`hint`, `count`); stdout is data, stderr goes through here
 - **`src/shell_configs/`**: Shell integration scripts for bash (`pxh.bash`) and zsh (`pxh.zsh`) using preexec hooks
 - **`src/recall/`**: Interactive TUI history search module
   - `mod.rs`: Module exports
@@ -73,7 +74,8 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **Imports**: Group by Std, External, Crate
 - **Formatting**: `cargo fmt` (via `just fmt`), config in rustfmt.toml
 - **Naming**: Command structs end with "Command" (e.g., `ShowCommand`)
-- **Error Handling**: Use `Result<T, Box<dyn std::error::Error>>` with `?` operator
+- **Error Handling**: Library and command code return `Result<T, Box<dyn std::error::Error>>` with `?`. Add context where a bare OS error would be unhelpful with `anyhow::Context::with_context(...)` (it converts through `?`). `main()` returns `()` and prints the whole `source()` chain via `pxh::ui::error(&error_chain(&*e))` -- never `-> Result` on `main()`.
+- **Diagnostics**: everything printed for a human that is not data goes through `pxh::ui::{warn, error, hint}` (lowercase `warning:` / `error:` / `hint:` on stderr; `anstream` honors `NO_COLOR`). Counted nouns use `ui::count(n, "secret")`, never `secret(s)`.
 - **Types**:
   - `BString` from bstr for binary strings/non-UTF8 data
   - `uzers` crate for user information (security-updated fork of `users`)

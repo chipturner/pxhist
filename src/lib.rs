@@ -30,6 +30,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub mod recall;
 pub mod secrets_patterns;
 pub mod sync;
+pub mod ui;
 
 pub fn get_setting(
     conn: &Connection,
@@ -320,7 +321,9 @@ fn sqlite_connection_inner(
         let resolved = resolve_through_symlinks(parent);
         std::fs::create_dir_all(resolved)?;
     }
-    let conn = Connection::open(path)?;
+    let conn = anyhow::Context::with_context(Connection::open(path), || {
+        format!("open history database {}", path.display())
+    })?;
 
     // Ensure the database file is only readable by the owner
     use std::os::unix::fs::PermissionsExt;
