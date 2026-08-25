@@ -2738,8 +2738,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Insert(cmd) => {
             // Load config before make_conn() since migrate_host_settings
-            // (called during connection setup) may modify the config file
-            let config = pxh::config::Config::load();
+            // (called during connection setup) may modify the config file.
+            // Quietly: this runs from the prompt hook on every command, so a
+            // config pxh cannot parse is reported by doctor, not here.
+            let config = pxh::config::Config::load_quiet();
             let mut conn = make_conn()?;
 
             // Check if command matches any ignore pattern

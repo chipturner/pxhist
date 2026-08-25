@@ -58,3 +58,56 @@ fn warnings_use_the_lowercase_word() -> Result<()> {
     assert!(!stderr.contains("Warning:"), "{stderr:?}");
     Ok(())
 }
+
+/// The shell hooks run `pxh insert` on every prompt with stderr attached to
+/// the terminal, so a config pxh refuses must not turn every prompt into a
+/// warning. The hook path uses the config it can parse and says nothing.
+#[test]
+fn insert_stays_quiet_when_the_config_cannot_be_parsed() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    std::fs::write(
+        helper.home_dir().join(".pxh").join("config.toml"),
+        "[recall]\nkeymapp = \"vim\"\n",
+    )?;
+
+    let output = helper
+        .command_with_args(&[
+            "insert",
+            "--shellname",
+            "bash",
+            "--hostname",
+            "h",
+            "--username",
+            "u",
+            "--session-id",
+            "1",
+            "echo hi",
+        ])
+        .output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "insert failed: {stderr:?}");
+    assert!(stderr.is_empty(), "the hook path must stay silent: {stderr:?}");
+    Ok(())
+}
+
+/// A command a human typed still gets told, once, on one line: the toml
+/// snippet belongs in `pxh doctor`, not in the middle of a session.
+#[test]
+fn a_typed_command_warns_once_about_an_unparseable_config() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    std::fs::write(
+        helper.home_dir().join(".pxh").join("config.toml"),
+        "[recall]\nkeymapp = \"vim\"\n",
+    )?;
+
+    let output = helper.command_with_args(&["shell-config", "bash"]).output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(output.status.success(), "shell-config failed: {stderr:?}");
+    let lines: Vec<&str> = stderr.lines().collect();
+    assert_eq!(lines.len(), 1, "one warning, not a toml snippet: {stderr:?}");
+    assert!(lines[0].starts_with("warning: failed to parse"), "{stderr:?}");
+    assert!(lines[0].contains("keymapp"), "{stderr:?}");
+    Ok(())
+}

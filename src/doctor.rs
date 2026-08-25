@@ -375,12 +375,19 @@ impl DoctorCommand {
     fn check_config(&self) -> Vec<CheckResult> {
         let mut results = Vec::new();
 
-        let config = pxh::config::Config::load();
         let config_dir = pxh::pxh_config_dir();
+        // Parse once: `Config::load()` would warn on stderr about the very
+        // file the check below reports on, saying it twice.
+        let status =
+            config_dir.as_ref().map(|d| pxh::config::config_status(&d.join("config.toml")));
+        let config = match &status {
+            Some(pxh::config::ConfigStatus::Valid(c)) => (**c).clone(),
+            _ => pxh::config::Config::default(),
+        };
 
-        if let Some(dir) = &config_dir {
+        if let (Some(dir), Some(status)) = (&config_dir, &status) {
             let config_path = dir.join("config.toml");
-            match pxh::config::config_status(&config_path) {
+            match status {
                 pxh::config::ConfigStatus::Valid(_) => {
                     results.push(CheckResult::ok(format!(
                         "Config: {} (valid)",

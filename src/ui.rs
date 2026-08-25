@@ -4,7 +4,7 @@
 //! shell-config text, which are *data* -- goes through here, so a message's
 //! severity is a named thing rather than a prefix typed at the call site.
 //!
-//! Styling is always emitted by [`render`]; whether it survives is the sink's
+//! Styling is always emitted by `render`; whether it survives is the sink's
 //! decision. The sinks print through `anstream`, which strips ANSI when stderr
 //! is not a terminal and honors `NO_COLOR`, `CLICOLOR`, `CLICOLOR_FORCE`, and
 //! `TERM=dumb`. stdout is reserved for data and is never written from here.

@@ -34,7 +34,7 @@ pub fn config_status(path: &Path) -> ConfigStatus {
 }
 
 /// Configuration for history recording
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HistoryConfig {
     /// Regex patterns for commands to ignore (not record).
@@ -65,7 +65,7 @@ impl Default for HistoryConfig {
 }
 
 /// Main configuration struct
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
@@ -79,7 +79,7 @@ pub struct Config {
 }
 
 /// Configuration for host identity
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct HostConfig {
     pub hostname: Option<String>,
@@ -88,7 +88,7 @@ pub struct HostConfig {
 }
 
 /// Configuration for shell integration
-#[derive(Debug, PartialEq, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct ShellConfig {
     /// Disable Ctrl-R binding (keep shell's default behavior)
@@ -96,7 +96,7 @@ pub struct ShellConfig {
 }
 
 /// Configuration for the recall TUI
-#[derive(Debug, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RecallConfig {
     /// Keymap mode: "emacs" or "vim"
@@ -163,14 +163,22 @@ impl RecallConfig {
 }
 
 impl Config {
-    /// Load configuration from the default path.
+    /// Load configuration from the default path, warning about a file that
+    /// cannot be parsed.
     pub fn load() -> Self {
-        Self::load_from_default_path().unwrap_or_default()
+        Self::load_from_default_path(true).unwrap_or_default()
     }
 
-    fn load_from_default_path() -> Option<Self> {
+    /// Load configuration from the default path without printing anything.
+    /// The shell hooks run on every prompt with stderr on the terminal; a
+    /// config they cannot parse must not warn once per command.
+    pub fn load_quiet() -> Self {
+        Self::load_from_default_path(false).unwrap_or_default()
+    }
+
+    fn load_from_default_path(warn: bool) -> Option<Self> {
         let config_path = Self::default_config_path()?;
-        Self::load_from_path(&config_path)
+        Self::read_from_path(&config_path, warn)
     }
 
     /// Returns true if the config file exists but fails to parse.
@@ -189,15 +197,24 @@ impl Config {
         Some(crate::pxh_config_dir()?.join("config.toml"))
     }
 
-    pub fn load_from_path(path: &PathBuf) -> Option<Self> {
+    pub fn load_from_path(path: &Path) -> Option<Self> {
+        Self::read_from_path(path, true)
+    }
+
+    fn read_from_path(path: &Path, warn: bool) -> Option<Self> {
         let content = fs::read_to_string(path).ok()?;
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                crate::ui::warn(&format!(
-                    "failed to parse {}: {e}; using default configuration",
-                    path.display()
-                ));
+                if warn {
+                    // `e.message()` and not `{e}`: the full Display is a
+                    // multi-line snippet, which belongs in `pxh doctor`.
+                    crate::ui::warn(&format!(
+                        "failed to parse {}: {}; using defaults (see 'pxh doctor')",
+                        path.display(),
+                        e.message()
+                    ));
+                }
                 None
             }
         }

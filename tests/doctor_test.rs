@@ -227,7 +227,7 @@ fn doctor_reports_invalid_config_toml_as_failure() -> Result<()> {
     // single config file is in play.
     fs::write(helper.home_dir().join(".pxh/config.toml"), "[recall\nkeymap = \n")?;
     let (out, _) = doctor(&helper, BASH, &["--verbose"])?;
-    assert!(out.contains("invalid"), "{out}");
+    assert!(out.contains("(invalid)"), "{out}");
     Ok(())
 }
 
@@ -276,6 +276,15 @@ fn config_with_unknown_key_fails_doctor() -> Result<()> {
     let (out, ok) = doctor(&helper, BASH, &[])?;
     assert!(!ok, "doctor should fail on a config pxh would refuse:\n{out}");
     assert!(out.contains("unknown field `keymapp`"), "{out}");
+    assert!(out.contains("XX"), "the Config check should be marked as a failure: {out}");
+    // Once: the check reports the parse error, and nothing warns about it
+    // on stderr beforehand.
+    assert_eq!(
+        out.matches("unknown field `keymapp`").count(),
+        1,
+        "the config is reported twice: {out}"
+    );
+    assert!(!out.contains("warning: failed to parse"), "doctor warned as well as checked: {out}");
     Ok(())
 }
 
@@ -289,6 +298,12 @@ fn json_output_is_machine_readable() -> Result<()> {
     let check = &sections[0]["checks"][0];
     for key in ["label", "status", "message", "fix"] {
         assert!(check.get(key).is_some(), "check lacks {key}: {check}");
+    }
+    for section in sections {
+        for check in section["checks"].as_array().ok_or("checks missing")? {
+            let status = check["status"].as_str().ok_or("status is not a string")?;
+            assert!(matches!(status, "ok" | "warn" | "fail"), "unknown status: {check}");
+        }
     }
     Ok(())
 }
