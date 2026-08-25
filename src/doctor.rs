@@ -140,8 +140,9 @@ impl DoctorCommand {
         let mut results = Vec::new();
 
         results.push(CheckResult::ok(format!(
-            "pxh {} (SQLite {}, schema v{CURRENT_SCHEMA_VERSION})",
+            "pxh {} ({}, SQLite {}, schema v{CURRENT_SCHEMA_VERSION})",
             env!("CARGO_PKG_VERSION"),
+            env!("PXH_GIT_HASH"),
             rusqlite::version(),
         )));
 
@@ -570,7 +571,7 @@ impl DoctorCommand {
         println!("<details>");
         println!("<summary>pxh doctor report</summary>\n");
         println!("```");
-        println!("pxh version:     {}", env!("CARGO_PKG_VERSION"));
+        println!("pxh version:     {} ({})", env!("CARGO_PKG_VERSION"), env!("PXH_GIT_HASH"));
 
         let os_info = Self::get_os_info();
         println!("OS:              {os_info}");

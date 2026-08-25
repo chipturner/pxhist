@@ -73,8 +73,9 @@ fn version_string() -> &'static str {
     use std::sync::LazyLock;
     static VERSION: LazyLock<String> = LazyLock::new(|| {
         format!(
-            "{} (SQLite {}, schema v{})",
+            "{} ({}, SQLite {}, schema v{})",
             env!("CARGO_PKG_VERSION"),
+            env!("PXH_GIT_HASH"),
             rusqlite::version(),
             pxh::CURRENT_SCHEMA_VERSION
         )

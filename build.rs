@@ -65,7 +65,53 @@ fn escape_string(s: &str) -> String {
     result
 }
 
+/// `PXH_GIT_HASH`: short HEAD hash plus `-dirty` in a checkout; `vX.Y.Z`
+/// otherwise (a crates.io tarball ships no `.git`), so every build carries
+/// a distinguishable identifier.
+fn emit_build_id() {
+    use std::process::Command;
+    let git_hash = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let build_id = match git_hash {
+        Some(hash) => {
+            let dirty = Command::new("git")
+                .args(["diff", "--quiet", "HEAD"])
+                .status()
+                .map(|s| !s.success())
+                .unwrap_or(false);
+            if dirty { format!("{hash}-dirty") } else { hash }
+        }
+        None => format!("v{}", env::var("CARGO_PKG_VERSION").unwrap_or_default()),
+    };
+    println!("cargo:rustc-env=PXH_GIT_HASH={build_id}");
+
+    // In a linked worktree `.git` is a file pointing at the main repo's
+    // gitdir, so the real HEAD/index live elsewhere; ask git for the actual
+    // paths and fall back to the plain ones if git is unavailable.
+    for file in ["HEAD", "index"] {
+        let path = Command::new("git")
+            .args(["rev-parse", "--git-path", file])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!(".git/{file}"));
+        println!("cargo:rerun-if-changed={path}");
+    }
+}
+
 fn main() {
+    emit_build_id();
+
     let out_dir = env::var("OUT_DIR").unwrap();
     let dest_path = Path::new(&out_dir).join("secrets_patterns_generated.rs");
 

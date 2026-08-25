@@ -2184,3 +2184,18 @@ fn config_creates_the_commented_template_when_missing() -> Result<()> {
     assert_eq!(without_identity, pxh::config::DEFAULT_CONFIG, "written config:\n{written}");
     Ok(())
 }
+
+/// `--version` names the build: short git hash (+`-dirty`) in a checkout, or
+/// `vX.Y.Z` from a crates.io tarball. Bug reports from `cargo install --git`
+/// builds are useless without it.
+#[test]
+fn version_carries_a_build_id() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let out = helper.command_with_args(&["--version"]).output()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let re = regex::Regex::new(
+        r"^pxh \d+\.\d+\.\d+ \(([0-9a-f]{7,40}(-dirty)?|v\d+\.\d+\.\d+), SQLite [\d.]+, schema v\d+\)\n$",
+    )?;
+    assert!(re.is_match(&text), "{text:?}");
+    Ok(())
+}
