@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["CHUNK_SIZE","WRITE_RETRY_BUDGET"],"fn":["merge_attached","merge_database_from_file","set_sync_watermark","sync_watermark","watermark_key"],"struct":["MergeStats"]};
+window.SIDEBAR_ITEMS = {"constant":["CHUNK_SIZE","WRITE_RETRY_BUDGET"],"fn":["merge_attached","merge_database_from_file","read_only_uri","set_sync_watermark","source_columns","sync_watermark","watermark_key"],"struct":["MergeStats"]};
