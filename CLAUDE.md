@@ -52,7 +52,7 @@ All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`.
 - **Scan**: Detect potential secrets in command history using built-in patterns
 - **Scrub**: Remove sensitive commands from history (supports `--patterns-from-scan`, `--dir`, `--remote`)
 - **Maintenance**: ANALYZE and VACUUM operations, cleans up non-standard tables/indexes
-- **Doctor**: Diagnose and optionally fix (`--fix`) installation/config issues
+- **Doctor**: Diagnose and optionally fix (`--fix`) installation/config issues; `--json` for scripts, `--report` for bug reports; fixes are a `Fix` enum on `CheckResult`, never label matching
 - **Autosuggest**: Internal command backing the zsh-autosuggestions strategy in `pxh.zsh`
 
 ### Database Design

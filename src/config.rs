@@ -218,7 +218,11 @@ impl Config {
     ) -> Result<(), Box<dyn std::error::Error>> {
         // A config file born here starts from the commented template, so the
         // file the user later opens explains every key it does not set.
-        let content = fs::read_to_string(path).unwrap_or_else(|_| DEFAULT_CONFIG.to_string());
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => DEFAULT_CONFIG.to_string(),
+            Err(e) => return Err(e.into()),
+        };
         let mut doc: DocumentMut = content.parse()?;
 
         for (dotted_key, item) in updates {

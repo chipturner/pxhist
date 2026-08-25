@@ -399,6 +399,7 @@ Something not working? `pxh doctor` checks your installation end to end -- binar
 ```bash
 pxh doctor                # Diagnose common issues
 pxh doctor --fix          # Apply automatic fixes
+pxh doctor --json         # Machine-readable checks (for scripts)
 ```
 
 Filing a bug? `pxh doctor --report` generates a ready-to-paste markdown report of your setup (versions, shell integration state, database stats) for [GitHub issues](https://github.com/chipturner/pxhist/issues):

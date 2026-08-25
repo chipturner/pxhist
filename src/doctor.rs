@@ -16,48 +16,55 @@ pub struct DoctorCommand {
     pub verbose: bool,
     #[clap(short = 'y', long, help = "Skip confirmation prompts for --fix")]
     pub yes: bool,
+    #[clap(long, help = "Output all checks as JSON", conflicts_with_all = ["report", "fix"])]
+    pub json: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+/// Every repair doctor knows how to apply. A check that can be fixed names
+/// its variant; `run_fixes` matches on it. No string matching on labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Fix {
+    ChmodDb,
+    MigrateSchema,
+    MigrateHostSettings,
+    InstallShellHooks,
+    MergeLegacyDb,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Status {
     Ok,
     Warn,
     Fail,
 }
 
-#[derive(Debug, Clone)]
+/// Also the per-check shape of `doctor --json` -- extend rather than
+/// rename/remove fields.
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CheckResult {
     pub label: String,
     pub status: Status,
     pub message: Option<String>,
-    pub fixable: bool,
+    pub fix: Option<Fix>,
 }
 
 impl CheckResult {
     fn ok(label: impl Into<String>) -> Self {
-        Self { label: label.into(), status: Status::Ok, message: None, fixable: false }
+        Self { label: label.into(), status: Status::Ok, message: None, fix: None }
     }
 
     fn warn(label: impl Into<String>, msg: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            status: Status::Warn,
-            message: Some(msg.into()),
-            fixable: false,
-        }
+        Self { label: label.into(), status: Status::Warn, message: Some(msg.into()), fix: None }
     }
 
     fn fail(label: impl Into<String>, msg: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            status: Status::Fail,
-            message: Some(msg.into()),
-            fixable: false,
-        }
+        Self { label: label.into(), status: Status::Fail, message: Some(msg.into()), fix: None }
     }
 
-    fn with_fix(mut self) -> Self {
-        self.fixable = true;
+    fn with_fix(mut self, fix: Fix) -> Self {
+        self.fix = Some(fix);
         self
     }
 }
@@ -84,7 +91,16 @@ impl DoctorCommand {
             ("Secrets", self.check_secrets(&conn)),
         ];
 
-        if self.report {
+        if self.json {
+            let sections: Vec<serde_json::Value> = all_checks
+                .iter()
+                .map(|(name, checks)| serde_json::json!({ "name": name, "checks": checks }))
+                .collect();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&serde_json::json!({ "sections": sections }))?
+            );
+        } else if self.report {
             self.print_report(&all_checks, db_path, &conn);
         } else {
             self.print_human(&all_checks);
@@ -208,7 +224,7 @@ impl DoctorCommand {
                             format!("Permissions {mode:04o} (should be 0600)"),
                             "Database is readable by other users",
                         )
-                        .with_fix(),
+                        .with_fix(Fix::ChmodDb),
                     );
                 }
             }
@@ -226,7 +242,7 @@ impl DoctorCommand {
                         format!("Schema version {version} (expected {CURRENT_SCHEMA_VERSION})"),
                         "Run migrations to update",
                     )
-                    .with_fix(),
+                    .with_fix(Fix::MigrateSchema),
                 );
             }
 
@@ -318,7 +334,7 @@ impl DoctorCommand {
                             format!("~/{rc} does not contain pxh shell-config"),
                             format!("Run: pxh install {shell_name}"),
                         )
-                        .with_fix(),
+                        .with_fix(Fix::InstallShellHooks),
                     );
                 }
             } else {
@@ -363,24 +379,25 @@ impl DoctorCommand {
 
         if let Some(dir) = &config_dir {
             let config_path = dir.join("config.toml");
-            if config_path.exists() {
-                let contents = std::fs::read_to_string(&config_path).unwrap_or_default();
-                if contents.parse::<toml_edit::DocumentMut>().is_ok() {
+            match pxh::config::config_status(&config_path) {
+                pxh::config::ConfigStatus::Valid(_) => {
                     results.push(CheckResult::ok(format!(
-                        "Config: {} (valid TOML)",
+                        "Config: {} (valid)",
                         config_path.display()
                     )));
-                } else {
+                }
+                pxh::config::ConfigStatus::NotFound => {
+                    results.push(CheckResult::ok(format!(
+                        "Config: {} (not yet created -- defaults used)",
+                        config_path.display()
+                    )));
+                }
+                pxh::config::ConfigStatus::Invalid(err) => {
                     results.push(CheckResult::fail(
-                        format!("Config: {} (invalid TOML)", config_path.display()),
-                        "Edit or delete the config file to fix parse errors",
+                        format!("Config: {} (invalid)", config_path.display()),
+                        format!("{err}\nFix or delete the file; pxh ignores it and uses defaults until then"),
                     ));
                 }
-            } else {
-                results.push(CheckResult::ok(format!(
-                    "Config: {} (not yet created -- defaults used)",
-                    config_path.display()
-                )));
             }
         }
 
@@ -392,7 +409,7 @@ impl DoctorCommand {
                     "No machine_id in config",
                     "Will be generated on next install/config run",
                 )
-                .with_fix(),
+                .with_fix(Fix::MigrateHostSettings),
             );
         }
 
@@ -463,7 +480,7 @@ impl DoctorCommand {
                         xdg_rows,
                     ),
                 )
-                .with_fix(),
+                .with_fix(Fix::MergeLegacyDb),
             );
         }
 
@@ -515,7 +532,7 @@ impl DoctorCommand {
                         if let Some(ref msg) = check.message {
                             println!("      {msg}");
                         }
-                        if check.fixable && !self.fix {
+                        if check.fix.is_some() && !self.fix {
                             println!("      -> Run: pxh doctor --fix");
                         }
                     }
@@ -524,7 +541,7 @@ impl DoctorCommand {
                         if let Some(ref msg) = check.message {
                             println!("      {msg}");
                         }
-                        if check.fixable && !self.fix {
+                        if check.fix.is_some() && !self.fix {
                             println!("      -> Run: pxh doctor --fix");
                         }
                     }
@@ -670,7 +687,7 @@ impl DoctorCommand {
         let fixable: Vec<&CheckResult> = sections
             .iter()
             .flat_map(|(_, checks)| checks.iter())
-            .filter(|c| c.fixable && c.status != Status::Ok)
+            .filter(|c| c.fix.is_some() && c.status != Status::Ok)
             .collect();
 
         if fixable.is_empty() {
@@ -680,63 +697,60 @@ impl DoctorCommand {
         println!("\n--- Fixes ---");
 
         for check in &fixable {
-            let label = &check.label;
-
-            if label.contains("Permissions")
-                && label.contains("should be 0600")
-                && let Some(path) = db_path
-            {
-                let path = path.clone();
-                self.apply_fix("Fix database permissions to 0600", || {
-                    #[cfg(unix)]
-                    {
-                        use std::os::unix::fs::PermissionsExt;
-                        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            let Some(fix) = check.fix else { continue };
+            match fix {
+                Fix::ChmodDb => {
+                    if let Some(path) = db_path {
+                        let path = path.clone();
+                        self.apply_fix("Fix database permissions to 0600", || {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                std::fs::set_permissions(
+                                    &path,
+                                    std::fs::Permissions::from_mode(0o600),
+                                )?;
+                            }
+                            Ok(())
+                        })?;
                     }
-                    Ok(())
-                })?;
-            }
-
-            if label.contains("Schema version")
-                && label.contains("expected")
-                && let Some(c) = conn
-            {
-                self.apply_fix("Run schema migrations", || {
-                    pxh::initialize_base_schema(c)?;
-                    pxh::run_schema_migrations(c)?;
-                    Ok(())
-                })?;
-            }
-
-            if label.contains("machine_id")
-                && let Some(c) = conn
-            {
-                self.apply_fix("Generate machine_id and migrate host settings", || {
-                    pxh::migrate_host_settings(c);
-                    Ok(())
-                })?;
-            }
-
-            if label.contains("does not contain pxh shell-config") {
-                let shell = std::env::var("SHELL").unwrap_or_default();
-                let shell_name = std::path::Path::new(&shell)
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("bash")
-                    .to_string();
-                self.apply_fix_with_prompt(
-                    &format!("Install pxh shell hooks into ~/.{shell_name}rc"),
-                    || {
-                        let status = std::process::Command::new(std::env::current_exe()?)
-                            .args(["install", &shell_name])
-                            .status()?;
-                        if status.success() { Ok(()) } else { Err("pxh install failed".into()) }
-                    },
-                )?;
-            }
-
-            if label.contains("Both legacy and XDG databases exist") {
-                self.apply_fix_with_prompt(
+                }
+                Fix::MigrateSchema => {
+                    if let Some(c) = conn {
+                        self.apply_fix("Run schema migrations", || {
+                            pxh::initialize_base_schema(c)?;
+                            pxh::run_schema_migrations(c)?;
+                            Ok(())
+                        })?;
+                    }
+                }
+                Fix::MigrateHostSettings => {
+                    if let Some(c) = conn {
+                        self.apply_fix("Generate machine_id and migrate host settings", || {
+                            pxh::migrate_host_settings(c);
+                            Ok(())
+                        })?;
+                    }
+                }
+                Fix::InstallShellHooks => {
+                    let shell = std::env::var("SHELL").unwrap_or_default();
+                    let shell_name = std::path::Path::new(&shell)
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("bash")
+                        .to_string();
+                    self.apply_fix_with_prompt(
+                        &format!("Install pxh shell hooks into ~/.{shell_name}rc"),
+                        || {
+                            let status = std::process::Command::new(std::env::current_exe()?)
+                                .args(["install", &shell_name])
+                                .status()?;
+                            if status.success() { Ok(()) } else { Err("pxh install failed".into()) }
+                        },
+                    )?;
+                }
+                Fix::MergeLegacyDb => {
+                    self.apply_fix_with_prompt(
                     "Merge legacy ~/.pxh/pxh.db into XDG database and back up ~/.pxh",
                     || {
                         let home = home::home_dir().ok_or("Cannot determine home directory")?;
@@ -804,6 +818,7 @@ impl DoctorCommand {
                         Ok(())
                     },
                 )?;
+                }
             }
         }
 

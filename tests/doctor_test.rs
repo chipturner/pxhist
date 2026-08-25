@@ -227,7 +227,7 @@ fn doctor_reports_invalid_config_toml_as_failure() -> Result<()> {
     // single config file is in play.
     fs::write(helper.home_dir().join(".pxh/config.toml"), "[recall\nkeymap = \n")?;
     let (out, _) = doctor(&helper, BASH, &["--verbose"])?;
-    assert!(out.contains("invalid TOML"), "{out}");
+    assert!(out.contains("invalid"), "{out}");
     Ok(())
 }
 
@@ -265,5 +265,30 @@ fn doctor_fails_cleanly_on_unreadable_database() -> Result<()> {
     let (out, ok) = doctor(&helper, BASH, &["--verbose"])?;
     assert!(!ok, "a database that cannot be opened is a failure: {out}");
     assert!(out.contains("Could not open database"), "{out}");
+    Ok(())
+}
+
+#[test]
+fn config_with_unknown_key_fails_doctor() -> Result<()> {
+    let helper = seeded()?;
+    let config_path = helper.home_dir().join(".pxh").join("config.toml");
+    fs::write(&config_path, "[recall]\nkeymapp = \"vim\"\n")?;
+    let (out, ok) = doctor(&helper, BASH, &[])?;
+    assert!(!ok, "doctor should fail on a config pxh would refuse:\n{out}");
+    assert!(out.contains("unknown field `keymapp`"), "{out}");
+    Ok(())
+}
+
+#[test]
+fn json_output_is_machine_readable() -> Result<()> {
+    let helper = seeded()?;
+    let (out, _) = doctor(&helper, BASH, &["--json"])?;
+    let v: serde_json::Value = serde_json::from_str(&out).map_err(|e| format!("{e}: {out}"))?;
+    let sections = v["sections"].as_array().ok_or("sections missing")?;
+    assert!(sections.iter().any(|s| s["name"] == "Config"), "{v}");
+    let check = &sections[0]["checks"][0];
+    for key in ["label", "status", "message", "fix"] {
+        assert!(check.get(key).is_some(), "check lacks {key}: {check}");
+    }
     Ok(())
 }
