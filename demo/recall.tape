@@ -11,8 +11,6 @@ Set Padding 16
 Set WindowBar Colorful
 Set TypingSpeed 80ms
 
-Env PXH_DB_PATH "/tmp/pxh-demo/pxh.db"
-
 Sleep 500ms
 
 Type "pxh recall"

@@ -11,8 +11,6 @@ Set Padding 16
 Set WindowBar Colorful
 Set TypingSpeed 60ms
 
-Env PXH_DB_PATH "/tmp/pxh-demo/pxh.db"
-
 Sleep 500ms
 
 Type "pxh s ffmpeg"

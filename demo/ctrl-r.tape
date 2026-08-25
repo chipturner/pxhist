@@ -13,13 +13,10 @@ Set Padding 16
 Set WindowBar Colorful
 Set TypingSpeed 80ms
 
-Env HOME "/tmp/pxh-demo/home"
-Env PXH_DB_PATH "/tmp/pxh-demo/pxh.db"
-
 # vhs pins ZDOTDIR to its own config, so load the pxh integration
 # off-camera instead of relying on zsh sourcing our .zshrc.
 Hide
-Type "source /tmp/pxh-demo/home/.zshrc && cd ~ && clear"
+Type "source $HOME/.zshrc && cd ~ && clear"
 Enter
 Sleep 1s
 Show
