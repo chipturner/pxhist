@@ -20,8 +20,6 @@ exclude = [
     ".gitmodules",
     "CLAUDE.md",
     "contrib/",
-    "coverage-detailed.sh",
-    "coverage.sh",
     "demo/",
     "docs/",
     "justfile",

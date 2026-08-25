@@ -17,7 +17,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Check formatting without modifying (CI-style): `just fmt-check`
 - Lint: `cargo clippy -- -D warnings`
 - Upgrade dependencies: `just cargo-upgrade`
-- Coverage: `just coverage` or `just coverage-detailed`
+- Coverage: `just coverage` (summary) or `just coverage-html` (CI enforces an 80% line floor in coverage.yml)
 - Clean coverage data: `just coverage-clean`
 
 ## Workflow

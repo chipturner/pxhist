@@ -56,11 +56,14 @@ vendor-update:
 	cp secrets-patterns-db/db/rules-stable.yml src/vendor/rules-stable.yml
 	cp src/shell_configs/bash-preexec/bash-preexec.sh src/vendor/bash-preexec.sh
 
+# Coverage summary (nextest, so subprocess tests count via --include-ffi)
 coverage:
-	./coverage.sh
+	cargo llvm-cov nextest --all-features --workspace --include-ffi
 
-coverage-detailed:
-	./coverage-detailed.sh
+# Coverage with HTML report
+coverage-html:
+	cargo llvm-cov nextest --all-features --workspace --include-ffi --html
+	@echo "Report: target/llvm-cov/html/index.html"
 
 coverage-clean:
 	cargo llvm-cov clean --workspace
