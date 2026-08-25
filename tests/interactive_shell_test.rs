@@ -6,7 +6,7 @@
 //! the hooks run synchronously inside preexec/precmd, the prompt coming back
 //! proves the insert and seal for the previous command have both completed.
 
-use std::{fs, os::fd::AsRawFd};
+use std::{env, fs, os::fd::AsRawFd, os::unix::fs::PermissionsExt, path::Path};
 
 use pxh::{Invocation, test_utils::PxhTestHelper};
 use rexpect::session::{PtySession, spawn_command};
@@ -40,11 +40,12 @@ impl Shell {
     /// ships bash 3.2, where the binding is deliberately not installed, so
     /// the round-trip tests cannot pass there; fail up front with a pointer
     /// instead of timing out waiting for the selected command to run.
-    fn assert_supported_version(self) {
+    /// Checks `exe` itself, which must be the binary the pty will run.
+    fn assert_supported_version(self, exe: &Path) {
         if !matches!(self, Shell::Bash) {
             return;
         }
-        let out = std::process::Command::new("bash")
+        let out = std::process::Command::new(exe)
             .args(["-c", "echo ${BASH_VERSINFO[0]}"])
             .output()
             .expect("run bash");
@@ -80,13 +81,16 @@ impl ShellSession {
     /// Install pxh into a fresh rc file, spawn the shell, and wait for the
     /// first prompt. Panics (rather than silently passing) if the shell is
     /// missing -- CI images are expected to provide both.
+    ///
+    /// The shell is resolved on *this* process's PATH and spawned by absolute
+    /// path: `shell_command` rebuilds the child's PATH from `getconf PATH`,
+    /// which would otherwise pick stock `/bin/bash` 3.2 on macOS over the
+    /// Homebrew bash the version check just approved.
     fn spawn(helper: &PxhTestHelper, shell: Shell) -> Result<Self> {
-        assert!(
-            which::which(shell.name()).is_ok(),
-            "{} is required for interactive tests but was not found in PATH",
-            shell.name()
-        );
-        shell.assert_supported_version();
+        let exe = which::which(shell.name()).unwrap_or_else(|_| {
+            panic!("{} is required for interactive tests but was not found in PATH", shell.name())
+        });
+        shell.assert_supported_version(&exe);
         fs::write(helper.home_dir().join(shell.rc_file()), shell.rc_prelude())?;
         let install = helper.command_with_args(&["install", shell.name()]).output()?;
         assert!(
@@ -96,7 +100,7 @@ impl ShellSession {
             String::from_utf8_lossy(&install.stderr)
         );
 
-        let pty = spawn_command(helper.shell_command(shell.name()), Some(30_000))?;
+        let pty = spawn_command(helper.shell_command(&exe), Some(30_000))?;
         // rexpect ptys start 0x0; give the shell (and any TUI it spawns) a
         // real size.
         let master = pty.process().get_file_handle()?;
@@ -135,6 +139,29 @@ impl ShellSession {
         self.pty.exp_eof()?;
         Ok(())
     }
+}
+
+/// The version guard and the pty spawn must agree on *which* bash they
+/// mean. `shell_command` rebuilds PATH from `getconf PATH`, which on macOS
+/// omits Homebrew, so a bare `bash` there silently resolves to stock 3.2
+/// while the guard saw 5.x. Prove the spawned shell is the one found on the
+/// test's own PATH by putting a wrapper in front of it.
+#[test]
+fn spawns_the_bash_found_on_path() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let real = which::which("bash")?;
+    let bin = helper.home_dir().join("wrapper-bin");
+    fs::create_dir_all(&bin)?;
+    let wrapper = bin.join("bash");
+    fs::write(&wrapper, format!("#!/bin/sh\nPXH_TEST_WRAPPED=1 exec {} \"$@\"\n", real.display()))?;
+    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755))?;
+    // nextest runs each test in its own process, so this is private to us.
+    unsafe { env::set_var("PATH", format!("{}:{}", bin.display(), env::var("PATH")?)) };
+
+    let mut session = ShellSession::spawn(&helper, Shell::Bash)?;
+    let out = session.run("echo wrapped=$PXH_TEST_WRAPPED")?;
+    assert!(out.contains("wrapped=1"), "pty shell was not the bash on PATH:\n{out}");
+    session.exit()
 }
 
 fn export(helper: &PxhTestHelper) -> Result<Vec<Invocation>> {

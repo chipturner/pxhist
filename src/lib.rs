@@ -1128,6 +1128,7 @@ pub mod helpers {
 pub mod test_utils {
     use std::{
         env,
+        ffi::OsStr,
         path::{Path, PathBuf},
         process::Command,
     };
@@ -1262,8 +1263,14 @@ pub mod test_utils {
             cmd
         }
 
-        /// Create a shell command (bash/zsh) with proper environment for interactive testing
-        pub fn shell_command(&self, shell: &str) -> Command {
+        /// Create a shell command (bash/zsh) with proper environment for interactive testing.
+        ///
+        /// The child's PATH is rebuilt from `getconf PATH`, and a bare program
+        /// name is resolved against *that* PATH, not the caller's -- so pass an
+        /// absolute path when the shell you verified lives elsewhere (Homebrew
+        /// bash on macOS).
+        pub fn shell_command(&self, shell: impl AsRef<OsStr>) -> Command {
+            let shell = shell.as_ref();
             let mut cmd = Command::new(shell);
 
             // Force interactive mode - use login shell to ensure rc files are loaded
