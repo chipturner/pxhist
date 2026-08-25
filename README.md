@@ -1,5 +1,9 @@
 # pxh
 
+[![Rust](https://github.com/chipturner/pxhist/actions/workflows/rust.yml/badge.svg)](https://github.com/chipturner/pxhist/actions/workflows/rust.yml)
+[![Crates.io](https://img.shields.io/crates/v/pxh)](https://crates.io/crates/pxh)
+[![License: MIT](https://img.shields.io/crates/l/pxh)](LICENSE)
+
 Fast, local-first shell history search and sync for bash and zsh.
 
 Your shell history is one of the most useful things on your machine -- but it's
@@ -43,10 +47,16 @@ Great tools already exist in this space -- [atuin](https://github.com/atuinsh/at
 brew install chipturner/tap/pxh
 ```
 
-**Prebuilt binaries** (Linux x86_64/ARM64, macOS x86_64/ARM64):
+**Prebuilt binaries** (Linux x86_64/ARM64, macOS x86_64/ARM64). Linux builds are statically linked (musl):
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/chipturner/pxhist/main/install.sh | sh
+# Download the install script, review it, then run:
+curl -sSfL https://raw.githubusercontent.com/chipturner/pxhist/main/install.sh -o install.sh
+less install.sh
+sh install.sh
+
+# Or via cargo-binstall:
+cargo binstall pxh
 ```
 
 **From source:**

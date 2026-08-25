@@ -24,6 +24,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 ## Workflow
 - After tests pass, run `cargo clippy --all-targets -- -D warnings` to catch any warnings (CI lints tests too)
 - After validation and reaching a stopping point, run `cargo build --release` in the background
+- When changing user-visible behavior, update `CHANGELOG.md` (Unreleased) in the same commit; call out any `CURRENT_SCHEMA_VERSION` or sync-protocol (`-v2`) change explicitly.
 
 ## Architecture Overview
 
