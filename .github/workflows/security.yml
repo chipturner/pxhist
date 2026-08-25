@@ -22,8 +22,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-      with:
-        submodules: recursive
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -50,6 +48,4 @@ jobs:
     timeout-minutes: 15
     steps:
     - uses: actions/checkout@v5
-      with:
-        submodules: recursive
     - uses: EmbarkStudios/cargo-deny-action@v2

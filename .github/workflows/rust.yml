@@ -24,8 +24,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-      with:
-        submodules: recursive
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -78,8 +76,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-      with:
-        submodules: recursive
 
     - name: Build clean-machine image and run the install journey
       run: |
@@ -92,8 +88,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-      with:
-        submodules: recursive
 
     - name: Install MSRV Rust
       uses: dtolnay/rust-toolchain@master
@@ -127,8 +121,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v5
-      with:
-        submodules: recursive
 
     - uses: dtolnay/rust-toolchain@stable
 

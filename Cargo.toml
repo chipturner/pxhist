@@ -8,12 +8,27 @@ description = """
 pxh is a fast, cross-shell history mining tool with interactive fuzzy search,
 secret scanning, and bidirectional sync across machines. It indexes bash and
 zsh history in SQLite with rich metadata for powerful recall."""
-documentation = "https://github.com/chipturner/pxhist"
+documentation = "https://chipturner.github.io/pxhist/docs/pxh/"
 homepage = "https://github.com/chipturner/pxhist"
 repository = "https://github.com/chipturner/pxhist"
 keywords = ["shell", "history", "search", "bash", "zsh"]
 categories = ["command-line-utilities"]
 license = "MIT"
+exclude = [
+    ".claude/",
+    ".github/",
+    ".gitmodules",
+    "CLAUDE.md",
+    "contrib/",
+    "coverage-detailed.sh",
+    "coverage.sh",
+    "demo/",
+    "docs/",
+    "justfile",
+    "secrets-patterns-db/",
+    "src/shell_configs/bash-preexec/",
+    "tests/docker/",
+]
 
 [package.metadata.release]
 publish = false
