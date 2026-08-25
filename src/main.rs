@@ -371,7 +371,7 @@ struct ExportCommand {}
 #[derive(Parser, Debug)]
 struct MaintenanceCommand {
     #[clap(
-        help = "Path(s) to SQLite database files to maintain (if not specified, maintains the current database)"
+        help = "Paths to SQLite database files to maintain (if not specified, maintains the current database)"
     )]
     files: Vec<PathBuf>,
 }
@@ -982,7 +982,7 @@ impl ScanCommand {
             return Ok(());
         }
 
-        println!("Found {} potential secret(s):\n", matches.len());
+        println!("Found {}:\n", pxh::ui::count(matches.len(), "potential secret"));
         Self::display_matches(&matches, self.verbose);
 
         Ok(())
@@ -1010,7 +1010,7 @@ impl ScanCommand {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to read directory entry: {e}");
+                    pxh::ui::warn(&format!("failed to read directory entry: {e}"));
                     skipped_entries += 1;
                 }
             }
@@ -1036,7 +1036,7 @@ impl ScanCommand {
             ) {
                 Ok(c) => c,
                 Err(e) => {
-                    eprintln!("Warning: Failed to open {}: {e}", path.display());
+                    pxh::ui::warn(&format!("failed to open {}: {e}", path.display()));
                     skipped_files += 1;
                     continue;
                 }
@@ -1052,7 +1052,7 @@ impl ScanCommand {
                 .map(|n| n > 0)
                 .unwrap_or(false);
             if !is_pxh {
-                eprintln!("Warning: Skipping {} (not a pxh database)", path.display());
+                pxh::ui::warn(&format!("skipping {} (not a pxh database)", path.display()));
                 skipped_files += 1;
                 continue;
             }
@@ -1079,21 +1079,22 @@ impl ScanCommand {
             println!("No potential secrets found.");
         } else {
             println!(
-                "\nSummary: Found potential secrets in {} of {} database(s).",
-                files_with_matches, num_files
+                "\nSummary: Found potential secrets in {} of {}.",
+                files_with_matches,
+                pxh::ui::count(num_files, "database")
             );
         }
 
         // Report skipped files and return error if any were skipped
         let total_skipped = skipped_entries + skipped_files;
         if total_skipped > 0 {
-            eprintln!(
-                "WARNING: {} file(s) could not be processed. Results may be incomplete.",
-                total_skipped
-            );
+            pxh::ui::warn(&format!(
+                "{} could not be processed; results may be incomplete",
+                pxh::ui::count(total_skipped, "file")
+            ));
             return Err(format!(
-                "Scan incomplete: {} file(s) could not be processed",
-                total_skipped
+                "scan incomplete: {} could not be processed",
+                pxh::ui::count(total_skipped, "file")
             )
             .into());
         }
@@ -1265,9 +1266,7 @@ fn detect_shell_format(content: &[u8]) -> String {
             return "bash".to_string();
         }
     }
-    eprintln!(
-        "Warning: Could not detect shell format, defaulting to bash. Use --shellname to specify."
-    );
+    pxh::ui::warn("could not detect shell format, defaulting to bash; use --shellname to specify");
     "bash".to_string()
 }
 
@@ -1587,7 +1586,7 @@ impl SyncCommand {
                         &mut seen_machine_ids,
                     ) {
                         println!(" failed");
-                        eprintln!("Warning: skipping {}: {e}", path.display());
+                        pxh::ui::warn(&format!("skipping {}: {e}", path.display()));
                     }
                 }
             }
@@ -1741,11 +1740,11 @@ impl SyncCommand {
         if let Some(mid) = source_machine_id
             && let Some(prev) = seen_machine_ids.insert(mid, path.clone())
         {
-            eprintln!(
-                "Warning: {} and {} both report machine_id {mid} -- one of them is likely a clone or misconfigured. Falling back to full scan for this source to avoid silently missing rows.",
+            pxh::ui::warn(&format!(
+                "{} and {} both report machine_id {mid} -- one of them is likely a clone or misconfigured; falling back to full scan for this source to avoid silently missing rows",
                 prev.display(),
                 path.display()
-            );
+            ));
             // Skip watermark + machine_id-keyed bookkeeping for this source --
             // the two DBs share an identity, so their id spaces aren't
             // comparable. INSERT OR IGNORE still keeps the merge correct.
@@ -2086,7 +2085,7 @@ impl ScrubCommand {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: Failed to read directory entry: {e}");
+                    pxh::ui::warn(&format!("failed to read directory entry: {e}"));
                     skipped_entries += 1;
                 }
             }
@@ -2164,32 +2163,36 @@ impl ScrubCommand {
         // Report skipped files before proceeding
         let total_skipped = skipped_entries + skipped_files;
         if total_skipped > 0 {
-            eprintln!(
-                "WARNING: {} file(s) could not be processed. Results may be incomplete.",
-                total_skipped
-            );
+            pxh::ui::warn(&format!(
+                "{} could not be processed; results may be incomplete",
+                pxh::ui::count(total_skipped, "file")
+            ));
         }
 
         if total_matches == 0 {
             println!("\nNo entries found to scrub.");
             if total_skipped > 0 {
                 return Err(format!(
-                    "Scrub incomplete: {} file(s) could not be processed",
-                    total_skipped
+                    "scrub incomplete: {} could not be processed",
+                    pxh::ui::count(total_skipped, "file")
                 )
                 .into());
             }
             return Ok(());
         }
 
-        println!("\nFound {} entries across {} file(s).", total_matches, file_match_counts.len());
+        println!(
+            "\nFound {} entries across {}.",
+            total_matches,
+            pxh::ui::count(file_match_counts.len(), "file")
+        );
 
         if self.dry_run {
             println!("Dry-run mode: no changes made.");
             if total_skipped > 0 {
                 return Err(format!(
-                    "Scrub incomplete: {} file(s) could not be processed",
-                    total_skipped
+                    "scrub incomplete: {} could not be processed",
+                    pxh::ui::count(total_skipped, "file")
                 )
                 .into());
             }
@@ -2219,15 +2222,19 @@ impl ScrubCommand {
             files_modified += 1;
         }
 
-        println!("Scrubbed {} entries from {} file(s).", total_scrubbed, files_modified);
+        println!(
+            "Scrubbed {} entries from {}.",
+            total_scrubbed,
+            pxh::ui::count(files_modified, "file")
+        );
         if total_scrubbed > 0 {
-            eprintln!("Hint: run `pxh maintenance` to VACUUM and reclaim disk space.");
+            pxh::ui::hint("run `pxh maintenance` to VACUUM and reclaim disk space");
         }
 
         if total_skipped > 0 {
             return Err(format!(
-                "Scrub incomplete: {} file(s) could not be processed",
-                total_skipped
+                "scrub incomplete: {} could not be processed",
+                pxh::ui::count(total_skipped, "file")
             )
             .into());
         }
@@ -2345,7 +2352,7 @@ impl ScrubCommand {
             return Ok(());
         }
 
-        println!("Found {} potential secret(s) to scrub:\n", matches.len());
+        println!("Found {} to scrub:\n", pxh::ui::count(matches.len(), "potential secret"));
         ScanCommand::display_matches(&matches, false);
 
         if self.dry_run {
@@ -2365,7 +2372,7 @@ impl ScrubCommand {
             let count = scrub_from_database(conn, &matches)?;
             println!("Scrubbed {} entries from database.", count);
             if count > 0 {
-                eprintln!("Hint: run `pxh maintenance` to VACUUM and reclaim disk space.");
+                pxh::ui::hint("run `pxh maintenance` to VACUUM and reclaim disk space");
             }
         }
 
@@ -2381,8 +2388,8 @@ impl ScrubCommand {
 
         let contraband = match &self.contraband {
             Some(value) => {
-                println!(
-                    "WARNING: specifying the contraband on the command line is inherently risky; prefer not specifying it\n"
+                pxh::ui::warn(
+                    "specifying the contraband on the command line is inherently risky; prefer not specifying it",
                 );
                 value.clone()
             }
@@ -2597,7 +2604,7 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
 /// `Box<dyn Error>` every pxh signature returns -- the box keeps `source()` but
 /// its Display is the outermost context alone. So walk `source()` ourselves.
 fn error_chain(e: &dyn std::error::Error) -> String {
-    let mut parts = vec![format!("{e:#}")];
+    let mut parts = vec![e.to_string()];
     let mut source = e.source();
     while let Some(cause) = source {
         parts.push(cause.to_string());

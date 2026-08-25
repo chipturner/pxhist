@@ -257,14 +257,14 @@ impl DoctorCommand {
                     let days = (now - ts) / 86400;
                     let msg = if days > 0 {
                         format!(
-                            "Last command recorded {days} day{} ago -- shell hooks may not be active",
-                            if days == 1 { "" } else { "s" }
+                            "Last command recorded {} ago -- shell hooks may not be active",
+                            pxh::ui::count(days as usize, "day")
                         )
                     } else {
                         let hours = (now - ts) / 3600;
                         format!(
-                            "Last command recorded {hours} hour{} ago -- shell hooks may not be active",
-                            if hours == 1 { "" } else { "s" }
+                            "Last command recorded {} ago -- shell hooks may not be active",
+                            pxh::ui::count(hours as usize, "hour")
                         )
                     };
                     results.push(CheckResult::warn(
@@ -488,11 +488,7 @@ impl DoctorCommand {
             vec![CheckResult::ok("No secrets detected at critical confidence")]
         } else {
             vec![CheckResult::warn(
-                format!(
-                    "{} potential secret{} found in history",
-                    matches.len(),
-                    if matches.len() == 1 { "" } else { "s" }
-                ),
+                format!("{} found in history", pxh::ui::count(matches.len(), "potential secret")),
                 "Run 'pxh scan' for details, 'pxh scrub --scan' to remove",
             )]
         }
@@ -544,7 +540,7 @@ impl DoctorCommand {
         if issues == 0 {
             println!("\nNo issues found.");
         } else {
-            println!("\n{issues} issue{} found.", if issues == 1 { "" } else { "s" });
+            println!("\n{} found.", pxh::ui::count(issues, "issue"));
         }
     }
 
@@ -786,10 +782,10 @@ impl DoctorCommand {
                             if !xdg_config.exists() {
                                 let _ = std::fs::create_dir_all(&xdg_config_dir);
                                 if let Err(e) = std::fs::copy(&legacy_config, &xdg_config) {
-                                    eprintln!(
-                                        "    Warning: failed to copy config.toml to {}: {e}",
+                                    pxh::ui::warn(&format!(
+                                        "failed to copy config.toml to {}: {e}",
                                         xdg_config.display()
-                                    );
+                                    ));
                                 } else {
                                     println!(
                                         "    Copied config.toml to {}",

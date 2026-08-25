@@ -45,3 +45,18 @@ fn string_errors_are_not_quoted() -> Result<()> {
     assert!(!stderr.starts_with("error: \""), "string error was Debug-quoted: {stderr:?}");
     Ok(())
 }
+
+#[test]
+fn warnings_use_the_lowercase_word() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    // A directory of "databases" containing a non-SQLite file fails to open
+    // as a database, which directory sync reports as a "skipping ..." warning.
+    let dir = helper.home_dir().join("syncdir");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("junk.db"), b"not sqlite")?;
+    let output = helper.command_with_args(&["sync", dir.to_str().unwrap()]).output()?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("warning: "), "{stderr:?}");
+    assert!(!stderr.contains("Warning:"), "{stderr:?}");
+    Ok(())
+}

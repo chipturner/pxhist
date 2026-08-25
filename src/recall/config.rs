@@ -164,8 +164,10 @@ impl Config {
         match toml::from_str(&content) {
             Ok(config) => Some(config),
             Err(e) => {
-                eprintln!("pxh: warning: failed to parse {}: {e}", path.display());
-                eprintln!("pxh: using default configuration");
+                crate::ui::warn(&format!(
+                    "failed to parse {}: {e}; using default configuration",
+                    path.display()
+                ));
                 None
             }
         }

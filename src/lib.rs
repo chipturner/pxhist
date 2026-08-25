@@ -600,7 +600,11 @@ pub fn import_zsh_history(
     }
 
     if skipped > 0 {
-        eprintln!("warning: {}: skipped {skipped} malformed line(s)", histfile.display());
+        crate::ui::warn(&format!(
+            "{}: skipped {}",
+            histfile.display(),
+            crate::ui::count(skipped, "malformed line")
+        ));
     }
 
     Ok(dedup_invocations(ret))
