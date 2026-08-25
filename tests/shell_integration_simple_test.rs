@@ -1,24 +1,9 @@
-use std::{env, fs, process::Command};
+use std::fs;
 
-use pxh::test_utils::pxh_path;
+use pxh::test_utils::pxh_command;
 use tempfile::TempDir;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-// Helper to create a Command with coverage environment variables
-fn pxh_command() -> Command {
-    let mut cmd = Command::new(pxh_path());
-
-    // Propagate coverage environment variables if they exist
-    if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
-        cmd.env("LLVM_PROFILE_FILE", profile_file);
-    }
-    if let Ok(llvm_cov) = env::var("CARGO_LLVM_COV") {
-        cmd.env("CARGO_LLVM_COV", llvm_cov);
-    }
-
-    cmd
-}
 
 #[test]
 fn test_install_creates_correct_rc_files() -> Result<()> {

@@ -99,7 +99,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/property_test.rs`**: proptest properties for byte-level paths (zsh unmetafy, continuation-line joining, JSON import round trip of arbitrary bytes)
 - **`tests/docker/`**: Clean-machine user journey on stock Debian: fresh HOME, `pxh install`, commands typed into real interactive bash and zsh via `script(1)`, then search/import/export/scan/scrub/sync (run via `just docker-e2e`)
 - **`tests/docs_drift_test.rs`**: README TOML examples must parse as the strict `Config`; `main.rs` tests pin that every non-hidden subcommand is named in the README and run clap's `debug_assert`.
-- **`tests/common/mod.rs`**: Shared test utilities and compatibility wrappers
+- **`tests/common/mod.rs`**: Shared test utilities (re-exports `pxh::test_utils`)
 - **`tests/resources/`**: Sample histfiles for import testing (bash simple/timestamped, zsh incl. malformed/multiline)
 
 ### Test Conventions
@@ -120,7 +120,7 @@ Located in `pxh::test_utils` (src/lib.rs) and `tests/common/mod.rs`:
   - `command()` / `command_with_args()` for pxh invocation
   - `shell_command()` for interactive shell testing
   - Coverage environment variable propagation
-- **`PxhCaller`**: Legacy compatibility wrapper around `PxhTestHelper`
+- **`pxh_command()`**: bare `pxh` process with coverage env propagated (for tests that build their own environment)
 - **`pxh_path()`**: Resolves path to built pxh binary
 - **`insert_test_command(db_path, command, days_ago)`**: Creates test commands using pxh binary
 - **`count_commands(db_path)`**: Direct SQLite query for command counting

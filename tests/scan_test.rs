@@ -1,18 +1,25 @@
 mod common;
 
-use common::PxhCaller;
+use assert_cmd::assert::OutputAssertExt;
+use common::PxhTestHelper;
+
+/// `pxh <args>` against the helper's isolated HOME and DB; `args` is split on
+/// single spaces exactly as the old per-file caller helper did.
+fn call(helper: &PxhTestHelper, args: &str) -> std::process::Command {
+    helper.command_with_args(&args.split(' ').collect::<Vec<_>>())
+}
 
 #[test]
 fn scan_detects_aws_api_key() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command containing a fake AWS API key
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
 
     // Scan should find it
-    let output = pc.call("scan").output().unwrap();
+    let output = call(&helper, "scan").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AWS API Key") || stdout.contains("AWS Access Key ID Value"));
@@ -21,15 +28,18 @@ fn scan_detects_aws_api_key() {
 
 #[test]
 fn scan_no_secrets_found() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with no secrets
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 echo hello world")
-        .assert()
-        .success();
+    call(
+        &helper,
+        "insert --shellname bash --hostname h --username u --session-id 1 echo hello world",
+    )
+    .assert()
+    .success();
 
     // Scan should find nothing
-    let output = pc.call("scan").output().unwrap();
+    let output = call(&helper, "scan").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No potential secrets found"));
@@ -37,15 +47,15 @@ fn scan_no_secrets_found() {
 
 #[test]
 fn scan_json_output() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with a fake secret
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
 
     // Scan with JSON output
-    let output = pc.call("scan --json").output().unwrap();
+    let output = call(&helper, "scan --json").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -60,15 +70,18 @@ fn scan_json_output() {
 
 #[test]
 fn scan_empty_json_output() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with no secrets
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 echo hello world")
-        .assert()
-        .success();
+    call(
+        &helper,
+        "insert --shellname bash --hostname h --username u --session-id 1 echo hello world",
+    )
+    .assert()
+    .success();
 
     // Scan with JSON output
-    let output = pc.call("scan --json").output().unwrap();
+    let output = call(&helper, "scan --json").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
 
@@ -80,15 +93,15 @@ fn scan_empty_json_output() {
 
 #[test]
 fn scan_confidence_low() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with a low confidence pattern (AWS API Gateway URL)
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
         .assert()
         .success();
 
     // High confidence scan should not find it (depends on pattern categorization)
-    let output = pc.call("scan --confidence low").output().unwrap();
+    let output = call(&helper, "scan --confidence low").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AWS API Gateway"));
@@ -96,18 +109,18 @@ fn scan_confidence_low() {
 
 #[test]
 fn scan_confidence_all() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert commands with both high and low confidence patterns
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
-    pc.call("insert --shellname bash --hostname h --username u --session-id 2 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 2 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
         .assert()
         .success();
 
     // Scanning with --confidence all should find both
-    let output = pc.call("scan --confidence all").output().unwrap();
+    let output = call(&helper, "scan --confidence all").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Should find at least the high confidence AWS key
@@ -116,10 +129,10 @@ fn scan_confidence_all() {
 
 #[test]
 fn scan_invalid_confidence() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Invalid confidence level is rejected by clap's ValueEnum validation
-    let output = pc.call("scan --confidence invalid").output().unwrap();
+    let output = call(&helper, "scan --confidence invalid").output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("invalid value"));
@@ -128,20 +141,20 @@ fn scan_invalid_confidence() {
 
 #[test]
 fn scan_confidence_critical() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with a high-confidence AWS key (included in critical)
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
 
     // Insert a command with an S3 bucket URL (high confidence, but NOT in critical)
-    pc.call("insert --shellname bash --hostname h --username u --session-id 2 aws s3 cp file.txt s3://mybucket/")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 2 aws s3 cp file.txt s3://mybucket/")
         .assert()
         .success();
 
     // Default scan (critical) should find the AWS key
-    let output = pc.call("scan").output().unwrap();
+    let output = call(&helper, "scan").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AWS") && stdout.contains("AKIA"));
@@ -150,7 +163,7 @@ fn scan_confidence_critical() {
     assert!(!stdout.contains("s3://mybucket"));
 
     // High confidence scan SHOULD find the S3 bucket
-    let output = pc.call("scan --confidence high").output().unwrap();
+    let output = call(&helper, "scan --confidence high").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("s3://mybucket") || stdout.contains("S3"));
@@ -158,22 +171,23 @@ fn scan_confidence_critical() {
 
 #[test]
 fn scan_confidence_levels_are_cumulative() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a high-confidence-only pattern (S3 bucket -- not in CRITICAL_PATTERN_NAMES)
-    pc.call(
+    call(
+        &helper,
         "insert --shellname bash --hostname h --username u --session-id 1 aws s3 cp data.csv s3://my-secret-bucket/uploads/",
     )
     .assert()
     .success();
 
     // Insert a low-confidence pattern (API Gateway URL)
-    pc.call("insert --shellname bash --hostname h --username u --session-id 2 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 2 curl https://abc123.execute-api.us-east-1.amazonaws.com/prod/endpoint")
         .assert()
         .success();
 
     // --confidence low should include high-confidence patterns too
-    let output = pc.call("scan --confidence low").output().unwrap();
+    let output = call(&helper, "scan --confidence low").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
@@ -188,14 +202,14 @@ fn scan_confidence_levels_are_cumulative() {
 
 #[test]
 fn scan_verbose() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 --working-directory /test/dir export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 --working-directory /test/dir export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
 
     // Verbose output should show directory
-    let output = pc.call("scan --verbose").output().unwrap();
+    let output = call(&helper, "scan --verbose").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Directory:"));
@@ -204,27 +218,30 @@ fn scan_verbose() {
 
 #[test]
 fn scan_scrub_dry_run() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with a secret
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
 
     // Insert a safe command
-    pc.call("insert --shellname bash --hostname h --username u --session-id 2 echo hello world")
-        .assert()
-        .success();
+    call(
+        &helper,
+        "insert --shellname bash --hostname h --username u --session-id 2 echo hello world",
+    )
+    .assert()
+    .success();
 
     // Dry-run should show what would be scrubbed but not remove anything
-    let output = pc.call("scrub --scan --dry-run").output().unwrap();
+    let output = call(&helper, "scrub --scan --dry-run").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Dry-run mode"));
     assert!(stdout.contains("AKIAIOSFODNN7EXAMPLE"));
 
     // Verify the command still exists
-    let output = pc.call("scan").output().unwrap();
+    let output = call(&helper, "scan").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AKIAIOSFODNN7EXAMPLE"));
@@ -232,33 +249,36 @@ fn scan_scrub_dry_run() {
 
 #[test]
 fn scan_scrub_removes_secrets() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command with a secret
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_KEY=AKIAIOSFODNN7EXAMPLE")
         .assert()
         .success();
 
     // Insert a safe command
-    pc.call("insert --shellname bash --hostname h --username u --session-id 2 echo hello world")
-        .assert()
-        .success();
+    call(
+        &helper,
+        "insert --shellname bash --hostname h --username u --session-id 2 echo hello world",
+    )
+    .assert()
+    .success();
 
     // Scrub should remove the secret
-    let output = pc.call("scrub --scan --yes").output().unwrap();
+    let output = call(&helper, "scrub --scan --yes").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Scrubbed"));
     assert!(stdout.contains("entries from database"));
 
     // Verify the secret is gone
-    let output = pc.call("scan").output().unwrap();
+    let output = call(&helper, "scan").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No potential secrets found"));
 
     // Verify the safe command still exists
-    let output = pc.call("show").output().unwrap();
+    let output = call(&helper, "show").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("echo hello world"));
@@ -269,15 +289,18 @@ fn scan_scrub_removes_secrets() {
 
 #[test]
 fn scrub_scan_no_secrets_found() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert only safe commands
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 echo hello world")
-        .assert()
-        .success();
+    call(
+        &helper,
+        "insert --shellname bash --hostname h --username u --session-id 1 echo hello world",
+    )
+    .assert()
+    .success();
 
     // Scrub --scan should succeed with no secrets to remove
-    let output = pc.call("scrub --scan --yes").output().unwrap();
+    let output = call(&helper, "scrub --scan --yes").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No potential secrets found"));
@@ -287,10 +310,10 @@ fn scrub_scan_no_secrets_found() {
 fn scrub_scan_with_histfile() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a bash-style histfile with some commands
-    let histfile = pc.tmpdir().join("test_history");
+    let histfile = helper.home_dir().join("test_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, "echo hello").unwrap();
     writeln!(file, "export AWS_KEY=AKIAIOSFODNN7EXAMPLE").unwrap();
@@ -300,7 +323,7 @@ fn scrub_scan_with_histfile() {
     // Scan the histfile directly (not the database)
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str} --shellname bash");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AKIAIOSFODNN7EXAMPLE"));
@@ -308,7 +331,7 @@ fn scrub_scan_with_histfile() {
 
     // Scrub the histfile using scrub --scan
     let cmd = format!("scrub --scan --histfile {histfile_str} --shellname bash --yes");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Scrubbed"));
@@ -322,7 +345,7 @@ fn scrub_scan_with_histfile() {
 
     // Verify re-scanning the histfile finds nothing
     let cmd = format!("scan --histfile {histfile_str} --shellname bash");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No potential secrets found"));
@@ -332,11 +355,11 @@ fn scrub_scan_with_histfile() {
 fn scan_zsh_histfile() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a zsh-style histfile with commands
     // Zsh format: ": timestamp:duration;command"
-    let histfile = pc.tmpdir().join("zsh_history");
+    let histfile = helper.home_dir().join("zsh_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, ": 1700000000:0;echo hello").unwrap();
     writeln!(file, ": 1700000001:0;export AWS_KEY=AKIAIOSFODNN7EXAMPLE").unwrap();
@@ -346,7 +369,7 @@ fn scan_zsh_histfile() {
     // Scan the zsh histfile
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str} --shellname zsh");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AKIAIOSFODNN7EXAMPLE"));
@@ -357,10 +380,10 @@ fn scan_zsh_histfile() {
 fn scrub_scan_zsh_histfile() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a zsh-style histfile with commands
-    let histfile = pc.tmpdir().join("zsh_history");
+    let histfile = helper.home_dir().join("zsh_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, ": 1700000000:0;echo hello").unwrap();
     writeln!(file, ": 1700000001:0;export AWS_KEY=AKIAIOSFODNN7EXAMPLE").unwrap();
@@ -370,7 +393,7 @@ fn scrub_scan_zsh_histfile() {
     // Scrub the zsh histfile
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scrub --scan --histfile {histfile_str} --shellname zsh --yes");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Scrubbed"));
@@ -383,7 +406,7 @@ fn scrub_scan_zsh_histfile() {
 
     // Verify re-scanning finds nothing
     let cmd = format!("scan --histfile {histfile_str} --shellname zsh");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No potential secrets found"));
@@ -393,11 +416,11 @@ fn scrub_scan_zsh_histfile() {
 fn scan_histfile_bash_noop_not_misdetected_as_zsh() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a bash histfile that starts with `: ${VAR:=x}; cmd`
     // This should NOT be misdetected as zsh
-    let histfile = pc.tmpdir().join("bash_noop_history");
+    let histfile = helper.home_dir().join("bash_noop_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, ": ${{PATH:=/usr/bin}}; echo setup").unwrap();
     writeln!(file, "export AWS_KEY=AKIAIOSFODNN7EXAMPLE").unwrap();
@@ -406,7 +429,7 @@ fn scan_histfile_bash_noop_not_misdetected_as_zsh() {
     // Scan without --shellname - should detect as bash, not zsh
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str}");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     // If misdetected as zsh, the zsh parser would skip `export AWS_KEY=...`
@@ -421,10 +444,10 @@ fn scan_histfile_bash_noop_not_misdetected_as_zsh() {
 fn scan_histfile_auto_detect_format() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a zsh-style histfile without specifying --shellname
-    let histfile = pc.tmpdir().join("auto_detect_history");
+    let histfile = helper.home_dir().join("auto_detect_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, ": 1700000000:0;echo hello").unwrap();
     writeln!(file, ": 1700000001:0;export AWS_KEY=AKIAIOSFODNN7EXAMPLE").unwrap();
@@ -433,7 +456,7 @@ fn scan_histfile_auto_detect_format() {
     // Scan without --shellname - should auto-detect zsh format
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str}");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AKIAIOSFODNN7EXAMPLE"));
@@ -443,10 +466,10 @@ fn scan_histfile_auto_detect_format() {
 fn scrub_interactive_histfile_requires_contraband() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a histfile
-    let histfile = pc.tmpdir().join("test_history");
+    let histfile = helper.home_dir().join("test_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, "echo hello").unwrap();
     drop(file);
@@ -454,7 +477,7 @@ fn scrub_interactive_histfile_requires_contraband() {
     // Interactive mode with --histfile but no contraband should fail
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scrub --histfile {histfile_str}");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -466,15 +489,15 @@ fn scrub_interactive_histfile_requires_contraband() {
 fn scan_empty_histfile() {
     use std::fs;
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create an empty histfile
-    let histfile = pc.tmpdir().join("empty_history");
+    let histfile = helper.home_dir().join("empty_history");
     fs::File::create(&histfile).unwrap();
 
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str}");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("No potential secrets found"));
@@ -484,10 +507,10 @@ fn scan_empty_histfile() {
 fn scan_histfile_auto_detect_bash_timestamped() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a bash-style timestamped histfile
-    let histfile = pc.tmpdir().join("bash_ts_history");
+    let histfile = helper.home_dir().join("bash_ts_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, "#1700000000").unwrap();
     writeln!(file, "echo hello").unwrap();
@@ -498,7 +521,7 @@ fn scan_histfile_auto_detect_bash_timestamped() {
     // Scan without --shellname - should auto-detect bash format
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str}");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("AKIAIOSFODNN7EXAMPLE"));
@@ -506,25 +529,25 @@ fn scan_histfile_auto_detect_bash_timestamped() {
 
 #[test]
 fn scrub_scan_multiple_patterns_same_command() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a command that matches multiple patterns (AWS key)
-    pc.call("insert --shellname bash --hostname h --username u --session-id 1 export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE AWS_SECRET=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
+    call(&helper, "insert --shellname bash --hostname h --username u --session-id 1 export AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE AWS_SECRET=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")
         .assert()
         .success();
 
     // Verify it shows up in scan
-    let output = pc.call("scan --confidence all").output().unwrap();
+    let output = call(&helper, "scan --confidence all").output().unwrap();
     assert!(output.status.success());
 
     // Scrub should only delete it once
-    let output = pc.call("scrub --scan --yes").output().unwrap();
+    let output = call(&helper, "scrub --scan --yes").output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("Scrubbed 1 entries"));
 
     // Verify it's gone
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(!stdout.contains("AKIAIOSFODNN7EXAMPLE"));
 }
@@ -533,10 +556,10 @@ fn scrub_scan_multiple_patterns_same_command() {
 fn scan_zsh_histfile_multiline_secret() {
     use std::{fs, io::Write};
 
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Create a zsh histfile where a secret is on a continuation line
-    let histfile = pc.tmpdir().join("zsh_multiline_history");
+    let histfile = helper.home_dir().join("zsh_multiline_history");
     let mut file = fs::File::create(&histfile).unwrap();
     writeln!(file, ": 1700000000:0;echo hello").unwrap();
     // Multi-line curl with bearer token on continuation line
@@ -551,7 +574,7 @@ fn scan_zsh_histfile_multiline_secret() {
     // Scan should detect the bearer token on the continuation line
     let histfile_str = histfile.to_str().unwrap();
     let cmd = format!("scan --histfile {histfile_str} --shellname zsh --confidence all");
-    let output = pc.call(&cmd).output().unwrap();
+    let output = call(&helper, &cmd).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(

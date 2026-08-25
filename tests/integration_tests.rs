@@ -5,14 +5,20 @@ use std::{
 };
 
 use anyhow::Result;
-use assert_cmd::Command;
+use assert_cmd::{Command, assert::OutputAssertExt};
 use bstr::BString;
 use rand::RngExt;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
 mod common;
-use common::{PxhCaller, PxhTestHelper};
+use common::PxhTestHelper;
+
+/// `pxh <args>` against the helper's isolated HOME and DB; `args` is split on
+/// single spaces exactly as the old per-file caller helper did.
+fn call(helper: &PxhTestHelper, args: &str) -> std::process::Command {
+    helper.command_with_args(&args.split(' ').collect::<Vec<_>>())
+}
 
 fn count_lines(bytes: &[u8]) -> usize {
     bytes.iter().filter(|&ch| *ch == b'\n').count()
@@ -31,30 +37,30 @@ fn trivial_invocation() {
         .assert()
         .success();
 
-    let pc = PxhCaller::new();
-    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
+    let helper = PxhTestHelper::new();
+    call(&helper, "insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
         .assert()
         .success();
 
-    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_2")
+    call(&helper, "insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_2")
         .assert()
         .success();
 
-    pc.call("export").assert().success();
+    call(&helper, "export").assert().success();
 
     // Ensure we see our history with show w/o a regex, don't see it
     // with a valid one, and see it with multiple joined regexes
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 2);
 
-    let output = pc.call("show --suppress-headers non-matching-regex").output().unwrap();
+    let output = call(&helper, "show --suppress-headers non-matching-regex").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
 
-    let output = pc.call("show --suppress-headers test").output().unwrap();
+    let output = call(&helper, "show --suppress-headers test").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 2);
 
     // Make sure we properly filter by joining regexes (which would then not match)
-    let output = pc.call("show --suppress-headers command_1 command_2").output().unwrap();
+    let output = call(&helper, "show --suppress-headers command_1 command_2").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
 }
 
@@ -73,28 +79,28 @@ fn show_with_here() {
 
     // Prepare some test data: four commands, three from /dirN and one
     // from wherever the test runs.
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id 1 --working-directory /dir{i} test_command_{i}"
         );
-        pc.call(cmd).assert().success();
+        call(&helper, &cmd).assert().success();
     }
     let cmd = format!(
         "insert --shellname s --hostname h --username u --session-id 1 --working-directory {} test_command_cwd",
         env::current_dir().unwrap_or_default().to_string_lossy()
     );
-    pc.call(cmd).assert().success();
+    call(&helper, &cmd).assert().success();
 
     // Now make sure we only see the relevant results when --here is
     // provided, both with and without --working-directory
-    let output = pc.call("show --suppress-headers --here").output().unwrap();
+    let output = call(&helper, "show --suppress-headers --here").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
 
     for i in 1..=3 {
         let cmd =
             format!("show --suppress-headers --here --working-directory /dir{i} test_command_{i}");
-        let output = pc.call(cmd).output().unwrap();
+        let output = call(&helper, &cmd).output().unwrap();
         assert_eq!(count_lines(&output.stdout), 1);
     }
 }
@@ -107,24 +113,24 @@ fn show_with_loosen() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: three commands of the form test.*xyz
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i} xyz"
         );
-        pc.call(cmd).assert().success();
+        call(&helper, &cmd).assert().success();
     }
 
     // Verify we see all three commands with traditional show
-    let output = pc.call("show --suppress-headers test xyz").output().unwrap();
+    let output = call(&helper, "show --suppress-headers test xyz").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 3);
 
     // Now verify we see none if we invert the order
-    let output = pc.call("show --suppress-headers xyz test").output().unwrap();
+    let output = call(&helper, "show --suppress-headers xyz test").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
 
     // Finally, the real test: loosen makes them show back up again
-    let output = pc.call("show --suppress-headers --loosen xyz test").output().unwrap();
+    let output = call(&helper, "show --suppress-headers --loosen xyz test").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 3);
 }
 
@@ -136,47 +142,53 @@ fn show_with_session_id() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: four commands spread across three sessions.
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
         );
-        pc.call(cmd).assert().success();
+        call(&helper, &cmd).assert().success();
     }
     let cmd = "insert --shellname s --hostname h --username u --session-id 1 test_command_4";
-    pc.call(cmd).assert().success();
+    call(&helper, cmd).assert().success();
 
     // Now make sure we only see the relevant results when we specify
     // sessions to `show`.  First make sure we see all commands:
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 4);
 
     // Now two in session 1
-    let output = pc.call("show --suppress-headers --session 1").output().unwrap();
+    let output = call(&helper, "show --suppress-headers --session 1").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 2);
 
     // Finally, one in sessions 2 and 3
     for i in 2..=3 {
         let cmd = format!("show --suppress-headers --session {i}");
-        let output = pc.call(cmd).output().unwrap();
+        let output = call(&helper, &cmd).output().unwrap();
         assert_eq!(count_lines(&output.stdout), 1);
     }
 }
 
 #[test]
 fn show_with_session_current() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert commands in two sessions using realistic decimal IDs
-    pc.call("insert --shellname s --hostname h --username u --session-id 123456789 cmd_session_a")
-        .assert()
-        .success();
-    pc.call("insert --shellname s --hostname h --username u --session-id 987654321 cmd_session_b")
-        .assert()
-        .success();
+    call(
+        &helper,
+        "insert --shellname s --hostname h --username u --session-id 123456789 cmd_session_a",
+    )
+    .assert()
+    .success();
+    call(
+        &helper,
+        "insert --shellname s --hostname h --username u --session-id 987654321 cmd_session_b",
+    )
+    .assert()
+    .success();
 
     // --session current reads PXH_SESSION_ID from env (decimal)
-    let mut cmd = pc.call("show --suppress-headers --session current");
+    let mut cmd = call(&helper, "show --suppress-headers --session current");
     cmd.env("PXH_SESSION_ID", "123456789");
     let output = cmd.output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
@@ -191,20 +203,20 @@ fn show_with_limit() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: 100 test commands
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     for i in 1..=100 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
         );
-        pc.call(cmd).assert().success();
+        call(&helper, &cmd).assert().success();
     }
 
     // Verify we see all three commands with traditional show
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 50);
 
     // Verify explicit limit 0 gives all results
-    let output = pc.call("show --suppress-headers --limit 0").output().unwrap();
+    let output = call(&helper, "show --suppress-headers --limit 0").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 100);
 }
 
@@ -267,34 +279,38 @@ fn show_with_case_insensitive() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: three commands with mixed case
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     for i in 1..=3 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} TEST_command_{i}"
         );
-        pc.call(cmd).assert().success();
+        call(&helper, &cmd).assert().success();
     }
 
     // Test case-sensitive search (should find only exact match)
-    let output = pc.call("show --suppress-headers test_command").output().unwrap();
+    let output = call(&helper, "show --suppress-headers test_command").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
 
     // Test case-insensitive search (should find all variations)
-    let output = pc.call("show --suppress-headers --ignore-case test_command").output().unwrap();
+    let output =
+        call(&helper, "show --suppress-headers --ignore-case test_command").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 3);
 
     // Test with multiple patterns case-insensitive
-    let output = pc.call("show --suppress-headers --ignore-case TEST_COMMAND").output().unwrap();
+    let output =
+        call(&helper, "show --suppress-headers --ignore-case TEST_COMMAND").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 3);
 
     // Test that uppercase pattern is converted to lowercase
-    let output = pc.call("show --suppress-headers --ignore-case TEST_COMMAND_1").output().unwrap();
+    let output =
+        call(&helper, "show --suppress-headers --ignore-case TEST_COMMAND_1").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
-    let output = pc.call("show --suppress-headers --ignore-case test_command_1").output().unwrap();
+    let output =
+        call(&helper, "show --suppress-headers --ignore-case test_command_1").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
 
     // Verify case-sensitive still works
-    let output = pc.call("show --suppress-headers TEST").output().unwrap();
+    let output = call(&helper, "show --suppress-headers TEST").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 3);
 }
 
@@ -456,30 +472,30 @@ fn export_includes_machine_id() {
 // Basic round trip test of inserting/sealing, then verify with json export.
 #[test]
 fn insert_seal_roundtrip() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     let commands = vec!["df", "sleep 1", "uptime"];
     for command in &commands {
-        pc.call(format!(
+        call(&helper, &format!(
 	    "insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 --start-unix-timestamp 1653573011 {command}"
 	))
 	    .assert()
 	    .success();
 
-        pc.call("seal --session-id 12345678 --exit-status 0 --end-unix-timestamp 1653573011")
+        call(&helper, "seal --session-id 12345678 --exit-status 0 --end-unix-timestamp 1653573011")
             .assert()
             .success();
     }
 
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
     assert_eq!(count_lines(&output.stdout), commands.len());
 
     // Trivial regexp
-    let output = pc.call("show --suppress-headers u....Z?e").output().unwrap();
+    let output = call(&helper, "show --suppress-headers u....Z?e").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1,);
 
-    let json_output = pc.call("export").output().unwrap();
+    let json_output = call(&helper, "export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     assert_eq!(invocations.len(), commands.len());
@@ -511,20 +527,23 @@ fn matches_expected_history(invocations: &[pxh::Invocation]) {
 #[test]
 fn zsh_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let pc = PxhCaller::new();
-    pc.call(format!(
-        "import --shellname zsh --histfile {}",
-        resources.join("zsh_histfile").to_string_lossy()
-    ))
+    let helper = PxhTestHelper::new();
+    call(
+        &helper,
+        &format!(
+            "import --shellname zsh --histfile {}",
+            resources.join("zsh_histfile").to_string_lossy()
+        ),
+    )
     .assert()
     .success();
 
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
     assert_eq!(count_lines(&output.stdout), 3);
 
-    let json_output = pc.call("export").output().unwrap();
+    let json_output = call(&helper, "export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
@@ -602,20 +621,23 @@ fn zsh_import_handles_malformed_timestamps() {
 #[test]
 fn bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let pc = PxhCaller::new();
-    pc.call(format!(
-        "import --shellname bash --histfile {}",
-        resources.join("simple_bash_histfile").to_string_lossy()
-    ))
+    let helper = PxhTestHelper::new();
+    call(
+        &helper,
+        &format!(
+            "import --shellname bash --histfile {}",
+            resources.join("simple_bash_histfile").to_string_lossy()
+        ),
+    )
     .assert()
     .success();
 
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
     assert_eq!(count_lines(&output.stdout), 3);
 
-    let json_output = pc.call("export").output().unwrap();
+    let json_output = call(&helper, "export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
@@ -624,20 +646,23 @@ fn bash_import_roundtrip() {
 #[test]
 fn timestamped_bash_import_roundtrip() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let pc = PxhCaller::new();
-    pc.call(format!(
-        "import --shellname bash --histfile {}",
-        resources.join("timestamped_bash_histfile").to_string_lossy()
-    ))
+    let helper = PxhTestHelper::new();
+    call(
+        &helper,
+        &format!(
+            "import --shellname bash --histfile {}",
+            resources.join("timestamped_bash_histfile").to_string_lossy()
+        ),
+    )
     .assert()
     .success();
 
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
 
     assert!(!output.stdout.is_empty());
     assert_eq!(count_lines(&output.stdout), 3);
 
-    let json_output = pc.call("export").output().unwrap();
+    let json_output = call(&helper, "export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     matches_expected_history(&invocations);
@@ -646,43 +671,50 @@ fn timestamped_bash_import_roundtrip() {
 #[test]
 fn import_dry_run() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/resources");
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Dry-run should report counts but not import
-    let output = pc
-        .call(format!(
+    let output = call(
+        &helper,
+        &format!(
             "import --shellname zsh --dry-run --histfile {}",
             resources.join("zsh_histfile").to_string_lossy()
-        ))
-        .output()
-        .unwrap();
+        ),
+    )
+    .output()
+    .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("3 entries found"), "got: {stdout}");
     assert!(stdout.contains("3 new"), "got: {stdout}");
 
     // Verify nothing was actually imported
-    let json_output = pc.call("export").output().unwrap();
+    let json_output = call(&helper, "export").output().unwrap();
     let invocations: Vec<pxh::Invocation> =
         serde_json::from_slice(json_output.stdout.as_slice()).unwrap();
     assert_eq!(invocations.len(), 0);
 
     // Now actually import
-    pc.call(format!(
-        "import --shellname zsh --histfile {}",
-        resources.join("zsh_histfile").to_string_lossy()
-    ))
+    call(
+        &helper,
+        &format!(
+            "import --shellname zsh --histfile {}",
+            resources.join("zsh_histfile").to_string_lossy()
+        ),
+    )
     .assert()
     .success();
 
     // Dry-run again should show all as duplicates
-    let output = pc
-        .call(format!(
+    let output = call(
+        &helper,
+        &format!(
             "import --shellname zsh --dry-run --histfile {}",
             resources.join("zsh_histfile").to_string_lossy()
-        ))
-        .output()
-        .unwrap();
+        ),
+    )
+    .output()
+    .unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("0 new"), "got: {stdout}");
@@ -779,30 +811,30 @@ fn scrub_command() {
     show_cmd.env_clear().env("PXH_DB_PATH", ":memory:").arg("show").assert().success();
 
     // Prepare some test data: 10 test commands
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     for i in 1..=10 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --session-id {i} test_command_{i}"
         );
-        pc.call(cmd).assert().success();
+        call(&helper, &cmd).assert().success();
     }
 
     // Verify the rows are present
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 10);
 
     // Scrub `test_command_10` (use --yes to skip confirmation prompt)
-    let _output = pc.call("scrub --yes test_command_10").output().unwrap();
+    let _output = call(&helper, "scrub --yes test_command_10").output().unwrap();
 
     // Verify we have 9 rows now.
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 9);
 
     // Scrub the rest
-    let _output = pc.call("scrub --yes test_command_").output().unwrap();
+    let _output = call(&helper, "scrub --yes test_command_").output().unwrap();
 
     // Verify we have none.
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
 }
 
@@ -818,27 +850,27 @@ fn symlink_pxhs_behavior() {
     std::os::unix::fs::symlink(bin_path, &pxh_symlink_path).unwrap();
     std::os::unix::fs::symlink(&pxh_symlink_path, &pxhs_path).unwrap();
 
-    // Create a PxhCaller for our test
-    let pc = PxhCaller::new();
+    // Create a PxhTestHelper for our test
+    let helper = PxhTestHelper::new();
 
     // Insert test data
-    pc.call("insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
+    call(&helper, "insert --shellname zsh --hostname testhost --username testuser --session-id 12345678 test_command_1")
         .assert()
         .success();
 
     // Make sure the data is properly sealed with exit status
-    pc.call("seal --session-id 12345678 --exit-status 0 --end-unix-timestamp 1600000000")
+    call(&helper, "seal --session-id 12345678 --exit-status 0 --end-unix-timestamp 1600000000")
         .assert()
         .success();
 
     // Test 1: Verify our test data using the regular pxh command
-    let base_output = pc.call("show --suppress-headers").output().unwrap();
+    let base_output = call(&helper, "show --suppress-headers").output().unwrap();
     assert!(base_output.status.success());
     assert!(String::from_utf8_lossy(&base_output.stdout).contains("test_command_1"));
 
     // Test 2: pxhs with search term should inject "show" and work like "pxh show"
     let shorthand_output = Command::new(&pxhs_path)
-        .env("PXH_DB_PATH", pc.tmpdir().join("test"))
+        .env("PXH_DB_PATH", helper.db_path())
         .env("PXH_HOSTNAME", "testhost")
         .args(["test_command"])
         .output()
@@ -853,7 +885,7 @@ fn symlink_pxhs_behavior() {
 
     // Test 3: pxhs with "--help" should work correctly and show help for the show command
     let help_output = Command::new(&pxhs_path)
-        .env("PXH_DB_PATH", pc.tmpdir().join("test"))
+        .env("PXH_DB_PATH", helper.db_path())
         .args(["--help"])
         .output()
         .unwrap();
@@ -869,26 +901,26 @@ fn symlink_pxhs_behavior() {
 #[test]
 fn sync_roundtrip() {
     // Prepare some test data: 40 test commands
-    let pc_even = PxhCaller::new();
-    let pc_odd = PxhCaller::new();
+    let helper_even = PxhTestHelper::new();
+    let helper_odd = PxhTestHelper::new();
     for i in 1..=40 {
         let cmd = format!(
             "insert --shellname s --hostname h --username u --working-directory d --start-unix-timestamp 1 --session-id {i} test_command_{i}",
         );
         if i % 2 == 0 {
-            pc_even.call(cmd).assert().success();
+            call(&helper_even, &cmd).assert().success();
         } else {
-            pc_odd.call(cmd).assert().success();
+            call(&helper_odd, &cmd).assert().success();
         }
     }
 
     let sync_dir = TempDir::new().unwrap();
     let sync_cmd = format!("sync {}", sync_dir.path().to_string_lossy());
-    pc_even.call(&sync_cmd).assert().success();
-    pc_odd.call(&sync_cmd).assert().success();
+    call(&helper_even, &sync_cmd).assert().success();
+    call(&helper_odd, &sync_cmd).assert().success();
 
-    let even_output = pc_even.call("show --suppress-headers").output().unwrap();
-    let even_odd_output = pc_odd.call("show --suppress-headers").output().unwrap();
+    let even_output = call(&helper_even, "show --suppress-headers").output().unwrap();
+    let even_odd_output = call(&helper_odd, "show --suppress-headers").output().unwrap();
 
     assert_eq!(count_lines(&even_output.stdout), 20);
     assert_eq!(count_lines(&even_odd_output.stdout), 40); // 40, not 20!  because the sync pulled in the 20 from the even sync above
@@ -896,9 +928,9 @@ fn sync_roundtrip() {
     // For thoroughness case, let's see we pull in both files (total
     // of 60 entries) and properly dedupe into 40 just like the
     // even_odd case above.
-    let pc_merged = PxhCaller::new();
-    pc_merged.call(&sync_cmd).assert().success();
-    let merged_output = pc_merged.call("show --suppress-headers").output().unwrap();
+    let helper_merged = PxhTestHelper::new();
+    call(&helper_merged, &sync_cmd).assert().success();
+    let merged_output = call(&helper_merged, "show --suppress-headers").output().unwrap();
 
     assert_eq!(count_lines(&merged_output.stdout), 40);
 }
@@ -906,10 +938,10 @@ fn sync_roundtrip() {
 #[test]
 fn test_maintenance() {
     // Set up a new database with varied content but reduced size for faster testing
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Get the database path for SQLite access
-    let db_path = pc.tmpdir().join("test");
+    let db_path = helper.db_path().to_path_buf();
 
     // Direct database access is faster than CLI for setup
     {
@@ -1016,7 +1048,7 @@ fn test_maintenance() {
 
     // Run the maintenance command via CLI
     println!("Running maintenance command...");
-    pc.call("maintenance").assert().success();
+    call(&helper, "maintenance").assert().success();
 
     // Reconnect to check results
     let conn_after = Connection::open(&db_path).unwrap();
@@ -1056,12 +1088,12 @@ fn test_maintenance() {
 
 #[test]
 fn test_maintenance_multiple_files() {
-    // Create PxhCallers for two test databases
-    let pc_maint = PxhCaller::new();
+    // Create test helpers for two test databases
+    let helper_maint = PxhTestHelper::new();
 
     // Setup two test database files
-    let db_path1 = pc_maint.tmpdir().join("test1.db");
-    let db_path2 = pc_maint.tmpdir().join("test2.db");
+    let db_path1 = helper_maint.home_dir().join("test1.db");
+    let db_path2 = helper_maint.home_dir().join("test2.db");
 
     // Define a helper function to quickly set up a test database
     fn setup_test_db(path: &PathBuf, num_rows: usize, command_prefix: &str) -> (Connection, i64) {
@@ -1142,7 +1174,7 @@ fn test_maintenance_multiple_files() {
     // Run the maintenance command on both databases
     let maintenance_cmd =
         format!("maintenance {} {}", db_path1.to_string_lossy(), db_path2.to_string_lossy());
-    pc_maint.call(&maintenance_cmd).assert().success();
+    call(&helper_maint, &maintenance_cmd).assert().success();
 
     // Reconnect to check results
     let conn1_after = Connection::open(&db_path1).unwrap();
@@ -1198,8 +1230,8 @@ fn test_maintenance_multiple_files() {
 #[test]
 fn test_maintenance_clean_nonstandard_tables() {
     // Create database directly for faster setup
-    let pc = PxhCaller::new();
-    let db_path = pc.tmpdir().join("test");
+    let helper = PxhTestHelper::new();
+    let db_path = helper.db_path().to_path_buf();
 
     // Direct database setup is much faster than using CLI commands
     let mut conn = Connection::open(&db_path).unwrap();
@@ -1282,7 +1314,7 @@ fn test_maintenance_clean_nonstandard_tables() {
 
     // Run maintenance command
     println!("Running maintenance command...");
-    pc.call("maintenance").assert().success();
+    call(&helper, "maintenance").assert().success();
 
     // Reconnect and check what tables remain
     let conn_after = Connection::open(&db_path).unwrap();
@@ -1348,10 +1380,10 @@ fn test_maintenance_clean_nonstandard_tables() {
 
 #[test]
 fn test_autosuggest() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     let insert = |cmd: &str, ts: u64| {
-        pc.call(format!(
+        call(&helper, &format!(
             "insert --shellname zsh --hostname h --username u --session-id 1 --start-unix-timestamp {ts} -- {cmd}"
         ))
         .assert()
@@ -1364,7 +1396,7 @@ fn test_autosuggest() {
     insert("cargo build", 400);
 
     let autosuggest = |prefix: &str| {
-        let mut cmd = pc.call("autosuggest");
+        let mut cmd = call(&helper, "autosuggest");
         cmd.arg("--").arg(prefix);
         cmd.output().unwrap().stdout
     };
@@ -1388,80 +1420,81 @@ fn test_autosuggest() {
 
 #[test]
 fn show_with_failed_flag() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
     // Insert a successful command (exit_status = 0)
-    pc.call("insert --shellname zsh --hostname h --username u --session-id 1 --exit-status 0 success_cmd")
+    call(&helper, "insert --shellname zsh --hostname h --username u --session-id 1 --exit-status 0 success_cmd")
         .assert()
         .success();
 
     // Insert a failed command (exit_status = 1)
-    pc.call("insert --shellname zsh --hostname h --username u --session-id 1 --exit-status 1 failed_cmd")
+    call(&helper, "insert --shellname zsh --hostname h --username u --session-id 1 --exit-status 1 failed_cmd")
         .assert()
         .success();
 
     // Insert a command with no exit status (unsealed)
-    pc.call("insert --shellname zsh --hostname h --username u --session-id 1 unsealed_cmd")
+    call(&helper, "insert --shellname zsh --hostname h --username u --session-id 1 unsealed_cmd")
         .assert()
         .success();
 
     // Without --failed, we see all three
-    let output = pc.call("show --suppress-headers").output().unwrap();
+    let output = call(&helper, "show --suppress-headers").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 3);
 
     // With --failed, we only see the failed one
-    let output = pc.call("show --suppress-headers --failed").output().unwrap();
+    let output = call(&helper, "show --suppress-headers --failed").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
     assert!(String::from_utf8_lossy(&output.stdout).contains("failed_cmd"));
 
     // Short flag -F works too
-    let output = pc.call("show --suppress-headers -F").output().unwrap();
+    let output = call(&helper, "show --suppress-headers -F").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
     assert!(String::from_utf8_lossy(&output.stdout).contains("failed_cmd"));
 }
 
 #[test]
 fn show_with_short_here_flag() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
     let cwd = env::current_dir().unwrap_or_default();
 
-    pc.call(format!(
+    call(&helper, &format!(
         "insert --shellname s --hostname h --username u --session-id 1 --working-directory {} here_cmd",
         cwd.to_string_lossy()
     ))
     .assert()
     .success();
 
-    pc.call("insert --shellname s --hostname h --username u --session-id 1 --working-directory /other other_cmd")
+    call(&helper, "insert --shellname s --hostname h --username u --session-id 1 --working-directory /other other_cmd")
         .assert()
         .success();
 
     // -H should work the same as --here
-    let output = pc.call("show --suppress-headers -H").output().unwrap();
+    let output = call(&helper, "show --suppress-headers -H").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
     assert!(String::from_utf8_lossy(&output.stdout).contains("here_cmd"));
 }
 
 #[test]
 fn show_working_directory_implies_here() {
-    let pc = PxhCaller::new();
+    let helper = PxhTestHelper::new();
 
-    pc.call("insert --shellname s --hostname h --username u --session-id 1 --working-directory /mydir wd_cmd")
+    call(&helper, "insert --shellname s --hostname h --username u --session-id 1 --working-directory /mydir wd_cmd")
         .assert()
         .success();
 
-    pc.call("insert --shellname s --hostname h --username u --session-id 1 --working-directory /other other_cmd")
+    call(&helper, "insert --shellname s --hostname h --username u --session-id 1 --working-directory /other other_cmd")
         .assert()
         .success();
 
     // --working-directory without --here should still filter by directory
-    let output = pc.call("show --suppress-headers --working-directory /mydir").output().unwrap();
+    let output =
+        call(&helper, "show --suppress-headers --working-directory /mydir").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 1);
     assert!(String::from_utf8_lossy(&output.stdout).contains("wd_cmd"));
 
     // Nonexistent directory returns no results
     let output =
-        pc.call("show --suppress-headers --working-directory /nonexistent").output().unwrap();
+        call(&helper, "show --suppress-headers --working-directory /nonexistent").output().unwrap();
     assert_eq!(count_lines(&output.stdout), 0);
 }
 

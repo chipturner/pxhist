@@ -1168,6 +1168,19 @@ pub mod test_utils {
         path
     }
 
+    /// A bare `pxh` process with only the coverage environment propagated.
+    /// For tests that build their own HOME/DB environment; everything else
+    /// should use `PxhTestHelper::command()`.
+    pub fn pxh_command() -> Command {
+        let mut cmd = Command::new(pxh_path());
+        for key in ["LLVM_PROFILE_FILE", "CARGO_LLVM_COV"] {
+            if let Ok(v) = env::var(key) {
+                cmd.env(key, v);
+            }
+        }
+        cmd
+    }
+
     fn generate_random_string(length: usize) -> String {
         rand::rng().sample_iter(&Alphanumeric).take(length).map(char::from).collect()
     }
@@ -1254,11 +1267,10 @@ pub mod test_utils {
             cmd.env("PATH", self.get_full_path());
 
             // Propagate coverage environment variables if they exist
-            if let Ok(profile_file) = env::var("LLVM_PROFILE_FILE") {
-                cmd.env("LLVM_PROFILE_FILE", profile_file);
-            }
-            if let Ok(llvm_cov) = env::var("CARGO_LLVM_COV") {
-                cmd.env("CARGO_LLVM_COV", llvm_cov);
+            for key in ["LLVM_PROFILE_FILE", "CARGO_LLVM_COV"] {
+                if let Ok(v) = env::var(key) {
+                    cmd.env(key, v);
+                }
             }
 
             cmd

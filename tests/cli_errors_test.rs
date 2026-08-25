@@ -1,8 +1,6 @@
 //! Errors reach the user as `error: <message>` on stderr -- never as Rust
 //! Debug output (`Error: Os { code: 13, ... }`) and never quoted.
 
-// `common` also exports the legacy `PxhCaller`, which this file has no use for.
-#[allow(dead_code)]
 mod common;
 
 use common::PxhTestHelper;
