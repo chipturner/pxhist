@@ -12,6 +12,7 @@
       "Bash(just coverage-html)",
       "Bash(just coverage-clean)",
       "Bash(just cargo-upgrade:*)",
+      "Bash(just mutants:*)",
       "Bash(./target/debug/pxh:*)",
       "Bash(./target/release/pxh:*)",
       "WebFetch(domain:docs.rs)",

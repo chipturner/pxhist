@@ -34,13 +34,13 @@ cargo-upgrade *args:
 	cargo clippy --all-targets -- -D warnings
 	cargo nextest run
 
-# Run full suite N times and report pass/fail tally
+# Run full suite N times (no retries, no fail-fast) and report pass/fail tally
 stress count="10":
 	#!/usr/bin/env zsh
 	pass=0 fail=0
 	for i in $(seq 1 {{ count }}); do
 		echo -n "Run $i/{{ count }}: "
-		if ! cargo nextest run &>/dev/null; then
+		if ! cargo nextest run --profile stress &>/dev/null; then
 			echo "FAILED"
 			((fail++))
 		else
@@ -74,6 +74,10 @@ coverage-clean:
 docker-e2e:
 	docker build -t pxh-e2e -f tests/docker/Dockerfile .
 	docker run --rm pxh-e2e
+
+# Mutation testing over the pure modules in .cargo/mutants.toml (nightly CI, informational)
+mutants *args:
+	cargo mutants {{ args }}
 
 # Record demo GIFs (requires vhs: https://github.com/charmbracelet/vhs)
 demo *tapes:

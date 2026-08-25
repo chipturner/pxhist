@@ -11,8 +11,9 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Quick validation: `just check` (fmt-check + clippy incl. tests + tests; mirrors the CI gate)
 - Perf guard: `just perf` (release build, 550k synthetic rows, ~1 min)
 - Run tests: `just test` (cargo-nextest; filter with e.g. `just test sync`)
-- Run full suite repeatedly to catch flakes: `just stress` (default 10 runs)
+- Run full suite repeatedly to catch flakes: `just stress` (default 10 runs; uses the `stress` nextest profile: no retries, no fail-fast; nightly CI runs it and files a rolling issue)
 - Docker end-to-end suite: `just docker-e2e`
+- Mutation testing: `just mutants` (cargo-mutants over `.cargo/mutants.toml` scope; nightly CI, informational)
 - Format code: `just fmt`
 - Check formatting without modifying (CI-style): `just fmt-check`
 - Lint: `cargo clippy -- -D warnings`
@@ -106,6 +107,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **Pin complexity with `EXPLAIN QUERY PLAN`.** Hot-path SQL lives in named consts/builders (`SEAL_SQL`, `AUTOSUGGEST_SQL`, `SearchEngine::recall_query`) so plan tests exercise the exact production SQL via `test_utils::explain_query_plan`. Recall/autosuggest must walk `history_start_time` with no `TEMP B-TREE`; seal must be a covering-index seek.
 - **Readline needs echo.** rexpect forks ptys with echo off and GNU readline skips redisplay on a no-echo terminal; shell rc preludes run `stty echo`.
 - `PxhTestHelper` seeds `~/.pxh/config.toml` with `ignore_patterns = []`, so trivial commands (`false`, `cd`, ...) are recorded in tests but not by default.
+- **Retries hide flakes.** The default nextest profile retries the pty suites twice; when hunting a flake use `just stress` / `--profile stress`.
 
 ### Test Helpers
 Located in `pxh::test_utils` (src/lib.rs) and `tests/common/mod.rs`:

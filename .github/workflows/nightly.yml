@@ -1,0 +1,102 @@
+name: Nightly Stress
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  stress:
+    name: Stress Test (5 runs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+
+      # Interactive tests drive real bash and zsh and fail (not skip) if absent.
+      - name: Ensure zsh is available
+        run: which zsh || (sudo apt-get update && sudo apt-get install -y zsh)
+
+      # The `stress` profile disables retries (a pass-on-retry is a flake, and
+      # this job exists to find flakes) and fail-fast. More proptest cases
+      # than a PR run can afford.
+      - name: Run test suite 5 times
+        env:
+          PROPTEST_CASES: "4096"
+        run: |
+          status=0
+          for i in 1 2 3 4 5; do
+            echo "=== Run $i/5 ==="
+            cargo nextest run --locked --profile stress || status=1
+          done
+          exit "$status"
+
+      # A scheduled run has no PR to turn red. Keep one rolling issue.
+      - name: Report failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title="Nightly stress failed"
+          body="Nightly stress run failed: ${RUN_URL}"
+          existing=$(gh issue list --state open --search "in:title \"${title}\"" --json number -q '.[0].number')
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --body "${body}"
+          else
+            gh issue create --title "${title}" --body "${body}"
+          fi
+
+  mutants:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: taiki-e/install-action@nextest
+
+      - uses: taiki-e/install-action@cargo-mutants
+
+      - name: Ensure zsh is available
+        run: which zsh || (sudo apt-get update && sudo apt-get install -y zsh)
+
+      # Informational: survivors are assertion gaps to triage, not a red
+      # build. Promote to a gate once the baseline is clean.
+      - name: Mutants
+        run: |
+          cargo mutants --no-shuffle --jobs 2 --output mutants.out || true
+          {
+            echo '## Mutants'
+            echo
+            echo '### Missed'
+            echo '```'
+            cat mutants.out/missed.txt 2>/dev/null || echo '(none)'
+            echo '```'
+            echo '### Timeouts'
+            echo '```'
+            cat mutants.out/timeout.txt 2>/dev/null || echo '(none)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mutants
+          path: mutants.out

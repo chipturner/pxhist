@@ -24,3 +24,6 @@ docs/superpowers/
 
 # Recorded demo GIFs (regenerate with `just demo`)
 demo/out/
+
+# cargo-mutants output
+mutants.out/

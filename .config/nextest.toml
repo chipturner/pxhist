@@ -1,0 +1,17 @@
+# Interactive suites drive real bash/zsh on a pty (rexpect). They synchronise
+# on a sentinel prompt, not sleeps, so they tolerate load; retries absorb the
+# residual scheduler-jitter flakes a loaded CI runner produces.
+[[profile.default.overrides]]
+filter = 'binary(interactive_shell_test) | binary(recall_test) | binary(ssh_sync_test)'
+retries = 2
+
+[[profile.default.overrides]]
+filter = 'binary(property_test)'
+retries = 0
+
+# Flake hunting (`just stress`, nightly): no retries, so a test that passes on
+# its second try is reported as the failure it is, and no fail-fast, so one
+# failure does not hide the rest of the run's signal.
+[profile.stress]
+retries = 0
+fail-fast = false

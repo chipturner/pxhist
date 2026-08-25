@@ -1,0 +1,23 @@
+# cargo-mutants configuration (`just mutants`, nightly CI).
+#
+# Mutation testing answers the question line coverage cannot: do the tests
+# *assert* on this code, or merely execute it? Scoped to the pure,
+# load-bearing modules where a silent assertion gap would matter most.
+examine_globs = [
+    "src/recall/query.rs",
+    "src/config.rs",
+    "src/sync.rs",
+]
+
+test_tool = "nextest"
+additional_cargo_test_args = [
+    "--lib",
+    "--test", "unit",
+    "--test", "property_test",
+    "--test", "recall_test",
+    "--test", "sync_test",
+]
+
+# Mutants that hang (a mutated loop bound) are killed at this multiple of the
+# baseline run time.
+timeout_multiplier = 3.0
