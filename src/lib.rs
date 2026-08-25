@@ -322,9 +322,8 @@ fn sqlite_connection_inner(
         let resolved = resolve_through_symlinks(parent);
         std::fs::create_dir_all(resolved)?;
     }
-    let conn = anyhow::Context::with_context(Connection::open(path), || {
-        format!("open history database {}", path.display())
-    })?;
+    // No path here: rusqlite's own message already names the file.
+    let conn = anyhow::Context::with_context(Connection::open(path), || "open history database")?;
 
     // Ensure the database file is only readable by the owner
     use std::os::unix::fs::PermissionsExt;

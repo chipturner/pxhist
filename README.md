@@ -288,7 +288,7 @@ pxh stats                 # Show history statistics
 #### Editing Configuration
 
 ```bash
-pxh config                # Create the config file if missing, then open $EDITOR
+pxh config                # Create the config file if missing, then open $VISUAL/$EDITOR
 pxh config --path         # Print the config file path
 ```
 

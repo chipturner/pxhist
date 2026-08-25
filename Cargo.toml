@@ -15,13 +15,17 @@ keywords = ["shell", "history", "search", "bash", "zsh"]
 categories = ["command-line-utilities"]
 license = "MIT"
 exclude = [
+    ".cargo/",
     ".claude/",
+    ".dockerignore",
     ".github/",
     ".gitmodules",
     "CLAUDE.md",
     "contrib/",
     "demo/",
+    "deny.toml",
     "docs/",
+    "install.sh",
     "justfile",
     "secrets-patterns-db/",
     "src/shell_configs/bash-preexec/",

@@ -881,7 +881,7 @@ impl ConfigCommand {
                 fs::create_dir_all(parent)?;
             }
             fs::write(&path, pxh::config::DEFAULT_CONFIG)?;
-            println!("created {}", path.display());
+            pxh::ui::hint(&format!("created {}", path.display()));
         }
 
         // Open in $EDITOR

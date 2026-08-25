@@ -7,11 +7,12 @@ default:
 build:
 	cargo build
 
-# fmt-check + clippy (strict, incl. tests) + nextest -- mirrors the CI gate
+# fmt-check + clippy (strict, incl. tests) + nextest + rustdoc -- mirrors the CI gate
 check:
 	cargo fmt -- --check
 	cargo clippy --all-targets -- -D warnings
 	cargo nextest run
+	RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items
 
 # Recall latency guard at 500k rows (release build; ignored in `just test`)
 perf:
@@ -62,11 +63,11 @@ vendor-update:
 
 # Coverage summary (nextest, so subprocess tests count via --include-ffi)
 coverage:
-	cargo llvm-cov nextest --all-features --workspace --include-ffi
+	CC=clang CXX=clang++ cargo llvm-cov nextest --all-features --workspace --include-ffi
 
 # Coverage with HTML report
 coverage-html:
-	cargo llvm-cov nextest --all-features --workspace --include-ffi --html
+	CC=clang CXX=clang++ cargo llvm-cov nextest --all-features --workspace --include-ffi --html
 	@echo "Report: target/llvm-cov/html/index.html"
 
 coverage-clean:

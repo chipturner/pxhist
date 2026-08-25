@@ -8,7 +8,7 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 
 ## Build Commands
 - Build: `cargo build` or `cargo build --release`
-- Quick validation: `just check` (fmt-check + clippy incl. tests + tests; mirrors the CI gate)
+- Quick validation: `just check` (fmt-check + clippy incl. tests + tests + rustdoc; mirrors the CI gate)
 - Perf guard: `just perf` (release build, 550k synthetic rows, ~1 min)
 - Run tests: `just test` (cargo-nextest; filter with e.g. `just test sync`)
 - Run full suite repeatedly to catch flakes: `just stress` (default 10 runs; uses the `stress` nextest profile: no retries, no fail-fast; nightly CI runs it and files a rolling issue)
@@ -99,6 +99,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/perf_test.rs`**: Recall-latency guard, `#[ignore]`d by default. Times the hot paths (recall load in each mode, TUI init, insert, seal, autosuggest) against 50k- and 500k-row databases and fails if any scales with table size. Run with `just perf` (release build); CI runs it in the `perf` job.
 - **`tests/property_test.rs`**: proptest properties for byte-level paths (zsh unmetafy, continuation-line joining, JSON import round trip of arbitrary bytes)
 - **`tests/docker/`**: Clean-machine user journey on stock Debian: fresh HOME, `pxh install`, commands typed into real interactive bash and zsh via `script(1)`, then search/import/export/scan/scrub/sync (run via `just docker-e2e`)
+- **`tests/cli_errors_test.rs`**: error/warning output contract (`error: <chain>` on stderr, lowercase prefixes, hook-path commands stay quiet on a bad config)
 - **`tests/docs_drift_test.rs`**: README TOML examples must parse as the strict `Config`; `main.rs` tests pin that every non-hidden subcommand is named in the README and run clap's `debug_assert`.
 - **`tests/common/mod.rs`**: Shared test utilities (re-exports `pxh::test_utils`)
 - **`tests/resources/`**: Sample histfiles for import testing (bash simple/timestamped, zsh incl. malformed/multiline)
