@@ -131,6 +131,8 @@ Located in `pxh::test_utils` (src/lib.rs) and `tests/common/mod.rs`:
 Use stdin/stdout mode with `--stdin-stdout` flag for testing sync without SSH overhead. The `spawn_sync_processes()` helper creates bidirectionally connected pxh processes.
 
 ### Testing TUI Components
+Manual runs go through the `verify` skill (`.claude/skills/verify/SKILL.md`): isolated `HOME`/`PXH_DB_PATH`, never the real database.
+
 For testing interactive TUI components (like `pxh recall`), use tmux to capture and validate screen output.
 
 **Important:** When interacting with tmux panes, ALWAYS use `tmux-cli send` instead of plain `tmux send-keys`. Plain tmux commands are unreliable because they send text and Enter simultaneously without any delay, causing race conditions where the Enter key is lost before the target application can process the text input.
