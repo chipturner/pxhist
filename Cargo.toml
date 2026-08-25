@@ -62,6 +62,7 @@ unicode-width = "0.2"
 toml_edit = "0.25.13"
 clap_complete = "4"
 libc = "0.2"
+clap_mangen = "0.3"
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }

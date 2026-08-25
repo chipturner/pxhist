@@ -20,6 +20,10 @@ perf:
 fmt:
 	cargo fmt
 
+# Generate man pages into target/man
+man:
+	cargo run --quiet -- mangen target/man
+
 # Check formatting without modifying (CI-friendly)
 fmt-check:
 	cargo fmt -- --check

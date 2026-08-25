@@ -115,13 +115,20 @@ enum Commands {
         about = "scrub (remove) sensitive history entries, interactively or via secret scanning"
     )]
     Scrub(ScrubCommand),
-    #[clap(about = "(internal) invoked by the shell to insert a history entry")]
+    #[clap(hide = true, about = "(internal) invoked by the shell to insert a history entry")]
     Insert(InsertCommand),
-    #[clap(about = "(internal) seal the previous inserted command to mark status, timing, etc")]
+    #[clap(
+        hide = true,
+        about = "(internal) seal the previous inserted command to mark status, timing, etc"
+    )]
     Seal(SealCommand),
-    #[clap(about = "(internal) shell configuration suitable for `source`'ing to enable pxh")]
+    #[clap(
+        hide = true,
+        about = "(internal) shell configuration suitable for `source`'ing to enable pxh"
+    )]
     ShellConfig(ShellConfigCommand),
     #[clap(
+        hide = true,
         about = "(internal) print the most recent command matching a prefix for zsh-autosuggestions"
     )]
     Autosuggest(AutosuggestCommand),
@@ -139,6 +146,14 @@ enum Commands {
     Config(ConfigCommand),
     #[clap(about = "diagnose common issues and produce diagnostic reports")]
     Doctor(doctor::DoctorCommand),
+    #[clap(hide = true, about = "write man pages into a directory (for packagers)")]
+    Mangen(MangenCommand),
+}
+
+#[derive(Parser, Debug)]
+struct MangenCommand {
+    #[clap(help = "Directory to write pxh.1 and pxh-<subcommand>.1 into")]
+    dir: PathBuf,
 }
 
 #[derive(Parser, Debug)]
@@ -2760,6 +2775,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Doctor(cmd) => {
             cmd.go(&args.db)?;
         }
+        Commands::Mangen(cmd) => {
+            std::fs::create_dir_all(&cmd.dir)?;
+            clap_mangen::generate_to(PxhArgs::command(), &cmd.dir)?;
+        }
     }
     Ok(())
 }
@@ -2824,5 +2843,24 @@ mod tests {
             "should walk newest-first: {plan}"
         );
         assert!(!plan.contains("TEMP B-TREE"), "autosuggest must not sort the table: {plan}");
+    }
+
+    #[test]
+    fn clap_definition_is_consistent() {
+        PxhArgs::command().debug_assert();
+    }
+
+    /// Every subcommand a user can discover via `pxh --help` is documented in
+    /// the README as `pxh <name>`. Hidden (internal) commands are exempt.
+    #[test]
+    fn readme_mentions_every_visible_subcommand() {
+        let readme = include_str!("../README.md");
+        let missing: Vec<String> = PxhArgs::command()
+            .get_subcommands()
+            .filter(|c| !c.is_hide_set())
+            .map(|c| format!("pxh {}", c.get_name()))
+            .filter(|needle| !readme.contains(needle.as_str()))
+            .collect();
+        assert!(missing.is_empty(), "README.md never mentions: {missing:?}");
     }
 }

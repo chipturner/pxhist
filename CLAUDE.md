@@ -47,7 +47,7 @@ All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`.
 - **Show/Search**: Query history with regex patterns, directory filters, session filters. Alias: `pxhs` (symlink/rename binary to invoke `pxh show` directly)
 - **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.config/pxh/config.toml`. Uses nucleo fuzzy matching with `-` and `*` normalized to spaces (acting as word separators)
 - **Sync**: Bidirectional sync via SSH or shared directories with optional `--since` filtering
-- **Insert/Seal**: Internal commands called by shell hooks to record command start/end
+- **Insert/Seal**: Internal commands called by shell hooks to record command start/end. Insert, Seal, ShellConfig, and Autosuggest are `hide = true`: they stay callable but never appear in `pxh --help`
 - **Import**: Bulk import from existing shell history files (bash, zsh, or JSON export)
 - **Export**: Export full history as JSON
 - **Scan**: Detect potential secrets in command history using built-in patterns
@@ -55,6 +55,7 @@ All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`.
 - **Maintenance**: ANALYZE and VACUUM operations, cleans up non-standard tables/indexes
 - **Doctor**: Diagnose and optionally fix (`--fix`) installation/config issues; `--json` for scripts, `--report` for bug reports; fixes are a `Fix` enum on `CheckResult`, never label matching
 - **Autosuggest**: Internal command backing the zsh-autosuggestions strategy in `pxh.zsh`
+- **Mangen**: hidden; `pxh mangen <dir>` / `just man` for packagers
 
 ### Database Design
 - SQLite database at `~/.local/share/pxh/pxh.db` by default (configurable via `--db` or `PXH_DB_PATH`)
@@ -97,6 +98,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/perf_test.rs`**: Recall-latency guard, `#[ignore]`d by default. Times the hot paths (recall load in each mode, TUI init, insert, seal, autosuggest) against 50k- and 500k-row databases and fails if any scales with table size. Run with `just perf` (release build); CI runs it in the `perf` job.
 - **`tests/property_test.rs`**: proptest properties for byte-level paths (zsh unmetafy, continuation-line joining, JSON import round trip of arbitrary bytes)
 - **`tests/docker/`**: Clean-machine user journey on stock Debian: fresh HOME, `pxh install`, commands typed into real interactive bash and zsh via `script(1)`, then search/import/export/scan/scrub/sync (run via `just docker-e2e`)
+- **`tests/docs_drift_test.rs`**: README TOML examples must parse as the strict `Config`; `main.rs` tests pin that every non-hidden subcommand is named in the README and run clap's `debug_assert`.
 - **`tests/common/mod.rs`**: Shared test utilities and compatibility wrappers
 - **`tests/resources/`**: Sample histfiles for import testing (bash simple/timestamped, zsh incl. malformed/multiline)
 

@@ -275,6 +275,13 @@ pxh completions bash    # or: zsh
 pxh stats                 # Show history statistics
 ```
 
+#### Editing Configuration
+
+```bash
+pxh config                # Create the config file if missing, then open $EDITOR
+pxh config --path         # Print the config file path
+```
+
 ## Configuration
 
 pxh reads configuration from `~/.config/pxh/config.toml`. All settings are optional with sensible defaults.

@@ -2199,3 +2199,15 @@ fn version_carries_a_build_id() -> Result<()> {
     assert!(re.is_match(&text), "{text:?}");
     Ok(())
 }
+
+#[test]
+fn mangen_writes_a_page_per_visible_command() -> Result<()> {
+    let helper = PxhTestHelper::new();
+    let dir = helper.home_dir().join("man");
+    let out = helper.command_with_args(&["mangen", dir.to_str().unwrap()]).output()?;
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert!(dir.join("pxh.1").exists());
+    assert!(dir.join("pxh-recall.1").exists());
+    assert!(dir.join("pxh-doctor.1").exists());
+    Ok(())
+}
