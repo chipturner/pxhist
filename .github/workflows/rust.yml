@@ -23,23 +23,14 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-cargo-
+    - uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
@@ -75,7 +66,7 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Build clean-machine image and run the install journey
       run: |
@@ -87,23 +78,14 @@ jobs:
     timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install MSRV Rust
       uses: dtolnay/rust-toolchain@master
       with:
         toolchain: "1.95"
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-msrv-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-msrv-
+    - uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
@@ -120,23 +102,46 @@ jobs:
     timeout-minutes: 20
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-perf-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-perf-
+    - uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@nextest
 
     - name: Run perf guard (release build, ignored-by-default tests)
       run: cargo nextest run --release --locked --run-ignored only --test perf_test --no-capture
+
+  musl-build:
+    name: Musl Release Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        target: [x86_64-unknown-linux-musl, aarch64-unknown-linux-musl]
+    steps:
+    - uses: actions/checkout@v6
+
+    - uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - uses: Swatinem/rust-cache@v2
+
+    - uses: taiki-e/setup-cross-toolchain-action@v1
+      with:
+        target: ${{ matrix.target }}
+
+    - name: Build
+      run: cargo build --release --locked --target ${{ matrix.target }}
+
+    - name: Verify static linkage
+      run: |
+        bin="target/${{ matrix.target }}/release/pxh"
+        file "$bin"
+        file "$bin" | grep -qE 'statically linked|static-pie linked' || {
+          echo "error: $bin is not statically linked" >&2
+          exit 1
+        }

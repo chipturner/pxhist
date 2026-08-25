@@ -21,20 +21,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-        key: ${{ runner.os }}-audit-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-audit-
+    - uses: Swatinem/rust-cache@v2
 
     - name: Install cargo-audit
       uses: taiki-e/install-action@cargo-audit
@@ -47,5 +39,5 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     - uses: EmbarkStudios/cargo-deny-action@v2

@@ -19,21 +19,12 @@ jobs:
     timeout-minutes: 15
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@v6
     
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
     
-    - name: Cache cargo registry
-      uses: actions/cache@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-docs-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-docs-
+    - uses: Swatinem/rust-cache@v2
     
     - name: Generate documentation
       run: cargo doc --no-deps --document-private-items
