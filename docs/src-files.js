@@ -1,2 +1,2 @@
-createSrcSidebar('[["pxh",["",[["recall",[],["command.rs","config.rs","engine.rs","mod.rs","query.rs","tui.rs"]]],["lib.rs","secrets_patterns.rs","sync.rs"]]]]');
-//{"start":19,"fragment_lengths":[139]}
+createSrcSidebar('[["pxh",["",[["recall",[],["command.rs","engine.rs","mod.rs","query.rs","tui.rs"]]],["config.rs","lib.rs","secrets_patterns.rs","sync.rs","ui.rs"]]]]');
+//{"start":19,"fragment_lengths":[147]}

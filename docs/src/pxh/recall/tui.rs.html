@@ -18,9 +18,9 @@
 <a href=#18 id=18 data-nosnippet>18</a>};
 <a href=#19 id=19 data-nosnippet>19</a>
 <a href=#20 id=20 data-nosnippet>20</a><span class="kw">use </span><span class="kw">super</span>::command::{FilterMode, HostFilter};
-<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">super</span>::config::{KeymapMode, PreviewConfig, RecallConfig};
-<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">super</span>::engine::{HistoryEntry, SearchEngine, format_relative_time};
-<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">super</span>::query::RecallQuery;
+<a href=#21 id=21 data-nosnippet>21</a><span class="kw">use </span><span class="kw">super</span>::engine::{HistoryEntry, SearchEngine, format_relative_time};
+<a href=#22 id=22 data-nosnippet>22</a><span class="kw">use </span><span class="kw">super</span>::query::RecallQuery;
+<a href=#23 id=23 data-nosnippet>23</a><span class="kw">use </span><span class="kw">crate</span>::config::{KeymapMode, PreviewConfig, RecallConfig};
 <a href=#24 id=24 data-nosnippet>24</a>
 <a href=#25 id=25 data-nosnippet>25</a><span class="kw">const </span>SCROLL_MARGIN: usize = <span class="number">5</span>;
 <a href=#26 id=26 data-nosnippet>26</a>
@@ -1860,7 +1860,7 @@
 <a href=#1860 id=1860 data-nosnippet>1860</a>
 <a href=#1861 id=1861 data-nosnippet>1861</a>    <span class="attr">#[test]
 <a href=#1862 id=1862 data-nosnippet>1862</a>    </span><span class="kw">fn </span>test_vim_keymap_mode_transitions() {
-<a href=#1863 id=1863 data-nosnippet>1863</a>        <span class="kw">use </span><span class="kw">super</span>::<span class="kw">super</span>::config::KeymapMode;
+<a href=#1863 id=1863 data-nosnippet>1863</a>        <span class="kw">use </span><span class="kw">crate</span>::config::KeymapMode;
 <a href=#1864 id=1864 data-nosnippet>1864</a>        <span class="kw">let </span>conn = rusqlite::Connection::open_in_memory().unwrap();
 <a href=#1865 id=1865 data-nosnippet>1865</a>        <span class="kw">crate</span>::initialize_base_schema(<span class="kw-2">&amp;</span>conn).unwrap();
 <a href=#1866 id=1866 data-nosnippet>1866</a>        <span class="kw">crate</span>::run_schema_migrations(<span class="kw-2">&amp;</span>conn).unwrap();

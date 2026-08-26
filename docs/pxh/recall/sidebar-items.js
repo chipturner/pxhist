@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["command","config","engine","query","tui"],"struct":["RecallCommand"]};
+window.SIDEBAR_ITEMS = {"mod":["command","engine","query","tui"],"struct":["RecallCommand"]};

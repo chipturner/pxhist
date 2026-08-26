@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["DEFAULT_CONFIG"],"enum":["ConfigStatus","KeymapMode"],"fn":["config_status","default_ignore_patterns"],"struct":["Config","HistoryConfig","HostConfig","PreviewConfig","RecallConfig","ShellConfig"]};
