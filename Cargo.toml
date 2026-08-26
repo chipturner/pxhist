@@ -50,7 +50,7 @@ anstream = "1"
 anyhow = "1"
 bstr = { version = "1.13.1", features = ["serde"] }
 clap = { version = "4.6.6", features = ["derive", "env", "wrap_help"] }
-log = "0.4.33"
+log = "0.4.34"
 env_logger = "0.11.11"
 home = "0.5.12"
 itertools = "0.15.0"
