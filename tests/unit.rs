@@ -338,3 +338,70 @@ fn test_dotted_hostname_db_filename() {
 
     assert_ne!(path, path2, "different hostnames must produce different filenames");
 }
+
+// --- bootstrap helpers -------------------------------------------------------
+
+#[test]
+fn test_quote_remote_install_dir_keeps_tilde_expanding_and_quotes_the_rest() {
+    assert_eq!(helpers::quote_remote_install_dir("~"), "\"$HOME\"");
+    assert_eq!(helpers::quote_remote_install_dir("~/.local/bin"), "\"$HOME\"/.local/bin");
+    assert_eq!(helpers::quote_remote_install_dir("~/my bin"), "\"$HOME\"/'my bin'");
+    assert_eq!(helpers::quote_remote_install_dir("/opt/pxh"), "/opt/pxh");
+    assert_eq!(helpers::quote_remote_install_dir("/opt/it's"), "'/opt/it'\\''s'");
+}
+
+#[test]
+fn test_install_command_fails_when_the_fetch_fails_and_quotes_the_release() {
+    let cmd = helpers::install_command("~/.local/bin", "0.10.5");
+    assert!(cmd.starts_with("s=$(curl -sSfL https://raw.githubusercontent.com/chipturner/pxhist/"));
+    assert!(cmd.contains("install.sh) || {"), "fetch failure must abort: {cmd}");
+    assert!(cmd.contains("PXH_INSTALL_DIR=\"$HOME\"/.local/bin sh -c \"$s\" sh 0.10.5"), "{cmd}");
+
+    let cmd = helpers::install_command("/opt/pxh", "la test");
+    assert!(cmd.ends_with("sh -c \"$s\" sh 'la test'"), "{cmd}");
+}
+
+#[test]
+fn test_parse_probe_output_reads_the_last_line_and_exit_127() {
+    use helpers::Probe;
+    assert_eq!(
+        helpers::parse_probe_output(
+            Some(0),
+            "motd noise\npxh 0.10.5 (abc123, SQLite 3.50, schema v3)\n"
+        ),
+        Probe::Version("0.10.5".into())
+    );
+    assert_eq!(helpers::parse_probe_output(Some(127), ""), Probe::NotOnPath);
+    assert_eq!(helpers::parse_probe_output(Some(0), "something else\n"), Probe::Unknown);
+    assert_eq!(helpers::parse_probe_output(Some(255), "pxh 0.10.5\n"), Probe::Unknown);
+    assert_eq!(helpers::parse_probe_output(None, ""), Probe::Unknown);
+}
+
+#[test]
+fn test_bootstrap_report_names_the_outcome() {
+    use helpers::{Probe, bootstrap_report};
+    let ok = bootstrap_report(
+        "devbox",
+        "0.10.5",
+        "~/.local/bin",
+        &Probe::Version("0.10.5".into()),
+        "0.10.5",
+    );
+    assert_eq!(ok, "installed pxh 0.10.5 on devbox (matches this machine)");
+
+    let old = bootstrap_report(
+        "devbox",
+        "latest",
+        "~/.local/bin",
+        &Probe::Version("0.9.0".into()),
+        "0.10.5",
+    );
+    assert!(old.contains("pxh (latest)"), "{old}");
+    assert!(old.contains("0.9.0") && old.contains("0.10.5"), "{old}");
+
+    let off = bootstrap_report("devbox", "0.10.5", "/opt/pxh", &Probe::NotOnPath, "0.10.5");
+    assert!(off.contains("--remote-pxh /opt/pxh/pxh"), "{off}");
+
+    let unknown = bootstrap_report("devbox", "0.10.5", "~/.local/bin", &Probe::Unknown, "0.10.5");
+    assert!(unknown.contains("could not confirm"), "{unknown}");
+}

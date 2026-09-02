@@ -91,6 +91,10 @@ fn test_remote_without_pxh_fails_with_its_exit_status_not_sigpipe() -> Result<()
             stderr.contains("127"),
             "{mode:?}: remote exit status should be reported: {stderr}"
         );
+        assert!(
+            stderr.contains("pxh bootstrap somehost"),
+            "{mode:?}: exit 127 should point at bootstrap: {stderr}"
+        );
     }
     Ok(())
 }

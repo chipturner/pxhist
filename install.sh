@@ -20,6 +20,14 @@ else
     BASE="https://github.com/$REPO/releases/download/v$VERSION"
 fi
 
+# Resolve the install dir before cd'ing into the scratch dir, so a relative
+# PXH_INSTALL_DIR means relative to where the script was started.
+INSTALL_DIR="${PXH_INSTALL_DIR:-$HOME/.local/bin}"
+case "$INSTALL_DIR" in
+    /*) ;;
+    *) INSTALL_DIR="$PWD/$INSTALL_DIR" ;;
+esac
+
 TARBALL="pxh-$TARGET.tar.gz"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -38,7 +46,6 @@ fi
 
 tar xzf "$TARBALL"
 
-INSTALL_DIR="${PXH_INSTALL_DIR:-$HOME/.local/bin}"
 mkdir -p "$INSTALL_DIR"
 mv pxh "$INSTALL_DIR/pxh"
 

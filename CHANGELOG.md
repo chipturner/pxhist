@@ -6,6 +6,14 @@ other.
 
 ## Unreleased
 
+- `pxh bootstrap <host>`: install pxh on a remote host over SSH (this
+  machine's release by default, `--release latest` for the newest), confirm
+  the installed version through the same paths `sync --remote` probes, and
+  run a first sync (`--no-sync` to skip). A remote sync that fails because
+  pxh is missing there now points at it.
+- `install.sh`: a relative `PXH_INSTALL_DIR` is relative to where the script
+  was started, not to its scratch directory (where the binary was deleted
+  on exit).
 - Errors print as `error: <message>` (was Rust Debug output); warnings and
   hints are lowercase `warning:` / `hint:`; `NO_COLOR` honored.
 - Config is strict: unknown keys are reported by `pxh doctor` and the file is

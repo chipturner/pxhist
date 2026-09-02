@@ -111,6 +111,8 @@ enum Commands {
     Export(ExportCommand),
     #[clap(about = "synchronize history with a remote host over SSH or a directory of databases")]
     Sync(SyncCommand),
+    #[clap(about = "install pxh on a remote host over SSH, then sync history with it")]
+    Bootstrap(BootstrapCommand),
     #[clap(
         about = "scrub (remove) sensitive history entries, interactively or via secret scanning"
     )]
@@ -222,7 +224,7 @@ struct ImportCommand {
     dry_run: bool,
 }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Default)]
 struct SyncCommand {
     #[clap(help = "Directory for sync operations (required for directory-based sync)")]
     dirname: Option<PathBuf>,
@@ -269,6 +271,34 @@ struct SyncCommand {
     stdin_stdout: bool,
     #[clap(long, help = "Disable automatic filtering of potential secrets during sync import")]
     no_secret_filter: bool,
+}
+
+#[derive(Parser, Debug)]
+struct BootstrapCommand {
+    #[clap(help = "Remote host to install pxh on ([user@]host)")]
+    host: String,
+    #[clap(
+        long,
+        default_value = "~/.local/bin",
+        help = "Remote install directory (a relative path is relative to the remote home)"
+    )]
+    install_dir: String,
+    #[clap(
+        long,
+        value_name = "VERSION",
+        default_value = env!("CARGO_PKG_VERSION"),
+        help = "Release to install: defaults to this binary's version so both sides speak the same sync protocol; `latest` takes the newest published"
+    )]
+    release: String,
+    #[clap(
+        short = 'e',
+        long,
+        default_value = "ssh",
+        help = "SSH command to use for connection (like rsync's -e option)"
+    )]
+    ssh_cmd: String,
+    #[clap(long, help = "Do not sync history with the host after installing")]
+    no_sync: bool,
 }
 
 #[derive(Parser, Debug)]
@@ -1692,6 +1722,11 @@ impl SyncCommand {
         if let Some(mut child) = child {
             let status = child.wait()?;
             if !status.success() {
+                if status.code() == Some(127)
+                    && let Some(host) = &self.remote
+                {
+                    pxh::ui::hint(&format!("pxh bootstrap {host} installs pxh there"));
+                }
                 return Err(
                     format!("Remote sync failed: remote command exited with {status}").into()
                 );
@@ -2048,6 +2083,83 @@ impl PrintableCommand for ScrubCommand {
         rows: Vec<pxh::Invocation>,
     ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
         Ok(rows)
+    }
+}
+
+impl BootstrapCommand {
+    /// Install this release on the host via install.sh (interactively, so ssh
+    /// may prompt), confirm what landed by asking the remote binary for its
+    /// version through the same candidate paths `sync --remote` probes, then
+    /// run that sync.
+    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+        use pxh::helpers::{self, Probe};
+
+        let local_version = env!("CARGO_PKG_VERSION");
+        let (ssh_cmd, ssh_args) = helpers::parse_ssh_command(&self.ssh_cmd);
+        let ssh = |remote_command: String| {
+            let mut cmd = std::process::Command::new(&ssh_cmd);
+            cmd.args(&ssh_args).arg(&self.host).arg(remote_command);
+            cmd
+        };
+
+        println!("Installing pxh {} on {}...", self.release, self.host);
+        let status = ssh(helpers::install_command(&self.install_dir, &self.release))
+            .status()
+            .map_err(|e| format!("Failed to spawn SSH command: {e}"))?;
+        if !status.success() {
+            return Err(format!(
+                "remote install failed ({status}); if release {} has no published build, retry with --release latest",
+                self.release
+            )
+            .into());
+        }
+
+        let probe = match ssh(helpers::build_remote_pxh_command("pxh", "--version"))
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::inherit())
+            .output()
+        {
+            Ok(out) => helpers::parse_probe_output(
+                out.status.code(),
+                &String::from_utf8_lossy(&out.stdout),
+            ),
+            Err(_) => Probe::Unknown,
+        };
+        let report = helpers::bootstrap_report(
+            &self.host,
+            &self.release,
+            &self.install_dir,
+            &probe,
+            local_version,
+        );
+        if matches!(&probe, Probe::Version(v) if v == local_version) {
+            println!("{report}");
+        } else {
+            pxh::ui::warn(&report);
+        }
+
+        if self.no_sync {
+            pxh::ui::hint(&format!("next: pxh sync --remote {}", self.host));
+            return Ok(());
+        }
+        // An install dir `sync --remote` does not probe still syncs this once,
+        // through the explicit path; the report above said what to pass next time.
+        let remote_pxh = match probe {
+            Probe::NotOnPath => format!("{}/pxh", self.install_dir),
+            _ => "pxh".to_string(),
+        };
+        SyncCommand {
+            remote: Some(self.host.clone()),
+            ssh_cmd: self.ssh_cmd.clone(),
+            remote_pxh,
+            ..Default::default()
+        }
+        .go(conn)?;
+        pxh::ui::hint(&format!(
+            "to record history on {0} too: ssh {0} pxh install bash (or zsh)",
+            self.host
+        ));
+        Ok(())
     }
 }
 
@@ -2719,6 +2831,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(make_conn()?)?;
         }
         Commands::Sync(cmd) => {
+            cmd.go(make_conn()?)?;
+        }
+        Commands::Bootstrap(cmd) => {
             cmd.go(make_conn()?)?;
         }
         Commands::Maintenance(cmd) => {

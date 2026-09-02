@@ -180,6 +180,18 @@ pxh sync --remote myserver --remote-pxh /usr/local/bin/pxh
 
 > **Note:** Remote sync automatically detects whether the remote host uses XDG paths (`~/.local/share/pxh/`) or the legacy path (`~/.pxh/`). Use `--remote-db` to override if needed.
 
+**Not installed on the remote yet?** `pxh bootstrap` installs pxh there over SSH (using `install.sh` and the prebuilt binaries, this machine's version by default), confirms the installed version, and runs a first sync:
+
+```bash
+pxh bootstrap myserver                      # install, verify, sync
+pxh bootstrap myserver --no-sync            # install and verify only
+pxh bootstrap myserver --release latest     # newest published release instead of this version
+pxh bootstrap myserver --install-dir ~/bin  # somewhere other than ~/.local/bin
+pxh bootstrap myserver -e "ssh -p 2222"
+```
+
+The binary alone is enough for sync; to record history on that host too, run `pxh install bash` (or `zsh`) there. An `--install-dir` that `pxh sync` does not probe (`~/.cargo/bin`, `~/bin`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`) still works with `--remote-pxh <dir>/pxh`; bootstrap says so.
+
 #### Shared Directory Synchronization
 
 Use Dropbox, OneDrive, NFS, or any shared filesystem:

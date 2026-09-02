@@ -48,6 +48,7 @@ All commands follow the pattern `PxhArgs -> Commands enum -> XxxCommand struct`.
 - **Show/Search**: Query history with regex patterns, directory filters, session filters. Alias: `pxhs` (symlink/rename binary to invoke `pxh show` directly)
 - **Recall**: Interactive TUI history search bound to Ctrl-R. Supports vim/emacs keymaps, preview pane, quick-select (Alt-1-9), and configurable via `~/.config/pxh/config.toml`. Uses nucleo fuzzy matching with `-` and `*` normalized to spaces (acting as word separators)
 - **Sync**: Bidirectional sync via SSH or shared directories with optional `--since` filtering
+- **Bootstrap**: Install pxh on a remote host over SSH via `install.sh` (this binary's version by default), probe `pxh --version` through the same candidate paths `build_remote_pxh_command` uses for sync, then run a first sync (`--no-sync` skips). Pure pieces (`install_command`, `parse_probe_output`, `bootstrap_report`) live in `pxh::helpers`
 - **Insert/Seal**: Internal commands called by shell hooks to record command start/end. Insert, Seal, ShellConfig, and Autosuggest are `hide = true`: they stay callable but never appear in `pxh --help`
 - **Import**: Bulk import from existing shell history files (bash, zsh, or JSON export)
 - **Export**: Export full history as JSON
@@ -89,6 +90,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **`tests/integration_tests.rs`**: End-to-end command testing using shell history import/export
 - **`tests/sync_test.rs`**: Comprehensive sync functionality tests (directory, remote SSH, stdin/stdout)
 - **`tests/ssh_sync_test.rs`**: SSH-specific sync testing
+- **`tests/bootstrap_test.rs`**: `pxh bootstrap` end to end: a scripted `ssh` runs the remote command string in a second temp `HOME`, a scripted `curl` serves the repo's real `install.sh` and a fake release tarball built from the binary under test; no network
 - **`tests/recall_test.rs`**: Interactive TUI recall functionality tests
 - **`tests/scan_test.rs`**: Secret scanning and pattern detection tests
 - **`tests/unit.rs`**: Unit tests for core functionality

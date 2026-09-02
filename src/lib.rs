@@ -1120,6 +1120,101 @@ pub mod helpers {
         r#"$(if [ -d "${XDG_DATA_HOME:-$HOME/.local/share}/pxh" ]; then echo "${XDG_DATA_HOME:-$HOME/.local/share}/pxh/pxh.db"; elif [ -d "$HOME/.pxh" ]; then echo "$HOME/.pxh/pxh.db"; else echo "${XDG_DATA_HOME:-$HOME/.local/share}/pxh/pxh.db"; fi)"#.to_string()
     }
 
+    // --- bootstrap ----------------------------------------------------------
+
+    const INSTALL_SCRIPT_URL: &str =
+        "https://raw.githubusercontent.com/chipturner/pxhist/main/install.sh";
+
+    /// Single-quote `s` for a POSIX shell unless it is plainly safe as-is.
+    pub fn shell_quote(s: &str) -> String {
+        let safe = |c: char| c.is_ascii_alphanumeric() || "_-./".contains(c);
+        if !s.is_empty() && s.chars().all(safe) {
+            s.to_string()
+        } else {
+            format!("'{}'", s.replace('\'', "'\\''"))
+        }
+    }
+
+    /// Quote `--install-dir` for interpolation into the remote install
+    /// command. A leading `~` becomes `"$HOME"` so it still expands on the
+    /// remote; the rest is quoted so spaces and metacharacters are inert.
+    pub fn quote_remote_install_dir(install_dir: &str) -> String {
+        match install_dir.strip_prefix("~/") {
+            _ if install_dir == "~" => "\"$HOME\"".to_string(),
+            Some(rest) => format!("\"$HOME\"/{}", shell_quote(rest)),
+            None => shell_quote(install_dir),
+        }
+    }
+
+    /// The remote install command line: fetch install.sh, then run it with
+    /// the release as `$1`. The script is fetched into a variable first --
+    /// `sh -c "$(curl ...)"` alone runs an empty command (exit 0) when the
+    /// fetch fails, and the install would be reported as done.
+    pub fn install_command(install_dir: &str, release: &str) -> String {
+        format!(
+            "s=$(curl -sSfL {INSTALL_SCRIPT_URL}) || {{ rc=$?; echo \"could not fetch install.sh\" >&2; exit $rc; }}; \
+             PXH_INSTALL_DIR={} sh -c \"$s\" sh {}",
+            quote_remote_install_dir(install_dir),
+            shell_quote(release)
+        )
+    }
+
+    /// What the post-install probe (`pxh --version` through the same
+    /// candidate paths `sync --remote` uses) established about the remote.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub enum Probe {
+        /// The installed binary answered with its version.
+        Version(String),
+        /// Exit 127: the install dir is not one `sync --remote` probes.
+        NotOnPath,
+        /// ssh failed, or the binary printed something that is not a version.
+        Unknown,
+    }
+
+    /// The probe's answer is its last stdout line (a remote rc file that
+    /// echoes on login puts noise in front of it), of the form
+    /// `pxh X.Y.Z (...)`.
+    pub fn parse_probe_output(status_code: Option<i32>, stdout: &str) -> Probe {
+        match status_code {
+            Some(127) => Probe::NotOnPath,
+            Some(0) => stdout
+                .lines()
+                .last()
+                .and_then(|l| l.trim().strip_prefix("pxh "))
+                .and_then(|rest| rest.split_whitespace().next())
+                .map_or(Probe::Unknown, |v| Probe::Version(v.to_string())),
+            _ => Probe::Unknown,
+        }
+    }
+
+    /// The closing line of a bootstrap: what got installed and whether the
+    /// probe confirmed it.
+    pub fn bootstrap_report(
+        host: &str,
+        release: &str,
+        install_dir: &str,
+        probe: &Probe,
+        local_version: &str,
+    ) -> String {
+        let what =
+            if release == "latest" { "pxh (latest)".to_string() } else { format!("pxh {release}") };
+        match probe {
+            Probe::Version(v) if v == local_version => {
+                format!("installed {what} on {host} (matches this machine)")
+            }
+            Probe::Version(v) => format!(
+                "installed {what} on {host} (version {v}, but this machine is {local_version})"
+            ),
+            Probe::NotOnPath => format!(
+                "installed {what} on {host}, but `pxh sync --remote {host}` will not look in \
+                 {install_dir}; pass --remote-pxh {install_dir}/pxh (or install to ~/.local/bin)"
+            ),
+            Probe::Unknown => {
+                format!("installed {what} on {host} (could not confirm the installed version)")
+            }
+        }
+    }
+
     /// Determine if the executable is being invoked as pxhs (shorthand for pxh show)
     pub fn determine_is_pxhs(args: &[OsString]) -> bool {
         args.first()
