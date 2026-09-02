@@ -190,7 +190,7 @@ pxh bootstrap myserver --install-dir ~/bin  # somewhere other than ~/.local/bin
 pxh bootstrap myserver -e "ssh -p 2222"
 ```
 
-The binary alone is enough for sync; to record history on that host too, run `pxh install bash` (or `zsh`) there. An `--install-dir` that `pxh sync` does not probe (`~/.cargo/bin`, `~/bin`, `~/.local/bin`, `/usr/local/bin`, `/usr/bin`) still works with `--remote-pxh <dir>/pxh`; bootstrap says so.
+The binary alone is enough for sync; to record history on that host too, run `pxh install bash` (or `zsh`) there. Plain `pxh sync --remote` looks for pxh in `~/.cargo/bin`, `~/bin`, `~/.local/bin`, `/usr/local/bin`, and `/usr/bin`, in that order. Bootstrap warns when that lookup would miss the new binary (an `--install-dir` elsewhere) or pick an older one (say, a stale `cargo install`), and names the `--remote-pxh <dir>/pxh` to pass; its own first sync always uses the binary it installed.
 
 #### Shared Directory Synchronization
 

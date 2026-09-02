@@ -2088,9 +2088,9 @@ impl PrintableCommand for ScrubCommand {
 
 impl BootstrapCommand {
     /// Install this release on the host via install.sh (interactively, so ssh
-    /// may prompt), confirm what landed by asking the remote binary for its
-    /// version through the same candidate paths `sync --remote` probes, then
-    /// run that sync.
+    /// may prompt), confirm what landed by asking the installed binary for
+    /// its version, check that plain `sync --remote` would find that same
+    /// binary, then run a first sync through it.
     fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
         use pxh::helpers::{self, Probe};
 
@@ -2114,7 +2114,7 @@ impl BootstrapCommand {
             .into());
         }
 
-        let probe = match ssh(helpers::build_remote_pxh_command("pxh", "--version"))
+        let probe = |remote_command: String| match ssh(remote_command)
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::inherit())
             .output()
@@ -2125,29 +2125,32 @@ impl BootstrapCommand {
             ),
             Err(_) => Probe::Unknown,
         };
-        let report = helpers::bootstrap_report(
-            &self.host,
-            &self.release,
-            &self.install_dir,
-            &probe,
-            local_version,
-        );
-        if matches!(&probe, Probe::Version(v) if v == local_version) {
+
+        // Confirm the install against its own path, never a lookup that an
+        // older pxh earlier in sync's candidate order could answer instead.
+        let remote_pxh = helpers::remote_pxh_path(&self.install_dir);
+        let installed = probe(format!("{remote_pxh} --version"));
+        let report =
+            helpers::bootstrap_report(&self.host, &self.release, &installed, local_version);
+        if matches!(&installed, Probe::Version(v) if v == local_version) {
             println!("{report}");
         } else {
             pxh::ui::warn(&report);
+        }
+        // Then what plain `pxh sync --remote` would run there.
+        let plain = probe(helpers::build_remote_pxh_command("pxh", "--version"));
+        if let Some(warning) =
+            helpers::findability_report(&self.host, &self.install_dir, &installed, &plain)
+        {
+            pxh::ui::warn(&warning);
         }
 
         if self.no_sync {
             pxh::ui::hint(&format!("next: pxh sync --remote {}", self.host));
             return Ok(());
         }
-        // An install dir `sync --remote` does not probe still syncs this once,
-        // through the explicit path; the report above said what to pass next time.
-        let remote_pxh = match probe {
-            Probe::NotOnPath => format!("{}/pxh", self.install_dir),
-            _ => "pxh".to_string(),
-        };
+        // The first sync goes through the binary just installed, whatever
+        // plain sync would have picked.
         SyncCommand {
             remote: Some(self.host.clone()),
             ssh_cmd: self.ssh_cmd.clone(),

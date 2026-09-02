@@ -4,8 +4,9 @@
 //! `$HOME` on this machine. No network, no sshd.
 //!
 //! Bootstrap hands the remote login shell one command string (fetch
-//! install.sh, run it with `PXH_INSTALL_DIR`), probes `pxh --version` through
-//! the same candidate paths `pxh sync --remote` uses, then runs that sync.
+//! install.sh, run it with `PXH_INSTALL_DIR`), probes `pxh --version` at the
+//! install path and again through the candidate paths `pxh sync --remote`
+//! uses, then syncs through the installed path.
 //! All of that runs for real here; only `ssh` (runs the string locally) and
 //! `curl` (serves local files) are scripted.
 
@@ -233,11 +234,13 @@ fn bootstrap_installs_this_release_confirms_it_and_syncs() {
     assert!(all.contains(&format!("installed pxh {RELEASE} on {HOST}")), "{all}");
     assert!(all.contains("matches this machine"), "{all}");
 
-    // install, probe, sync: three ssh round trips, the last one a real sync
-    // through the freshly installed binary.
+    // install, probe the installed path, probe what plain sync would find,
+    // sync: four ssh round trips, the last a real sync through the exact
+    // binary just installed.
     let calls = f.ssh_calls();
-    assert_eq!(calls.len(), 3, "{calls:#?}");
-    assert!(calls[2].contains("sync --server"), "{calls:#?}");
+    assert_eq!(calls.len(), 4, "{calls:#?}");
+    assert!(calls[3].contains(".local/bin/pxh --db"), "{calls:#?}");
+    assert!(calls[3].contains("sync --server"), "{calls:#?}");
     assert_eq!(count_commands(&f.remote_db()), 3, "{all}");
     assert!(all.contains(&format!("ssh {HOST} pxh install")), "{all}");
 }
@@ -249,7 +252,7 @@ fn bootstrap_no_sync_stops_after_the_probe_and_points_at_sync() {
     let out = f.bootstrap(&["--no-sync"]);
     let all = text(&out);
     assert!(out.status.success(), "{all}");
-    assert_eq!(f.ssh_calls().len(), 2, "{:#?}", f.ssh_calls());
+    assert_eq!(f.ssh_calls().len(), 3, "{:#?}", f.ssh_calls());
     assert!(!f.remote_db().exists(), "{all}");
     assert!(all.contains(&format!("pxh sync --remote {HOST}")), "{all}");
 }
@@ -315,5 +318,44 @@ fn bootstrap_install_dir_off_the_sync_path_warns_and_syncs_explicitly() {
     assert!(all.contains("--remote-pxh opt/pxh/pxh"), "{all}");
     let calls = f.ssh_calls();
     assert!(calls.last().unwrap().contains("opt/pxh/pxh --db"), "{calls:#?}");
+    assert_eq!(count_commands(&f.remote_db()), 3, "{all}");
+}
+
+/// A stale pxh earlier in sync's candidate order (`~/.cargo/bin` beats
+/// `~/.local/bin`) must not be mistaken for the one just installed: the
+/// install is confirmed against its own path, the first sync goes through
+/// that path, and the shadowing is called out for future plain syncs.
+#[test]
+fn bootstrap_reports_a_stale_pxh_that_shadows_the_install_for_plain_sync() {
+    let f = Fixture::new();
+    f.seed_local_history();
+    let stale_dir = f.remote_home.join(".cargo/bin");
+    fs::create_dir_all(&stale_dir).unwrap();
+    let stale = stale_dir.join("pxh");
+    fs::write(
+        &stale,
+        "#!/bin/sh\n[ \"$1\" = --version ] && { echo 'pxh 0.1.0 (stale)'; exit 0; }\n\
+         echo 'stale pxh cannot sync' >&2; exit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(&stale, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let out = f.bootstrap(&[]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    assert!(all.contains("matches this machine"), "{all}");
+    assert!(all.contains("0.1.0") && all.contains("shadows"), "{all}");
+    assert!(all.contains("--remote-pxh ~/.local/bin/pxh"), "{all}");
+    assert_eq!(count_commands(&f.remote_db()), 3, "sync must use the new binary: {all}");
+}
+
+#[test]
+fn bootstrap_install_dir_with_spaces_installs_and_syncs() {
+    let f = Fixture::new();
+    f.seed_local_history();
+    let out = f.bootstrap(&["--install-dir", "my bin"]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    assert_eq!(f.installed(), vec![f.remote_home.join("my bin/pxh")], "{all}");
     assert_eq!(count_commands(&f.remote_db()), 3, "{all}");
 }

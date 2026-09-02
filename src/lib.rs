@@ -1187,12 +1187,17 @@ pub mod helpers {
         }
     }
 
-    /// The closing line of a bootstrap: what got installed and whether the
-    /// probe confirmed it.
+    /// The installed executable as a remote shell word: quoted like the
+    /// install dir, so a directory with spaces works and `~` still expands.
+    pub fn remote_pxh_path(install_dir: &str) -> String {
+        format!("{}/pxh", quote_remote_install_dir(install_dir))
+    }
+
+    /// The install line of a bootstrap: what got installed and whether the
+    /// probe of its own path confirmed it.
     pub fn bootstrap_report(
         host: &str,
         release: &str,
-        install_dir: &str,
         probe: &Probe,
         local_version: &str,
     ) -> String {
@@ -1205,13 +1210,33 @@ pub mod helpers {
             Probe::Version(v) => format!(
                 "installed {what} on {host} (version {v}, but this machine is {local_version})"
             ),
-            Probe::NotOnPath => format!(
-                "installed {what} on {host}, but `pxh sync --remote {host}` will not look in \
-                 {install_dir}; pass --remote-pxh {install_dir}/pxh (or install to ~/.local/bin)"
-            ),
-            Probe::Unknown => {
+            Probe::NotOnPath | Probe::Unknown => {
                 format!("installed {what} on {host} (could not confirm the installed version)")
             }
+        }
+    }
+
+    /// Whether plain `pxh sync --remote <host>` would run the binary just
+    /// installed: `plain` is the probe through sync's candidate paths,
+    /// `installed` the probe of the install path. `None` when they agree (or
+    /// nothing can be said); otherwise the warning naming the fix.
+    pub fn findability_report(
+        host: &str,
+        install_dir: &str,
+        installed: &Probe,
+        plain: &Probe,
+    ) -> Option<String> {
+        let fix = format!("pass --remote-pxh {install_dir}/pxh");
+        match (installed, plain) {
+            (_, Probe::NotOnPath) => Some(format!(
+                "`pxh sync --remote {host}` will not look in {install_dir}; {fix} \
+                 (or install to ~/.local/bin)"
+            )),
+            (Probe::Version(new), Probe::Version(found)) if new != found => Some(format!(
+                "another pxh ({found}) shadows the one just installed for plain \
+                 `pxh sync --remote {host}`; remove it or {fix}"
+            )),
+            _ => None,
         }
     }
 

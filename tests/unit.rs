@@ -380,28 +380,41 @@ fn test_parse_probe_output_reads_the_last_line_and_exit_127() {
 #[test]
 fn test_bootstrap_report_names_the_outcome() {
     use helpers::{Probe, bootstrap_report};
-    let ok = bootstrap_report(
-        "devbox",
-        "0.10.5",
-        "~/.local/bin",
-        &Probe::Version("0.10.5".into()),
-        "0.10.5",
-    );
+    let ok = bootstrap_report("devbox", "0.10.5", &Probe::Version("0.10.5".into()), "0.10.5");
     assert_eq!(ok, "installed pxh 0.10.5 on devbox (matches this machine)");
 
-    let old = bootstrap_report(
-        "devbox",
-        "latest",
-        "~/.local/bin",
-        &Probe::Version("0.9.0".into()),
-        "0.10.5",
-    );
+    let old = bootstrap_report("devbox", "latest", &Probe::Version("0.9.0".into()), "0.10.5");
     assert!(old.contains("pxh (latest)"), "{old}");
     assert!(old.contains("0.9.0") && old.contains("0.10.5"), "{old}");
 
-    let off = bootstrap_report("devbox", "0.10.5", "/opt/pxh", &Probe::NotOnPath, "0.10.5");
+    for probe in [Probe::Unknown, Probe::NotOnPath] {
+        let unknown = bootstrap_report("devbox", "0.10.5", &probe, "0.10.5");
+        assert!(unknown.contains("could not confirm"), "{unknown}");
+    }
+}
+
+/// What plain `pxh sync --remote` would run, compared with what bootstrap
+/// installed: silent when they agree, a warning naming the fix otherwise.
+#[test]
+fn test_findability_report_flags_off_path_and_shadowed_installs() {
+    use helpers::{Probe, findability_report};
+    let v = |s: &str| Probe::Version(s.to_string());
+
+    assert_eq!(findability_report("devbox", "~/.local/bin", &v("0.10.5"), &v("0.10.5")), None);
+    assert_eq!(findability_report("devbox", "~/.local/bin", &v("0.10.5"), &Probe::Unknown), None);
+
+    let off = findability_report("devbox", "/opt/pxh", &v("0.10.5"), &Probe::NotOnPath).unwrap();
+    assert!(off.contains("pxh sync --remote devbox"), "{off}");
     assert!(off.contains("--remote-pxh /opt/pxh/pxh"), "{off}");
 
-    let unknown = bootstrap_report("devbox", "0.10.5", "~/.local/bin", &Probe::Unknown, "0.10.5");
-    assert!(unknown.contains("could not confirm"), "{unknown}");
+    let shadow = findability_report("devbox", "~/.local/bin", &v("0.10.5"), &v("0.9.0")).unwrap();
+    assert!(shadow.contains("0.9.0") && shadow.contains("shadows"), "{shadow}");
+    assert!(shadow.contains("--remote-pxh ~/.local/bin/pxh"), "{shadow}");
+}
+
+#[test]
+fn test_remote_pxh_path_is_quoted_and_still_expands_tilde() {
+    assert_eq!(helpers::remote_pxh_path("~/.local/bin"), "\"$HOME\"/.local/bin/pxh");
+    assert_eq!(helpers::remote_pxh_path("~/my bin"), "\"$HOME\"/'my bin'/pxh");
+    assert_eq!(helpers::remote_pxh_path("opt/pxh"), "opt/pxh/pxh");
 }
