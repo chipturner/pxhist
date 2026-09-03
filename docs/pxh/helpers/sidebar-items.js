@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["build_remote_pxh_command","default_remote_db_expr","determine_is_pxhs","get_relative_path_from_home","parse_ssh_command","remote_pxh_candidates"]};
+window.SIDEBAR_ITEMS = {"constant":["INSTALL_SCRIPT_URL"],"enum":["Probe"],"fn":["bootstrap_report","build_remote_pxh_command","default_remote_db_expr","determine_is_pxhs","findability_report","get_relative_path_from_home","install_command","parse_probe_output","parse_ssh_command","quote_remote_install_dir","remote_pxh_candidates","remote_pxh_path","shell_quote"]};
