@@ -6,6 +6,11 @@ other.
 
 ## Unreleased
 
+- `pxh recall` measures commands, the host suffix, the mode indicator, and
+  the cursor position in terminal columns, so CJK and other wide characters
+  no longer overflow the row or misplace the cursor. A command that exactly
+  fits the row is shown whole instead of being cut for a "..." it did not
+  need.
 - The host-settings migration (run by `pxh install` and `pxh config`) reports
   a config parse error or a failed write as a `warning:` line; previously
   those were `log` messages hidden unless `RUST_LOG` was set. `RUST_LOG` no

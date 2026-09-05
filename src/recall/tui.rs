@@ -16,6 +16,7 @@ use crossterm::{
 use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::command::{FilterMode, HostFilter};
 use super::engine::{HistoryEntry, SearchEngine, format_relative_time};
@@ -288,6 +289,29 @@ fn char_pos_from_byte(s: &str, byte_pos: usize) -> usize {
 
 /// Highlight a command using pre-computed match indices from fuzzy matching.
 /// Returns spans with (text, is_highlight) pairs.
+/// Terminal columns a character occupies: 2 for East Asian wide, 0 for
+/// combining marks and controls.
+fn char_width(c: char) -> usize {
+    c.width().unwrap_or(0)
+}
+
+/// Cut `s` to at most `max_width` terminal columns, ending in "..." when cut.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if s.width() <= max_width {
+        return s.to_string();
+    }
+    let budget = max_width.saturating_sub(3);
+    let mut width = 0;
+    let kept: String = s
+        .chars()
+        .take_while(|&c| {
+            width += char_width(c);
+            width <= budget
+        })
+        .collect();
+    format!("{kept}...")
+}
+
 fn highlight_command_with_indices(
     cmd: &str,
     match_indices: &[u32],
@@ -300,14 +324,17 @@ fn highlight_command_with_indices(
     // Build a set of matched character positions for O(1) lookup
     let match_set: HashSet<u32> = match_indices.iter().copied().collect();
 
-    let chars: Vec<char> = cmd.chars().collect();
     let mut spans = Vec::new();
     let mut current_span = String::new();
     let mut current_is_match = false;
 
-    for (i, &c) in chars.iter().enumerate() {
-        // Truncate early to leave room for "..." suffix
-        if i >= max_len.saturating_sub(3) {
+    // A command that fits is never cut; one that does not loses enough
+    // columns to make room for the "..." suffix.
+    let budget = if cmd.width() <= max_len { max_len } else { max_len.saturating_sub(3) };
+    let mut width = 0;
+    for (i, c) in cmd.chars().enumerate() {
+        width += char_width(c);
+        if width > budget {
             // Truncate with ellipsis
             if !current_span.is_empty() {
                 spans.push((current_span, current_is_match));
@@ -1175,13 +1202,7 @@ impl RecallState {
         // Line 1: Full command (can truncate)
         queue!(w, MoveTo(0, start_y + 1), Clear(ClearType::CurrentLine))?;
         let safe_cmd = sanitize_for_display(&entry.command);
-        let cmd_display: String = if safe_cmd.chars().count() > (width as usize).saturating_sub(2) {
-            let truncated: String =
-                safe_cmd.chars().take((width as usize).saturating_sub(5)).collect();
-            format!("{truncated}...")
-        } else {
-            safe_cmd
-        };
+        let cmd_display = truncate_to_width(&safe_cmd, (width as usize).saturating_sub(2));
         write!(w, "  {cmd_display}")?;
 
         // Line 2: Directory and timestamp
@@ -1337,7 +1358,7 @@ impl RecallState {
             } else {
                 None
             };
-            let suffix_len = host_suffix.as_ref().map_or(0, |s| s.chars().count());
+            let suffix_len = host_suffix.as_ref().map_or(0, |s| s.width());
 
             // Sanitize and truncate command to fit (handle UTF-8 safely)
             let safe_cmd = sanitize_for_display(&entry.command);
@@ -1402,7 +1423,7 @@ impl RecallState {
             FilterMode::Global => "[Global]".to_string(),
         };
         let mode_str = format!("{host_str} {dir_str}");
-        let mode_x = term_width.saturating_sub(mode_str.len() as u16 + 1);
+        let mode_x = term_width.saturating_sub(mode_str.width() as u16 + 1);
         queue!(w, MoveTo(mode_x, input_y), SetForegroundColor(Color::Cyan))?;
         write!(w, "{mode_str}")?;
         queue!(w, ResetColor)?;
@@ -1440,7 +1461,7 @@ impl RecallState {
         }
 
         // Position cursor at end of query in input line
-        queue!(w, MoveTo(2 + self.query.len() as u16, input_y))?;
+        queue!(w, MoveTo(2 + self.query.width() as u16, input_y))?;
 
         // Re-enable line wrap
         write!(w, "\x1b[?7h")?;
@@ -2109,6 +2130,30 @@ mod tests {
                 (" bar".to_string(), false),
             ]
         );
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_truncates_by_display_width() {
+        use super::highlight_command_with_indices;
+        // Each CJK character occupies two terminal columns: with 8 columns and
+        // "..." reserved, only two characters (4 columns) fit.
+        let spans = highlight_command_with_indices("日本語テスト", &[], 8);
+        assert_eq!(spans, vec![("日本".to_string(), false), ("...".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_fuzzy_highlight_keeps_command_that_exactly_fits() {
+        use super::highlight_command_with_indices;
+        let spans = highlight_command_with_indices("0123456789", &[], 10);
+        assert_eq!(spans, vec![("0123456789".to_string(), false)]);
+    }
+
+    #[test]
+    fn test_truncate_to_width() {
+        assert_eq!(truncate_to_width("abc", 8), "abc");
+        assert_eq!(truncate_to_width("0123456789", 10), "0123456789");
+        assert_eq!(truncate_to_width("0123456789a", 10), "0123456...");
+        assert_eq!(truncate_to_width("日本語テスト", 8), "日本...");
     }
 
     #[test]
