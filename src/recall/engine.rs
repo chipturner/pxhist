@@ -113,7 +113,7 @@ impl SearchEngine {
             let placeholders: String =
                 self.host_set.iter().map(|_| "CAST(? as blob)").collect::<Vec<_>>().join(", ");
             where_conditions.push(format!("hostname IN ({placeholders})"));
-            params.extend(self.host_set.iter().map(|h| h.to_string()));
+            params.extend(self.host_set.iter().map(ToString::to_string));
         }
 
         Self::push_query_conditions(query, &mut where_conditions, &mut params);
@@ -204,8 +204,7 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
 
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+            .map_or(0, |d| d.as_secs() as i64);
 
         // Nucleo distinguishes whitespace boundaries (BONUS_BOUNDARY_WHITE) from
         // delimiter boundaries (BONUS_BOUNDARY_DELIMITER, ~40% smaller), so for query
@@ -301,8 +300,7 @@ pub fn format_relative_time(timestamp: Option<i64>) -> String {
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
 
     let diff = now - ts;
     if diff < 0 {
@@ -311,7 +309,7 @@ pub fn format_relative_time(timestamp: Option<i64>) -> String {
 
     let diff = diff as u64;
     if diff < 60 {
-        format!("{:>2}s", diff)
+        format!("{diff:>2}s")
     } else if diff < 3600 {
         format!("{:>2}m", diff / 60)
     } else if diff < 86400 {
@@ -1005,7 +1003,7 @@ mod tests {
             seed ^= seed << 17;
             seed
         };
-        let mut queries: Vec<String> = fragments.iter().map(|f| f.to_string()).collect();
+        let mut queries: Vec<String> = fragments.iter().map(ToString::to_string).collect();
         for _ in 0..200 {
             let a = fragments[(next() % fragments.len() as u64) as usize];
             let b = fragments[(next() % fragments.len() as u64) as usize];

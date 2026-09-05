@@ -84,8 +84,7 @@ fn emit_build_id() {
             let dirty = Command::new("git")
                 .args(["diff", "--quiet", "HEAD"])
                 .status()
-                .map(|s| !s.success())
-                .unwrap_or(false);
+                .is_ok_and(|s| !s.success());
             if dirty { format!("{hash}-dirty") } else { hash }
         }
         None => format!("v{}", env::var("CARGO_PKG_VERSION").unwrap_or_default()),
@@ -135,7 +134,7 @@ fn main() {
     for entry in patterns_file.patterns {
         let name = escape_string(&entry.pattern.name);
         let regex = escape_string(&entry.pattern.regex);
-        let tuple = format!("(\"{}\", \"{}\")", name, regex);
+        let tuple = format!("(\"{name}\", \"{regex}\")");
 
         if CRITICAL_PATTERN_NAMES.contains(&entry.pattern.name.as_str()) {
             critical_patterns.push(tuple);
@@ -145,7 +144,7 @@ fn main() {
         match entry.pattern.confidence.as_str() {
             "high" => high_patterns.push(tuple),
             "low" => low_patterns.push(tuple),
-            other => eprintln!("cargo:warning=Unknown confidence level: {}", other),
+            other => eprintln!("cargo:warning=Unknown confidence level: {other}"),
         }
     }
 

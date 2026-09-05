@@ -280,7 +280,7 @@ fn records_working_directory(shell: Shell) -> Result<()> {
     let invocations = export(&helper)?;
     for (marker, dir) in [("in test1", "test1"), ("in test2", "test2")] {
         let inv = find(&invocations, marker).expect(marker);
-        let cwd = inv.working_directory.as_ref().map(|d| d.to_string()).unwrap_or_default();
+        let cwd = inv.working_directory.as_ref().map(ToString::to_string).unwrap_or_default();
         assert!(cwd.ends_with(dir), "{marker} recorded in {cwd}, expected {dir}");
     }
     Ok(())

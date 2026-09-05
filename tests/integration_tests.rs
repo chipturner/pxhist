@@ -455,7 +455,7 @@ fn export_includes_machine_id() {
         .unwrap();
 
     // Set machine_id directly
-    let conn = rusqlite::Connection::open(helper.db_path()).unwrap();
+    let conn = Connection::open(helper.db_path()).unwrap();
     conn.execute("UPDATE command_history SET machine_id = 42 WHERE session_id = 1", []).unwrap();
     drop(conn);
 
@@ -1043,7 +1043,7 @@ fn test_maintenance() {
     let remaining_rows: i64 =
         conn.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
 
-    println!("Database has {} rows before maintenance", remaining_rows);
+    println!("Database has {remaining_rows} rows before maintenance");
     assert!(remaining_rows > 100, "Should have enough rows for testing");
 
     // Run the maintenance command via CLI
@@ -1062,7 +1062,7 @@ fn test_maintenance() {
         )
         .unwrap();
 
-    println!("Database size before: {} bytes, after: {} bytes", initial_size, after_size);
+    println!("Database size before: {initial_size} bytes, after: {after_size} bytes");
 
     // After running VACUUM, the database should be smaller and have no freelist
     let freelist_count_after: i64 =
@@ -1082,7 +1082,7 @@ fn test_maintenance() {
     let stat_entries: i64 =
         conn_after.query_row("SELECT COUNT(*) FROM sqlite_stat1", [], |r| r.get(0)).unwrap_or(0);
 
-    println!("Database has {} statistic entries after ANALYZE", stat_entries);
+    println!("Database has {stat_entries} statistic entries after ANALYZE");
     assert!(stat_entries > 0, "sqlite_stat1 should have entries after ANALYZE");
 }
 
@@ -1124,7 +1124,7 @@ fn test_maintenance_multiple_files() {
             let shellname = if i % 2 == 0 { "zsh" } else { "bash" };
             let hostname = format!("host{}", i % 2 + 1);
             let username = format!("user{}", i % 2 + 1);
-            let command = format!("{}_{}", command_prefix, i);
+            let command = format!("{command_prefix}_{i}");
 
             // Direct SQL insert is much faster than command-line
             tx.execute(
@@ -1169,7 +1169,7 @@ fn test_maintenance_multiple_files() {
     let (_conn1, rows_before1) = setup_test_db(&db_path1, 300, "command_db1");
     let (_conn2, rows_before2) = setup_test_db(&db_path2, 300, "command_db2");
 
-    println!("Database 1: {} rows, Database 2: {} rows", rows_before1, rows_before2);
+    println!("Database 1: {rows_before1} rows, Database 2: {rows_before2} rows");
 
     // Run the maintenance command on both databases
     let maintenance_cmd =
@@ -1186,10 +1186,7 @@ fn test_maintenance_multiple_files() {
     let rows_after2: i64 =
         conn2_after.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get(0)).unwrap();
 
-    println!(
-        "After maintenance - Database 1: {} rows, Database 2: {} rows",
-        rows_after1, rows_after2
-    );
+    println!("After maintenance - Database 1: {rows_after1} rows, Database 2: {rows_after2} rows");
     assert_eq!(rows_before1, rows_after1, "Row count should be the same after maintenance for DB1");
     assert_eq!(rows_before2, rows_after2, "Row count should be the same after maintenance for DB2");
 
@@ -1260,7 +1257,7 @@ fn test_maintenance_clean_nonstandard_tables() {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 i,
-                format!("command{}", i),
+                format!("command{i}"),
                 "bash",
                 "host1",
                 "user1",
@@ -1346,7 +1343,7 @@ fn test_maintenance_clean_nonstandard_tables() {
     // Print remaining objects for debugging
     println!("Database objects after maintenance:");
     for (name, type_) in &tables_after {
-        println!("  {} ({})", name, type_);
+        println!("  {name} ({type_})");
     }
 
     // Helper function to check if an object exists
@@ -1512,8 +1509,8 @@ fn insert_ignores_configured_patterns() {
 
     // Write config with ignore patterns
     let config_path = caller.home_dir().join(".pxh/config.toml");
-    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
-    std::fs::write(
+    fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    fs::write(
         &config_path,
         r#"
 [history]
@@ -1582,7 +1579,7 @@ fn insert_filters_with_default_patterns() {
     let caller = PxhTestHelper::new();
 
     // Remove the test config so default ignore patterns apply
-    let _ = std::fs::remove_file(caller.home_dir().join(".pxh/config.toml"));
+    let _ = fs::remove_file(caller.home_dir().join(".pxh/config.toml"));
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
 
     let output = caller
@@ -1615,8 +1612,8 @@ fn insert_records_when_ignore_patterns_empty() {
 
     // Explicit empty ignore list disables filtering
     let config_dir = caller.home_dir().join(".pxh");
-    std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(config_dir.join("config.toml"), "[history]\nignore_patterns = []\n").unwrap();
+    fs::create_dir_all(&config_dir).unwrap();
+    fs::write(config_dir.join("config.toml"), "[history]\nignore_patterns = []\n").unwrap();
 
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
 
@@ -1724,7 +1721,7 @@ fn maintenance_rejects_non_pxh_database() {
     let non_pxh_db = helper.home_dir().join("not_pxh.db");
 
     // Create a valid SQLite database that is NOT a pxh database
-    let conn = rusqlite::Connection::open(&non_pxh_db).unwrap();
+    let conn = Connection::open(&non_pxh_db).unwrap();
     conn.execute_batch(
         "CREATE TABLE bookmarks (id INTEGER PRIMARY KEY, url TEXT);
          INSERT INTO bookmarks VALUES (1, 'https://example.com');",
@@ -1747,7 +1744,7 @@ fn maintenance_rejects_non_pxh_database() {
     );
 
     // Verify the database is untouched
-    let conn = rusqlite::Connection::open(&non_pxh_db).unwrap();
+    let conn = Connection::open(&non_pxh_db).unwrap();
     let url: String =
         conn.query_row("SELECT url FROM bookmarks WHERE id = 1", [], |r| r.get(0)).unwrap();
     assert_eq!(url, "https://example.com", "non-pxh database should be untouched");
@@ -2195,9 +2192,9 @@ fn export_import_preserves_non_utf8_command_bytes() {
 fn config_creates_the_commented_template_when_missing() -> Result<()> {
     let helper = PxhTestHelper::new();
     let out = helper.command_with_args(&["config", "--path"]).output()?;
-    let path = std::path::PathBuf::from(String::from_utf8(out.stdout)?.trim());
+    let path = PathBuf::from(String::from_utf8(out.stdout)?.trim());
     // PxhTestHelper seeds a config; remove it so the "missing" branch runs.
-    let _ = std::fs::remove_file(&path);
+    let _ = fs::remove_file(&path);
 
     let out = helper
         .command_with_args(&["config"])
@@ -2208,7 +2205,7 @@ fn config_creates_the_commented_template_when_missing() -> Result<()> {
 
     // The file is born from the commented template; the host identity the
     // migration stamps in is the only thing added to it.
-    let written = std::fs::read_to_string(&path)?;
+    let written = fs::read_to_string(&path)?;
     let without_identity: String = written
         .lines()
         .filter(|l| !l.starts_with("hostname = ") && !l.starts_with("machine_id = "))

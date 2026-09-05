@@ -83,7 +83,7 @@ fn read_only_uri(path: &Path) -> String {
     for &b in path.as_os_str().as_bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
-                uri.push(b as char)
+                uri.push(b as char);
             }
             _ => uri.push_str(&format!("%{b:02X}")),
         }

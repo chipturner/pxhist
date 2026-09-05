@@ -217,7 +217,7 @@ fn test_path_resolution_across_home_dirs() {
     // Same path for exe and home
     let same_path = PathBuf::from("/home/chip");
     let result4 = helpers::get_relative_path_from_home(Some(&same_path), Some(&same_path));
-    assert_eq!(result4, Some("".to_string()));
+    assert_eq!(result4, Some(String::new()));
 }
 
 #[test]

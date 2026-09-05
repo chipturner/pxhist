@@ -244,8 +244,7 @@ fn test_manual_command_recording() -> Result<()> {
     // Just verify the command was recorded
     assert!(
         history.contains("testhost") || history.contains("echo hello world"),
-        "History should contain our test data: {}",
-        history
+        "History should contain our test data: {history}"
     );
 
     Ok(())

@@ -153,7 +153,7 @@ pub fn migrate_host_settings(conn: &Connection) {
         if !aliases.contains(&old_str) {
             aliases.push(old_str);
         }
-        let alias_array = toml_edit::Array::from_iter(aliases.iter().map(|s| s.as_str()));
+        let alias_array = toml_edit::Array::from_iter(aliases.iter().map(String::as_str));
         updates.push(("host.aliases", toml_edit::value(alias_array)));
         updates.push(("host.hostname", toml_edit::value(live_hostname.to_string())));
     }
@@ -193,7 +193,7 @@ pub fn migrate_host_settings(conn: &Connection) {
 pub fn pxh_data_dir() -> Option<PathBuf> {
     let home = env::home_dir()?;
     let xdg_data =
-        env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share"));
+        env::var("XDG_DATA_HOME").map_or_else(|_| home.join(".local/share"), PathBuf::from);
     let xdg_dir = xdg_data.join("pxh");
     if xdg_dir.exists() {
         return Some(xdg_dir);
@@ -210,7 +210,7 @@ pub fn pxh_data_dir() -> Option<PathBuf> {
 pub fn pxh_config_dir() -> Option<PathBuf> {
     let home = env::home_dir()?;
     let xdg_config =
-        env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".config"));
+        env::var("XDG_CONFIG_HOME").map_or_else(|_| home.join(".config"), PathBuf::from);
     let xdg_dir = xdg_config.join("pxh");
     if xdg_dir.exists() {
         return Some(xdg_dir);
@@ -372,13 +372,13 @@ pub fn with_write_retry<T, F>(
     mut f: F,
 ) -> Result<T, Box<dyn std::error::Error>>
 where
-    F: FnMut(&Transaction) -> rusqlite::Result<T>,
+    F: FnMut(&Transaction) -> Result<T>,
 {
     let start = Instant::now();
     let mut backoff = Duration::from_micros(500);
     let cap = Duration::from_millis(50);
     loop {
-        let attempt = (|| -> rusqlite::Result<T> {
+        let attempt = (|| -> Result<T> {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let value = f(&tx)?;
             tx.commit()?;
@@ -401,10 +401,10 @@ where
     }
 }
 
-fn is_busy(e: &rusqlite::Error) -> bool {
+fn is_busy(e: &Error) -> bool {
     matches!(
         e,
-        rusqlite::Error::SqliteFailure(err, _)
+        Error::SqliteFailure(err, _)
             if matches!(err.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
     )
 }
@@ -416,7 +416,7 @@ fn is_busy(e: &rusqlite::Error) -> bool {
 pub fn read_local_machine_id(conn: &Connection) -> Option<u64> {
     conn.query_row("SELECT value FROM settings WHERE key = 'local_machine_id'", [], |row| {
         let bytes = row.get_ref(0)?.as_bytes().unwrap_or(&[]);
-        Ok(std::str::from_utf8(bytes).ok().and_then(|s| s.parse::<u64>().ok()))
+        Ok(str::from_utf8(bytes).ok().and_then(|s| s.parse::<u64>().ok()))
     })
     .ok()
     .flatten()
@@ -442,7 +442,7 @@ impl Invocation {
         self.command == other.command && self.start_unix_timestamp == other.start_unix_timestamp
     }
 
-    pub fn insert(&self, tx: &Transaction) -> rusqlite::Result<()> {
+    pub fn insert(&self, tx: &Transaction) -> Result<()> {
         tx.execute(
             r#"
 INSERT OR IGNORE INTO command_history (
@@ -555,36 +555,31 @@ pub fn import_zsh_history(
         let Some((start_time, duration_seconds)) = rest.split_once_str(":") else {
             continue;
         };
-        let start_unix_timestamp = match str::from_utf8(start_time.get(1..).unwrap_or(&[]))
+        let Some(start_unix_timestamp) = str::from_utf8(start_time.get(1..).unwrap_or(&[]))
             .ok()
             .and_then(|s| s.parse::<i64>().ok())
-        {
-            Some(ts) => ts,
-            None => {
-                eprintln!(
-                    "warning: {}: skipping line {}: bad timestamp {:?}",
-                    histfile.display(),
-                    line_num + 1,
-                    BString::from(start_time),
-                );
-                skipped += 1;
-                continue;
-            }
+        else {
+            eprintln!(
+                "warning: {}: skipping line {}: bad timestamp {:?}",
+                histfile.display(),
+                line_num + 1,
+                BString::from(start_time),
+            );
+            skipped += 1;
+            continue;
         };
-        let duration =
-            match str::from_utf8(duration_seconds).ok().and_then(|s| s.parse::<i64>().ok()) {
-                Some(d) => d,
-                None => {
-                    eprintln!(
-                        "warning: {}: skipping line {}: bad duration {:?}",
-                        histfile.display(),
-                        line_num + 1,
-                        BString::from(duration_seconds),
-                    );
-                    skipped += 1;
-                    continue;
-                }
-            };
+        let Some(duration) =
+            str::from_utf8(duration_seconds).ok().and_then(|s| s.parse::<i64>().ok())
+        else {
+            eprintln!(
+                "warning: {}: skipping line {}: bad duration {:?}",
+                histfile.display(),
+                line_num + 1,
+                BString::from(duration_seconds),
+            );
+            skipped += 1;
+            continue;
+        };
         let invocation = Invocation {
             command: BString::from(unmetafy(command)),
             shellname: "zsh".into(),
@@ -600,10 +595,10 @@ pub fn import_zsh_history(
     }
 
     if skipped > 0 {
-        crate::ui::warn(&format!(
+        ui::warn(&format!(
             "{}: skipped {}",
             histfile.display(),
-            crate::ui::count(skipped, "malformed line")
+            ui::count(skipped, "malformed line")
         ));
     }
 
@@ -713,7 +708,7 @@ impl From<Option<&Vec<u8>>> for PrettyExportString {
         match bytes {
             Some(v) => match str::from_utf8(v.as_slice()) {
                 Ok(s) => Self::Readable(s.to_string()),
-                _ => Self::Encoded(v.to_vec()),
+                _ => Self::Encoded(v.clone()),
             },
             None => Self::Readable(String::new()),
         }
@@ -744,7 +739,7 @@ impl Invocation {
 }
 
 pub fn json_export(rows: &[Invocation]) -> Result<(), Box<dyn std::error::Error>> {
-    let json_values: Vec<serde_json::Value> = rows.iter().map(|r| r.to_json_export()).collect();
+    let json_values: Vec<serde_json::Value> = rows.iter().map(Invocation::to_json_export).collect();
     serde_json::to_writer(io::stdout(), &json_values)?;
     Ok(())
 }
@@ -762,8 +757,7 @@ fn time_display_helper(t: Option<i64>) -> String {
     // Option/Result/LocalResult cleaner.  Alternative is a closer
     // using `?` chains but that's slightly uglier.
     t.and_then(|t| Local.timestamp_opt(t, 0).single())
-        .map(|t| t.format(TIME_FORMAT).to_string())
-        .unwrap_or_else(|| "n/a".to_string())
+        .map_or_else(|| "n/a".to_string(), |t| t.format(TIME_FORMAT).to_string())
 }
 
 fn binary_display_helper(v: &BString) -> String {
@@ -892,7 +886,7 @@ pub fn present_results_human_readable(
         table.set_titles(title_row);
     }
 
-    for row in rows.iter() {
+    for row in rows {
         let is_failed = matches!(row.exit_status, Some(s) if s != 0);
         let mut display_row = prettytable::Row::empty();
         for field in fields {
@@ -1279,11 +1273,11 @@ pub mod test_utils {
     }
 
     pub fn pxh_path() -> PathBuf {
-        let mut path = std::env::current_exe().unwrap();
+        let mut path = env::current_exe().unwrap();
         path.pop(); // Remove test binary name
         path.pop(); // Remove 'deps'
         path.push("pxh");
-        assert!(path.exists(), "pxh binary not found at {:?}", path);
+        assert!(path.exists(), "pxh binary not found at {path:?}");
         path
     }
 
@@ -1313,11 +1307,13 @@ pub mod test_utils {
             .and_then(|output| {
                 if output.status.success() { String::from_utf8(output.stdout).ok() } else { None }
             })
-            .map(|s| s.trim().to_string())
-            .unwrap_or_else(|| {
-                // Fallback to a reasonable default if getconf fails
-                "/usr/bin:/bin:/usr/sbin:/sbin".to_string()
-            })
+            .map_or_else(
+                || {
+                    // Fallback to a reasonable default if getconf fails
+                    "/usr/bin:/bin:/usr/sbin:/sbin".to_string()
+                },
+                |s| s.trim().to_string(),
+            )
     }
 
     /// Unified test helper for invoking pxh with proper isolation and environment setup
@@ -1605,7 +1601,7 @@ mod tests {
             calls += 1;
             if calls < 3 {
                 // Synthesize a busy error to drive the retry loop.
-                return Err(rusqlite::Error::SqliteFailure(
+                return Err(Error::SqliteFailure(
                     rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
                     None,
                 ));
@@ -1624,10 +1620,7 @@ mod tests {
         let mut conn = Connection::open_in_memory().unwrap();
         let start = Instant::now();
         let result: Result<(), _> = with_write_retry(&mut conn, Duration::from_millis(20), |_tx| {
-            Err(rusqlite::Error::SqliteFailure(
-                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY),
-                None,
-            ))
+            Err(Error::SqliteFailure(rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_BUSY), None))
         });
         let elapsed = start.elapsed();
         assert!(result.is_err());

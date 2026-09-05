@@ -101,9 +101,9 @@ impl RecallCommand {
             if self.timing {
                 let total = start.elapsed();
                 eprintln!("\nTiming:");
-                eprintln!("  Config load:  {:?}", config_time);
-                eprintln!("  DB query:     {:?}", query_time);
-                eprintln!("  Total:        {:?}", total);
+                eprintln!("  Config load:  {config_time:?}");
+                eprintln!("  DB query:     {query_time:?}");
+                eprintln!("  Total:        {total:?}");
                 eprintln!("  Entries:      {}", entries.len());
             }
 
@@ -128,9 +128,9 @@ impl RecallCommand {
 
             if self.timing {
                 eprintln!("Timing:");
-                eprintln!("  Config load:  {:?}", config_time);
-                eprintln!("  TUI init:     {:?}", tui_init_time);
-                eprintln!("  Draw:         {:?}", draw_time);
+                eprintln!("  Config load:  {config_time:?}");
+                eprintln!("  TUI init:     {tui_init_time:?}");
+                eprintln!("  Draw:         {draw_time:?}");
                 eprintln!("  Total:        {:?}", start.elapsed());
             }
             return Ok(());
@@ -138,8 +138,8 @@ impl RecallCommand {
 
         if self.timing {
             eprintln!("Timing (before run):");
-            eprintln!("  Config load:  {:?}", config_time);
-            eprintln!("  TUI init:     {:?}", tui_init_time);
+            eprintln!("  Config load:  {config_time:?}");
+            eprintln!("  TUI init:     {tui_init_time:?}");
             eprintln!("  Total:        {:?}", start.elapsed());
         }
 

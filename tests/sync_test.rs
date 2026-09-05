@@ -471,15 +471,12 @@ fn test_sync_error_handling() -> Result<()> {
 
     let result = spawn_sync_processes(client_args, server_args);
 
-    match result {
-        Ok((client, _server)) => {
-            let client_output = client.wait_with_output()?;
-            // Client should fail due to conflicting options
-            assert!(!client_output.status.success());
-        }
-        Err(_) => {
-            // Expected failure during spawn
-        }
+    if let Ok((client, _server)) = result {
+        let client_output = client.wait_with_output()?;
+        // Client should fail due to conflicting options
+        assert!(!client_output.status.success());
+    } else {
+        // Expected failure during spawn
     }
 
     Ok(())
@@ -531,7 +528,7 @@ fn test_scrub_dir_mode_scan() -> Result<()> {
         ])
         .output()?;
 
-    assert!(output.status.success(), "scrub --dir failed: {:?}", output);
+    assert!(output.status.success(), "scrub --dir failed: {output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("database files"), "Should report found database files");
 
@@ -667,8 +664,7 @@ fn test_sync_filters_secrets_by_default() -> Result<()> {
     let filtering_occurred = client_count == 2 || client_stderr.contains("filtered");
     assert!(
         filtering_occurred,
-        "Secret filtering should have occurred. Client has {} commands, stderr: {}",
-        client_count, client_stderr
+        "Secret filtering should have occurred. Client has {client_count} commands, stderr: {client_stderr}"
     );
 
     // Verify the AWS key command is NOT in the client database
@@ -781,8 +777,7 @@ fn test_remote_scrub_via_v2_protocol() -> Result<()> {
         response.contains("entries")
             || response.contains("scrub")
             || response.contains("No entries"),
-        "Response should mention scrub result: {}",
-        response
+        "Response should mention scrub result: {response}"
     );
 
     Ok(())
@@ -848,8 +843,7 @@ fn test_remote_scrub_with_explicit_pattern() -> Result<()> {
     // Check response
     assert!(
         response.contains("Scrubbed 1 entries") || response.contains("1 entries"),
-        "Response should indicate 1 entry scrubbed: {}",
-        response
+        "Response should indicate 1 entry scrubbed: {response}"
     );
 
     // Verify the command was actually removed
@@ -897,8 +891,7 @@ fn test_scan_dir_mode() -> Result<()> {
     // Should find at least one potential secret (the AWS key)
     assert!(
         stdout.contains("AKIA") || stdout.contains("AWS") || stdout.contains("potential secret"),
-        "Should find AWS key pattern in output: {}",
-        stdout
+        "Should find AWS key pattern in output: {stdout}"
     );
 
     Ok(())
@@ -938,8 +931,7 @@ fn test_scrub_dir_requires_scan_or_pattern() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--scan") || stderr.contains("contraband") || stderr.contains("pattern"),
-        "Error should mention requiring --scan or pattern: {}",
-        stderr
+        "Error should mention requiring --scan or pattern: {stderr}"
     );
 
     Ok(())
@@ -987,8 +979,7 @@ fn test_scrub_remote_requires_scan_or_pattern() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("--scan") || stderr.contains("contraband") || stderr.contains("pattern"),
-        "Error should mention requiring --scan or pattern: {}",
-        stderr
+        "Error should mention requiring --scan or pattern: {stderr}"
     );
 
     Ok(())
@@ -1046,8 +1037,7 @@ fn test_v2_protocol_malformed_json_fails() -> Result<()> {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("Failed to parse v2 protocol options"),
-        "Error should mention parsing failure: {}",
-        stderr
+        "Error should mention parsing failure: {stderr}"
     );
 
     Ok(())
@@ -1077,16 +1067,14 @@ fn test_directory_sync_filters_secrets() -> Result<()> {
     // The output should mention filtering
     assert!(
         stdout.contains("filtered") || count_commands(&target_db)? == 2,
-        "Secret should be filtered during directory sync. Output: {}",
-        stdout
+        "Secret should be filtered during directory sync. Output: {stdout}"
     );
 
     // Verify the target has the normal command but not the secret
     let target_count = count_commands(&target_db)?;
     assert!(
         target_count == 2, // existing + normal command (not the secret)
-        "Expected 2 commands in target (existing + normal), got {}",
-        target_count
+        "Expected 2 commands in target (existing + normal), got {target_count}"
     );
 
     Ok(())
@@ -1313,7 +1301,7 @@ fn test_directory_sync_skips_bad_peer_and_still_publishes() -> Result<()> {
     assert_eq!(count_commands(&local_db)?, 2, "the good peer should still be merged");
 
     let published: Vec<_> = std::fs::read_dir(&sync_dir)?
-        .filter_map(|e| e.ok())
+        .filter_map(std::result::Result::ok)
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .filter(|n| n.ends_with(".db") && n != "peer.db" && n != "junk.db")
         .collect();

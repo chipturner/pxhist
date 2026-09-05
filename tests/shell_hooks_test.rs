@@ -508,7 +508,7 @@ fn test_concurrent_sessions() -> Result<()> {
 
     assert!(show_all.status.success());
     let all_history = String::from_utf8_lossy(&show_all.stdout);
-    eprintln!("All history output:\n{}", all_history);
+    eprintln!("All history output:\n{all_history}");
     assert!(all_history.contains("session 1 command"), "Should contain session 1 command");
     assert!(all_history.contains("session 2 command"), "Should contain session 2 command");
 
@@ -556,7 +556,7 @@ fn test_working_directory_with_newline() -> Result<()> {
             row.get(0)
         })?;
     let wd_str = String::from_utf8_lossy(&wd);
-    assert!(wd_str.contains('\n'), "working directory should contain newline, got: {:?}", wd_str);
+    assert!(wd_str.contains('\n'), "working directory should contain newline, got: {wd_str:?}");
     assert_eq!(wd, weird_dir.to_str().unwrap().as_bytes());
 
     Ok(())

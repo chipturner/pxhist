@@ -413,7 +413,7 @@ impl ImportCommand {
                 }
             }
             "json" => Err(Box::from("--histfile is required for json imports")),
-            _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", shellname))),
+            _ => Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
         }
     }
 
@@ -525,7 +525,7 @@ impl InstallCommand {
         pb.push(rc_file);
 
         // Check what's already installed in the RC file.
-        let contents = std::fs::read_to_string(&pb).unwrap_or_default();
+        let contents = fs::read_to_string(&pb).unwrap_or_default();
         let has_shell_config = contents.contains("pxh shell-config");
 
         if has_shell_config {
@@ -537,7 +537,7 @@ impl InstallCommand {
                     .collect::<Vec<_>>()
                     .join("\n")
                     + "\n";
-                std::fs::write(&pb, new_contents)?;
+                fs::write(&pb, new_contents)?;
                 println!(
                     "Removed separate completions line from {} (now included in shell-config).",
                     pb.display()
@@ -1047,8 +1047,7 @@ impl ScanCommand {
                     [],
                     |r| r.get::<_, i64>(0),
                 )
-                .map(|n| n > 0)
-                .unwrap_or(false);
+                .is_ok_and(|n| n > 0);
             if !is_pxh {
                 pxh::ui::warn(&format!("skipping {} (not a pxh database)", path.display()));
                 skipped_files += 1;
@@ -1125,11 +1124,10 @@ impl ScanCommand {
             let time_str = m.timestamp.map_or_else(
                 || "n/a".to_string(),
                 |ts| {
-                    Local
-                        .timestamp_opt(ts, 0)
-                        .single()
-                        .map(|t| t.format("%Y-%m-%d %H:%M:%S").to_string())
-                        .unwrap_or_else(|| "n/a".to_string())
+                    Local.timestamp_opt(ts, 0).single().map_or_else(
+                        || "n/a".to_string(),
+                        |t| t.format("%Y-%m-%d %H:%M:%S").to_string(),
+                    )
                 },
             );
             if verbose {
@@ -1161,22 +1159,15 @@ pub fn build_secret_patterns(
             v.extend(PATTERNS_HIGH);
             (v, REGEX_SIZE_LIMIT_DEFAULT)
         }
-        "low" => {
+        "low" | "all" => {
             let mut v = PATTERNS_CRITICAL.to_vec();
             v.extend(PATTERNS_HIGH);
             v.extend(PATTERNS_LOW);
             (v, REGEX_SIZE_LIMIT_ALL)
         }
-        "all" => {
-            let mut all = PATTERNS_CRITICAL.to_vec();
-            all.extend(PATTERNS_HIGH);
-            all.extend(PATTERNS_LOW);
-            (all, REGEX_SIZE_LIMIT_ALL)
-        }
         _ => {
             return Err(format!(
-                "Invalid confidence level: '{}'. Use 'critical', 'high', 'low', or 'all'",
-                confidence
+                "Invalid confidence level: '{confidence}'. Use 'critical', 'high', 'low', or 'all'"
             )
             .into());
         }
@@ -1240,16 +1231,10 @@ fn looks_like_zsh_extended_history(line: &[u8]) -> bool {
         return false;
     }
     let rest = &line[2..];
-    let colon_pos = match rest.iter().position(|&b| b == b':') {
-        Some(p) => p,
-        None => return false,
-    };
-    let semi_pos = match rest.iter().position(|&b| b == b';') {
-        Some(p) => p,
-        None => return false,
-    };
+    let Some(colon_pos) = rest.iter().position(|&b| b == b':') else { return false };
+    let Some(semi_pos) = rest.iter().position(|&b| b == b';') else { return false };
     // timestamp field must be all digits, and colon must come before semicolon
-    colon_pos < semi_pos && rest[..colon_pos].iter().all(|b| b.is_ascii_digit())
+    colon_pos < semi_pos && rest[..colon_pos].iter().all(u8::is_ascii_digit)
 }
 
 fn detect_shell_format(content: &[u8]) -> String {
@@ -1323,7 +1308,7 @@ fn scan_histfile(
     let joined;
     let lines: Vec<&[u8]> = if shellname == "zsh" {
         joined = pxh::join_continuation_lines(content);
-        joined.iter().map(|v| v.as_slice()).collect()
+        joined.iter().map(Vec::as_slice).collect()
     } else {
         content.split(|&b| b == b'\n').collect()
     };
@@ -1463,7 +1448,7 @@ fn scrub_from_histfile(
     lines_to_remove.dedup();
 
     let entry_count = matches.iter().filter(|m| m.original_line.is_some()).count();
-    let lines_refs: Vec<&str> = lines_to_remove.iter().map(|s| s.as_str()).collect();
+    let lines_refs: Vec<&str> = lines_to_remove.iter().map(String::as_str).collect();
     pxh::atomically_remove_matching_lines_from_file(histfile, &lines_refs)?;
 
     Ok(entry_count)
@@ -1652,10 +1637,7 @@ impl SyncCommand {
         // Handle stdin/stdout directly or through SSH child process
         let (stdin_writer, mut stdout_reader) = if self.stdin_stdout {
             // Use actual stdin/stdout
-            (
-                Box::new(std::io::stdout()) as Box<dyn Write>,
-                Box::new(std::io::stdin()) as Box<dyn Read>,
-            )
+            (Box::new(io::stdout()) as Box<dyn Write>, Box::new(io::stdin()) as Box<dyn Read>)
         } else {
             // Use SSH child process pipes
             if let Some(ref mut child) = child {
@@ -1789,7 +1771,7 @@ impl SyncCommand {
     fn handle_server_mode(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
         // Read mode from stdin
         let mut mode = String::new();
-        std::io::stdin().read_line(&mut mode)?;
+        io::stdin().read_line(&mut mode)?;
 
         if mode.is_empty() {
             return Err(Box::from("No sync mode received"));
@@ -1801,7 +1783,7 @@ impl SyncCommand {
         let (base_mode, options) = if mode.ends_with("-v2") {
             // v2 protocol: read options JSON from next line
             let mut options_json = String::new();
-            std::io::stdin().read_line(&mut options_json)?;
+            io::stdin().read_line(&mut options_json)?;
             let options: SyncOptions = serde_json::from_str(options_json.trim())
                 .map_err(|e| format!("Failed to parse v2 protocol options: {e}. Client and server may have incompatible versions."))?;
             (mode.strip_suffix("-v2").unwrap(), options)
@@ -1812,16 +1794,16 @@ impl SyncCommand {
         match base_mode {
             "send" => {
                 // Server receives database from client
-                self.receive_database_with_options(&mut std::io::stdin(), conn, &options)?;
+                self.receive_database_with_options(&mut io::stdin(), conn, &options)?;
             }
             "receive" => {
                 // Server sends database to client
-                self.send_database(&mut std::io::stdout(), conn)?;
+                self.send_database(&mut io::stdout(), conn)?;
             }
             "bidirectional" => {
                 // Server receives then sends
-                self.receive_database_with_options(&mut std::io::stdin(), conn, &options)?;
-                self.send_database(&mut std::io::stdout(), conn)?;
+                self.receive_database_with_options(&mut io::stdin(), conn, &options)?;
+                self.send_database(&mut io::stdout(), conn)?;
             }
             "scrub" => {
                 // Remote scrub: execute scrub and return result
@@ -1882,7 +1864,7 @@ impl SyncCommand {
         }
 
         let count = scrub_from_database(conn, &matches)?;
-        Ok(format!("Scrubbed {} entries from remote database.", count))
+        Ok(format!("Scrubbed {count} entries from remote database."))
     }
 
     fn send_database<W: Write>(
@@ -1894,7 +1876,7 @@ impl SyncCommand {
         let temp_file = self.create_filtered_db_copy(conn)?;
 
         // Get file size
-        let metadata = std::fs::metadata(temp_file.path())?;
+        let metadata = fs::metadata(temp_file.path())?;
         let size = metadata.len();
 
         // Send size and database
@@ -1930,8 +1912,7 @@ impl SyncCommand {
 
         if size > MAX_SYNC_DB_SIZE {
             return Err(format!(
-                "Received database size ({} bytes) exceeds maximum allowed ({} bytes)",
-                size, MAX_SYNC_DB_SIZE
+                "Received database size ({size} bytes) exceeds maximum allowed ({MAX_SYNC_DB_SIZE} bytes)"
             )
             .into());
         }
@@ -1941,8 +1922,8 @@ impl SyncCommand {
         reader.read_exact(&mut data)?;
 
         // Create temporary file for the received database
-        let temp_file = tempfile::NamedTempFile::new()?;
-        std::fs::write(temp_file.path(), &data)?;
+        let temp_file = NamedTempFile::new()?;
+        fs::write(temp_file.path(), &data)?;
 
         // Determine if we should filter secrets
         let secret_filter = sync_secret_filter(!options.no_secret_filter.unwrap_or(false))?;
@@ -1963,7 +1944,7 @@ impl SyncCommand {
         // Get current hostname and database path
         let current_hostname = pxh::get_hostname();
         let current_db_path =
-            conn.path().map(|p| p.to_string()).unwrap_or_else(|| "in-memory".to_string());
+            conn.path().map_or_else(|| "in-memory".to_string(), ToString::to_string);
 
         let mut msg = format!(
             "{current_hostname}: Merged into {current_db_path} considered {other_count} entries, added {added_count} entries"
@@ -2206,8 +2187,7 @@ impl ScrubCommand {
                     [],
                     |r| r.get::<_, i64>(0),
                 )
-                .map(|n| n > 0)
-                .unwrap_or(false);
+                .is_ok_and(|n| n > 0);
             if !is_pxh {
                 eprintln!(" skipped (not a pxh database)");
                 skipped_files += 1;
@@ -2405,7 +2385,7 @@ impl ScrubCommand {
 
         let status = child.wait()?;
         if !status.success() {
-            return Err(format!("Remote scrub failed: {}", response).into());
+            return Err(format!("Remote scrub failed: {response}").into());
         }
 
         println!("{}", response.trim());
@@ -2453,7 +2433,7 @@ impl ScrubCommand {
             println!("Scrubbed {} entries from {}.", count, histfile.display());
         } else {
             let count = scrub_from_database(conn, &matches)?;
-            println!("Scrubbed {} entries from database.", count);
+            println!("Scrubbed {count} entries from database.");
             if count > 0 {
                 pxh::ui::hint("run `pxh maintenance` to VACUUM and reclaim disk space");
             }
@@ -2469,20 +2449,17 @@ impl ScrubCommand {
             );
         }
 
-        let contraband = match &self.contraband {
-            Some(value) => {
-                pxh::ui::warn(
-                    "specifying the contraband on the command line is inherently risky; prefer not specifying it",
-                );
-                value.clone()
-            }
-            None => {
-                let mut input = String::new();
-                print!("String to scrub: ");
-                std::io::stdout().flush()?;
-                io::stdin().read_line(&mut input)?;
-                input.trim_end().into()
-            }
+        let contraband = if let Some(value) = &self.contraband {
+            pxh::ui::warn(
+                "specifying the contraband on the command line is inherently risky; prefer not specifying it",
+            );
+            value.clone()
+        } else {
+            let mut input = String::new();
+            print!("String to scrub: ");
+            io::stdout().flush()?;
+            io::stdin().read_line(&mut input)?;
+            input.trim_end().into()
         };
 
         if contraband.is_empty() {
@@ -2612,7 +2589,7 @@ impl ShowCommand {
                     .or_else(|| env::current_dir().ok())
                     .unwrap_or_default()
             },
-            |v| v.clone(),
+            Clone::clone,
         );
 
         if let Some(ref maybe_session) = self.session {
@@ -2847,7 +2824,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             cmd.go(&args.db)?;
         }
         Commands::Mangen(cmd) => {
-            std::fs::create_dir_all(&cmd.dir)?;
+            fs::create_dir_all(&cmd.dir)?;
             clap_mangen::generate_to(PxhArgs::command(), &cmd.dir)?;
         }
     }

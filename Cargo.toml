@@ -69,6 +69,28 @@ clap_complete = "4"
 libc = "0.2"
 clap_mangen = "0.3"
 
+# CI and `just check` add -D warnings; this table decides what counts as one.
+[lints.rust]
+unused_qualifications = "warn"
+
+[lints.clippy]
+cloned_instead_of_copied = "warn"
+dbg_macro = "warn"
+explicit_iter_loop = "warn"
+if_not_else = "warn"
+ignored_unit_patterns = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+manual_let_else = "warn"
+manual_string_new = "warn"
+map_unwrap_or = "warn"
+match_same_arms = "warn"
+redundant_closure_for_method_calls = "warn"
+semicolon_if_nothing_returned = "warn"
+single_match_else = "warn"
+uninlined_format_args = "warn"
+unnested_or_patterns = "warn"
+
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml_ng = "0.10"

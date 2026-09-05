@@ -200,7 +200,7 @@ impl DoctorCommand {
         }
 
         // Size and row count
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let size = std::fs::metadata(path).map_or(0, |m| m.len());
         let size_str = if size > 1_000_000 {
             format!("{:.1} MB", size as f64 / 1_000_000.0)
         } else {
@@ -272,8 +272,7 @@ impl DoctorCommand {
                 .unwrap_or(None);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_secs() as i64);
             match last_ts {
                 Some(ts) if now - ts > 3600 => {
                     let days = (now - ts) / 86400;
@@ -319,7 +318,7 @@ impl DoctorCommand {
 
         let shell = std::env::var("SHELL").unwrap_or_default();
         let shell_name =
-            std::path::Path::new(&shell).file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+            Path::new(&shell).file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
         results.push(CheckResult::ok(format!("Current shell: {shell_name}")));
 
         let rc_file = match shell_name {
@@ -455,20 +454,16 @@ impl DoctorCommand {
     fn check_path_ambiguity(&self) -> Vec<CheckResult> {
         let mut results = Vec::new();
 
-        let home = match std::env::home_dir() {
-            Some(h) => h,
-            None => return results,
-        };
+        let Some(home) = std::env::home_dir() else { return results };
 
         let legacy_db = home.join(".pxh").join("pxh.db");
         let xdg_data = std::env::var("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| home.join(".local").join("share"));
+            .map_or_else(|_| home.join(".local").join("share"), PathBuf::from);
         let xdg_db = xdg_data.join("pxh").join("pxh.db");
 
         if legacy_db.exists() && xdg_db.exists() && legacy_db != xdg_db {
-            let legacy_size = std::fs::metadata(&legacy_db).map(|m| m.len()).unwrap_or(0);
-            let xdg_size = std::fs::metadata(&xdg_db).map(|m| m.len()).unwrap_or(0);
+            let legacy_size = std::fs::metadata(&legacy_db).map_or(0, |m| m.len());
+            let xdg_size = std::fs::metadata(&xdg_db).map_or(0, |m| m.len());
 
             let legacy_rows = Connection::open(&legacy_db)
                 .and_then(|c| {
@@ -598,12 +593,11 @@ impl DoctorCommand {
             .map(|c| {
                 c.pragma_query_value(None, "user_version", |row| row.get::<_, i32>(0)).unwrap_or(-1)
             })
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| "(no db)".to_string());
+            .map_or_else(|| "(no db)".to_string(), |v| v.to_string());
         println!("Schema version:  {schema_ver}");
 
         if let Some(path) = db_path {
-            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            let size = std::fs::metadata(path).map_or(0, |m| m.len());
             let rows = conn.as_ref().and_then(|c| {
                 c.query_row("SELECT COUNT(*) FROM command_history", [], |r| r.get::<_, i64>(0)).ok()
             });
@@ -625,11 +619,10 @@ impl DoctorCommand {
         let config_path = pxh::pxh_config_dir().map(|d| d.join("config.toml"));
         let config_valid = config_path
             .as_ref()
-            .map(|p| if p.exists() { "valid" } else { "not found" })
-            .unwrap_or("(no config dir)");
+            .map_or("(no config dir)", |p| if p.exists() { "valid" } else { "not found" });
         println!(
             "Config:          {} ({config_valid})",
-            config_path.map(|p| p.display().to_string()).unwrap_or_else(|| "(unknown)".to_string())
+            config_path.map_or_else(|| "(unknown)".to_string(), |p| p.display().to_string())
         );
 
         let db_env = std::env::var("PXH_DB_PATH").unwrap_or_else(|_| "(not set)".to_string());
@@ -643,8 +636,7 @@ impl DoctorCommand {
                 .unwrap_or(None);
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
+                .map_or(0, |d| d.as_secs() as i64);
             let hooks_str = match last_ts {
                 Some(ts) if now - ts < 3600 => {
                     let ago = now - ts;
@@ -747,7 +739,7 @@ impl DoctorCommand {
                 }
                 Fix::InstallShellHooks => {
                     let shell = std::env::var("SHELL").unwrap_or_default();
-                    let shell_name = std::path::Path::new(&shell)
+                    let shell_name = Path::new(&shell)
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("bash")
@@ -768,9 +760,7 @@ impl DoctorCommand {
                     || {
                         let home = std::env::home_dir().ok_or("Cannot determine home directory")?;
                         let legacy_db = home.join(".pxh").join("pxh.db");
-                        let xdg_data = std::env::var("XDG_DATA_HOME")
-                            .map(PathBuf::from)
-                            .unwrap_or_else(|_| home.join(".local").join("share"));
+                        let xdg_data = std::env::var("XDG_DATA_HOME").map_or_else(|_| home.join(".local").join("share"), PathBuf::from);
                         let xdg_db = xdg_data.join("pxh").join("pxh.db");
 
                         // Ensure legacy DB has current schema (e.g. machine_id column)
@@ -801,9 +791,7 @@ impl DoctorCommand {
                         // Copy config.toml to XDG location before moving legacy dir
                         let legacy_config = home.join(".pxh").join("config.toml");
                         if legacy_config.exists() {
-                            let xdg_config_dir = std::env::var("XDG_CONFIG_HOME")
-                                .map(PathBuf::from)
-                                .unwrap_or_else(|_| home.join(".config"))
+                            let xdg_config_dir = std::env::var("XDG_CONFIG_HOME").map_or_else(|_| home.join(".config"), PathBuf::from)
                                 .join("pxh");
                             let xdg_config = xdg_config_dir.join("config.toml");
                             if !xdg_config.exists() {

@@ -53,7 +53,7 @@ fn press_and_collect(mut session: rexpect::session::PtySession, key: &str) -> Re
     session.send(key)?;
     session.flush()?;
     let tail = session.exp_eof()?;
-    let after = tail.rsplit_once(LEAVE_ALT_SCREEN).map(|(_, after)| after).unwrap_or(&tail);
+    let after = tail.rsplit_once(LEAVE_ALT_SCREEN).map_or(tail.as_str(), |(_, after)| after);
     Ok(after.trim().to_string())
 }
 

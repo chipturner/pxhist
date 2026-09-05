@@ -100,12 +100,14 @@ fn sanitize_for_display(s: &str) -> String {
                     None => {}
                 }
             }
-            '\n' | '\r' => result.push(' '),
-            '\x00'..='\x08' | '\x0b'..='\x0c' | '\x0e'..='\x1f' | '\x7f' => {}
-            '\t' => result.push(' '),
-            // C1 controls (U+0080-U+009F) include CSI (U+009B) and OSC (U+009D)
-            // which can inject terminal commands in 8-bit terminal modes
-            '\u{0080}'..='\u{009F}' => {}
+            '\n' | '\r' | '\t' => result.push(' '),
+            // C0 and C1 controls: C1 (U+0080-U+009F) includes CSI (U+009B) and
+            // OSC (U+009D), which can inject terminal commands in 8-bit modes
+            '\x00'..='\x08'
+            | '\x0b'..='\x0c'
+            | '\x0e'..='\x1f'
+            | '\x7f'
+            | '\u{0080}'..='\u{009F}' => {}
             _ => result.push(c),
         }
     }
@@ -866,8 +868,7 @@ impl RecallState {
         // Timestamp
         if let Some(ts) = entry.timestamp {
             let datetime = chrono::DateTime::from_timestamp(ts, 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "?".to_string());
+                .map_or_else(|| "?".to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
             let relative = format_relative_time(Some(ts));
             let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
             print!("  Time: ");
@@ -1166,8 +1167,7 @@ impl RecallState {
                 .char_indices()
                 .rev()
                 .find(|(_, c)| c.is_whitespace())
-                .map(|(i, c)| i + c.len_utf8())
-                .unwrap_or(0);
+                .map_or(0, |(i, c)| i + c.len_utf8());
             self.query.truncate(word_start);
             self.update_filtered_indices();
         }
@@ -1220,8 +1220,7 @@ impl RecallState {
             && let Some(ts) = entry.timestamp
         {
             let datetime = chrono::DateTime::from_timestamp(ts, 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "?".to_string());
+                .map_or_else(|| "?".to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
             info_parts.push(format!("Time: {datetime}"));
         }
 
@@ -1347,12 +1346,12 @@ impl RecallState {
             // Right-aligned so command text stays column-aligned across rows.
             let host_suffix = if self.host_filter == HostFilter::AllHosts {
                 entry.hostname.as_ref().and_then(|h| {
-                    if !self.engine.is_this_host(h) {
+                    if self.engine.is_this_host(h) {
+                        None
+                    } else {
                         let short =
                             String::from_utf8_lossy(h).split('.').next().unwrap_or("?").to_string();
                         Some(format!(" @{short}"))
-                    } else {
-                        None
                     }
                 })
             } else {
@@ -1416,8 +1415,7 @@ impl RecallState {
                 let dir = self.engine.working_directory();
                 let name = dir
                     .file_name()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "?".to_string());
+                    .map_or_else(|| "?".to_string(), |s| s.to_string_lossy().to_string());
                 format!("[Dir: {name}]")
             }
             FilterMode::Global => "[Global]".to_string(),
@@ -1708,7 +1706,7 @@ mod tests {
     fn test_highlight_empty_both() {
         // Empty command with empty query returns the empty string
         let spans = highlight_command("", "", 100);
-        assert_eq!(spans, vec![("".to_string(), false)]);
+        assert_eq!(spans, vec![(String::new(), false)]);
     }
 
     #[test]
@@ -1768,7 +1766,7 @@ mod tests {
     /// A RecallState over an in-memory DB seeded with `commands` -- no
     /// terminal involved, which is the whole point of the state/terminal
     /// split.
-    fn test_state(commands: &[&str]) -> super::RecallState {
+    fn test_state(commands: &[&str]) -> RecallState {
         use crate::recall::engine::SearchEngine;
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::initialize_base_schema(&conn).unwrap();
@@ -1788,33 +1786,24 @@ mod tests {
             vec![bstr::BString::from("host1")],
             100,
         );
-        let mut state = super::RecallState::new(
-            engine,
-            FilterMode::Global,
-            None,
-            &RecallConfig::default(),
-            true,
-        )
-        .unwrap();
+        let mut state =
+            RecallState::new(engine, FilterMode::Global, None, &RecallConfig::default(), true)
+                .unwrap();
         state.set_dimensions(80, 24);
         state
     }
 
-    fn press(
-        state: &mut super::RecallState,
-        code: KeyCode,
-        modifiers: KeyModifiers,
-    ) -> super::KeyAction {
+    fn press(state: &mut RecallState, code: KeyCode, modifiers: KeyModifiers) -> KeyAction {
         state.handle_key(KeyEvent::new(code, modifiers)).unwrap()
     }
 
-    fn type_str(state: &mut super::RecallState, s: &str) {
+    fn type_str(state: &mut RecallState, s: &str) {
         for c in s.chars() {
             press(state, KeyCode::Char(c), KeyModifiers::NONE);
         }
     }
 
-    fn visible_commands(state: &super::RecallState) -> Vec<String> {
+    fn visible_commands(state: &RecallState) -> Vec<String> {
         state.filtered_indices.iter().map(|(idx, _)| state.entries[*idx].command.clone()).collect()
     }
 
@@ -1866,16 +1855,13 @@ mod tests {
     #[test]
     fn test_emacs_enter_and_escape_actions() {
         let mut state = test_state(&["alpha"]);
-        assert_eq!(press(&mut state, KeyCode::Enter, KeyModifiers::NONE), super::KeyAction::Select);
-        assert_eq!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE), super::KeyAction::Cancel);
-        assert_eq!(
-            press(&mut state, KeyCode::Char('c'), KeyModifiers::CONTROL),
-            super::KeyAction::Cancel
-        );
-        assert_eq!(press(&mut state, KeyCode::Tab, KeyModifiers::NONE), super::KeyAction::Edit);
+        assert_eq!(press(&mut state, KeyCode::Enter, KeyModifiers::NONE), KeyAction::Select);
+        assert_eq!(press(&mut state, KeyCode::Esc, KeyModifiers::NONE), KeyAction::Cancel);
+        assert_eq!(press(&mut state, KeyCode::Char('c'), KeyModifiers::CONTROL), KeyAction::Cancel);
+        assert_eq!(press(&mut state, KeyCode::Tab, KeyModifiers::NONE), KeyAction::Edit);
         assert_eq!(
             press(&mut state, KeyCode::Char('a'), KeyModifiers::CONTROL),
-            super::KeyAction::EditBeginning
+            KeyAction::EditBeginning
         );
     }
 
@@ -1885,15 +1871,14 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
         crate::initialize_base_schema(&conn).unwrap();
         crate::run_schema_migrations(&conn).unwrap();
-        let engine = crate::recall::engine::SearchEngine::new(
+        let engine = SearchEngine::new(
             conn,
             std::path::PathBuf::from("/tmp"),
             vec![bstr::BString::from("host1")],
             100,
         );
         let config = RecallConfig { keymap: "vim".to_string(), ..RecallConfig::default() };
-        let mut state =
-            super::RecallState::new(engine, FilterMode::Global, None, &config, true).unwrap();
+        let mut state = RecallState::new(engine, FilterMode::Global, None, &config, true).unwrap();
         state.set_dimensions(80, 24);
 
         assert_eq!(state.keymap_mode, KeymapMode::VimInsert);
@@ -1908,16 +1893,10 @@ mod tests {
     fn test_quick_select_advances_selection() {
         let mut state = test_state(&["one", "two", "three", "four"]);
         // Alt-2 selects the entry after the current selection.
-        assert_eq!(
-            press(&mut state, KeyCode::Char('2'), KeyModifiers::ALT),
-            super::KeyAction::Select
-        );
+        assert_eq!(press(&mut state, KeyCode::Char('2'), KeyModifiers::ALT), KeyAction::Select);
         assert_eq!(state.selected_index, 1);
         // Alt-9 past the end is a no-op.
-        assert_eq!(
-            press(&mut state, KeyCode::Char('9'), KeyModifiers::ALT),
-            super::KeyAction::Continue
-        );
+        assert_eq!(press(&mut state, KeyCode::Char('9'), KeyModifiers::ALT), KeyAction::Continue);
         assert_eq!(state.selected_index, 1);
     }
 
@@ -1925,7 +1904,7 @@ mod tests {
     fn test_copy_selected_returns_command_and_sets_status() {
         let mut state = test_state(&["copy-me"]);
         match press(&mut state, KeyCode::Char('y'), KeyModifiers::CONTROL) {
-            super::KeyAction::Copy(text) => assert_eq!(text, "copy-me"),
+            KeyAction::Copy(text) => assert_eq!(text, "copy-me"),
             other => panic!("expected Copy action, got {other:?}"),
         }
         assert!(state.status_message.is_some(), "copy should surface '(copied)' feedback");
@@ -2003,7 +1982,7 @@ mod tests {
         state.draw(&mut zero).unwrap();
     }
 
-    fn cache_snapshot(db_query: Option<&str>, n_entries: usize) -> super::EntrySnapshot {
+    fn cache_snapshot(db_query: Option<&str>, n_entries: usize) -> EntrySnapshot {
         use crate::recall::engine::HistoryEntry;
         let entries = (0..n_entries)
             .map(|i| HistoryEntry {
@@ -2017,7 +1996,7 @@ mod tests {
                 use_count: 1,
             })
             .collect();
-        super::EntrySnapshot { db_query: db_query.map(RecallQuery::parse), entries }
+        EntrySnapshot { db_query: db_query.map(RecallQuery::parse), entries }
     }
 
     #[test]
@@ -2047,12 +2026,12 @@ mod tests {
 
     #[test]
     fn test_entry_cache_takes_narrowest_covering() {
-        let mut cache = super::EntryCache::default();
+        let mut cache = EntryCache::default();
         cache.store(cache_snapshot(None, 3));
         cache.store(cache_snapshot(Some("git"), 2));
         cache.store(cache_snapshot(Some("git pu"), 1));
 
-        let raw = |snap: &super::EntrySnapshot| snap.db_query.as_ref().map(|q| q.raw().to_string());
+        let raw = |snap: &EntrySnapshot| snap.db_query.as_ref().map(|q| q.raw().to_string());
         let hit = cache.take_covering(&RecallQuery::parse("git push"), true).unwrap();
         assert_eq!(raw(&hit).as_deref(), Some("git pu"), "narrowest covering set wins");
         assert_eq!(hit.entries.len(), 1);
@@ -2069,7 +2048,7 @@ mod tests {
 
     #[test]
     fn test_entry_cache_store_replaces_and_stays_bounded() {
-        let mut cache = super::EntryCache::default();
+        let mut cache = EntryCache::default();
         cache.store(cache_snapshot(Some("abc"), 1));
         cache.store(cache_snapshot(Some("abc"), 5));
         let hit = cache.take_covering(&RecallQuery::parse("abc"), true).unwrap();
@@ -2079,7 +2058,7 @@ mod tests {
         for i in 0..20 {
             cache.store(cache_snapshot(Some(&format!("q{i}")), 1));
         }
-        assert!(cache.snapshots.len() <= super::EntryCache::CAP, "cache should stay bounded");
+        assert!(cache.snapshots.len() <= EntryCache::CAP, "cache should stay bounded");
         assert!(
             cache.take_covering(&RecallQuery::parse("q19"), true).is_some(),
             "most recent snapshots survive eviction"
@@ -2197,12 +2176,12 @@ mod tests {
 
     #[test]
     fn test_base64_encode() {
-        assert_eq!(super::base64_encode(b"hello"), "aGVsbG8=");
-        assert_eq!(super::base64_encode(b""), "");
-        assert_eq!(super::base64_encode(b"a"), "YQ==");
-        assert_eq!(super::base64_encode(b"ab"), "YWI=");
-        assert_eq!(super::base64_encode(b"abc"), "YWJj");
-        assert_eq!(super::base64_encode(b"echo hello world"), "ZWNobyBoZWxsbyB3b3JsZA==");
+        assert_eq!(base64_encode(b"hello"), "aGVsbG8=");
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"a"), "YQ==");
+        assert_eq!(base64_encode(b"ab"), "YWI=");
+        assert_eq!(base64_encode(b"abc"), "YWJj");
+        assert_eq!(base64_encode(b"echo hello world"), "ZWNobyBoZWxsbyB3b3JsZA==");
     }
 
     #[test]
@@ -2215,8 +2194,7 @@ mod tests {
             .char_indices()
             .rev()
             .find(|(_, c)| c.is_whitespace())
-            .map(|(i, c)| i + c.len_utf8())
-            .unwrap_or(0);
+            .map_or(0, |(i, c)| i + c.len_utf8());
         query.truncate(word_start); // should not panic
         assert_eq!(query, "hello\u{00A0}", "should truncate after the NBSP");
     }

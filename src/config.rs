@@ -346,7 +346,7 @@ aliases = ["other-host"]
     fn test_update_config_preserves_existing() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        std::fs::write(
+        fs::write(
             &path,
             r#"# my comment
 [recall]
@@ -364,7 +364,7 @@ keymap = "vim"
         )
         .unwrap();
 
-        let content = std::fs::read_to_string(&path).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
         assert!(content.contains("# my comment"), "comment preserved");
         assert!(content.contains("keymap = \"vim\""), "existing config preserved");
         assert!(content.contains("hostname = \"my-host\""));
@@ -444,7 +444,7 @@ keymap = "vim"
     fn test_invalid_toml_returns_none() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("bad.toml");
-        std::fs::write(&path, "this is not valid [[ toml").unwrap();
+        fs::write(&path, "this is not valid [[ toml").unwrap();
         assert!(Config::load_from_path(&path).is_none());
     }
 
@@ -452,7 +452,7 @@ keymap = "vim"
     fn test_wrong_type_returns_none() {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("bad_type.toml");
-        std::fs::write(&path, "[recall]\nresult_limit = \"not a number\"\n").unwrap();
+        fs::write(&path, "[recall]\nresult_limit = \"not a number\"\n").unwrap();
         assert!(Config::load_from_path(&path).is_none());
     }
 
@@ -512,16 +512,16 @@ keymap = "vim"
         let path = dir.path().join("config.toml");
         assert!(matches!(config_status(&path), ConfigStatus::NotFound));
 
-        std::fs::write(&path, "[recall]\nkeymap = ").unwrap();
+        fs::write(&path, "[recall]\nkeymap = ").unwrap();
         assert!(matches!(config_status(&path), ConfigStatus::Invalid(_)));
 
-        std::fs::write(&path, "[recall]\nnope = 1\n").unwrap();
+        fs::write(&path, "[recall]\nnope = 1\n").unwrap();
         match config_status(&path) {
             ConfigStatus::Invalid(msg) => assert!(msg.contains("unknown field `nope`"), "{msg}"),
             other => panic!("expected Invalid, got {other:?}"),
         }
 
-        std::fs::write(&path, "[recall]\nkeymap = \"vim\"\n").unwrap();
+        fs::write(&path, "[recall]\nkeymap = \"vim\"\n").unwrap();
         match config_status(&path) {
             ConfigStatus::Valid(cfg) => assert_eq!(cfg.recall.keymap, "vim"),
             other => panic!("expected Valid, got {other:?}"),
