@@ -6,6 +6,10 @@ other.
 
 ## Unreleased
 
+- The host-settings migration (run by `pxh install` and `pxh config`) reports
+  a config parse error or a failed write as a `warning:` line; previously
+  those were `log` messages hidden unless `RUST_LOG` was set. `RUST_LOG` no
+  longer does anything.
 - `pxh bootstrap <host>`: install pxh on a remote host over SSH (this
   machine's release by default, `--release latest` for the newest), confirm
   the installed version, warn if plain `sync --remote` would not find it or

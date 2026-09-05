@@ -323,7 +323,7 @@ impl DoctorCommand {
             _ => None,
         };
 
-        if let (Some(rc), Some(home)) = (rc_file, home::home_dir()) {
+        if let (Some(rc), Some(home)) = (rc_file, std::env::home_dir()) {
             let rc_path = home.join(rc);
             if rc_path.exists() {
                 let contents = std::fs::read_to_string(&rc_path).unwrap_or_default();
@@ -431,7 +431,7 @@ impl DoctorCommand {
         }
 
         // Ambiguous config dirs
-        if let Some(home) = home::home_dir() {
+        if let Some(home) = std::env::home_dir() {
             let legacy_config = home.join(".pxh").join("config.toml");
             let xdg_config = config_dir.as_ref().map(|d| d.join("config.toml"));
             if legacy_config.exists()
@@ -450,7 +450,7 @@ impl DoctorCommand {
     fn check_path_ambiguity(&self) -> Vec<CheckResult> {
         let mut results = Vec::new();
 
-        let home = match home::home_dir() {
+        let home = match std::env::home_dir() {
             Some(h) => h,
             None => return results,
         };
@@ -654,7 +654,7 @@ impl DoctorCommand {
             println!("Hooks active:    {hooks_str}");
         }
 
-        let legacy = home::home_dir().map(|h| h.join(".pxh"));
+        let legacy = std::env::home_dir().map(|h| h.join(".pxh"));
         let legacy_str = match legacy {
             Some(ref p) if p.exists() => "present",
             _ => "not present",
@@ -761,7 +761,7 @@ impl DoctorCommand {
                     self.apply_fix_with_prompt(
                     "Merge legacy ~/.pxh/pxh.db into XDG database and back up ~/.pxh",
                     || {
-                        let home = home::home_dir().ok_or("Cannot determine home directory")?;
+                        let home = std::env::home_dir().ok_or("Cannot determine home directory")?;
                         let legacy_db = home.join(".pxh").join("pxh.db");
                         let xdg_data = std::env::var("XDG_DATA_HOME")
                             .map(PathBuf::from)

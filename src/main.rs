@@ -448,7 +448,7 @@ struct ScanCommand {
 
 impl ImportCommand {
     fn default_histfile(shellname: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let home = home::home_dir().ok_or("could not determine home directory")?;
+        let home = env::home_dir().ok_or("could not determine home directory")?;
         match shellname {
             "bash" | "zsh" => {
                 if let Ok(histfile) = env::var("HISTFILE") {
@@ -568,7 +568,7 @@ impl InstallCommand {
             _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
         };
 
-        let mut pb = home::home_dir().ok_or("Unable to determine your homedir")?;
+        let mut pb = env::home_dir().ok_or("Unable to determine your homedir")?;
         pb.push(rc_file);
 
         // Check what's already installed in the RC file.
@@ -2756,8 +2756,6 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
-
-    env_logger::init();
 
     // Check if binary was invoked as "pxhs", which is a shorthand for "pxh show"
     let args_vec = env::args_os().collect::<Vec<_>>();

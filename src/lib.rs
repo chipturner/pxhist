@@ -17,7 +17,6 @@ use std::{
 
 use bstr::{BString, ByteSlice, io::BufReadExt};
 use chrono::prelude::{Local, TimeZone};
-use itertools::Itertools;
 use regex::bytes::Regex;
 use rusqlite::{
     Connection, Error, ErrorCode, Result, Row, Transaction, TransactionBehavior,
@@ -129,7 +128,7 @@ pub fn effective_host_set(config: &config::Config) -> Vec<BString> {
 /// - If config lacks machine_id, generate one.
 pub fn migrate_host_settings(conn: &Connection) {
     if config::Config::has_parse_error() {
-        log::warn!("config.toml has parse errors; skipping host-settings migration");
+        ui::warn("config.toml has parse errors; skipping host-settings migration");
         return;
     }
     let config = config::Config::load();
@@ -172,7 +171,7 @@ pub fn migrate_host_settings(conn: &Connection) {
     if !updates.is_empty()
         && let Err(e) = config::Config::update_default_config(&updates)
     {
-        log::warn!("Failed to migrate host settings to config: {e}");
+        ui::warn(&format!("failed to migrate host settings to config: {e}"));
         return;
     }
 
@@ -192,7 +191,7 @@ pub fn migrate_host_settings(conn: &Connection) {
 /// Return the pxh data directory. Prefers XDG, falls back to `~/.pxh` if it exists.
 /// New installs default to `$XDG_DATA_HOME/pxh` (`~/.local/share/pxh`).
 pub fn pxh_data_dir() -> Option<PathBuf> {
-    let home = home::home_dir()?;
+    let home = env::home_dir()?;
     let xdg_data =
         env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local/share"));
     let xdg_dir = xdg_data.join("pxh");
@@ -209,7 +208,7 @@ pub fn pxh_data_dir() -> Option<PathBuf> {
 /// Return the pxh config directory. Prefers XDG, falls back to `~/.pxh` if it exists.
 /// New installs default to `$XDG_CONFIG_HOME/pxh` (`~/.config/pxh`).
 pub fn pxh_config_dir() -> Option<PathBuf> {
-    let home = home::home_dir()?;
+    let home = env::home_dir()?;
     let xdg_config =
         env::var("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".config"));
     let xdg_dir = xdg_config.join("pxh");
@@ -547,12 +546,13 @@ pub fn import_zsh_history(
     let session_id = generate_import_session_id(histfile);
     for (line_num, line) in logical_lines.iter().enumerate() {
         let line = line.as_slice();
-        let Some((fields, command)) = line.splitn(2, |&ch| ch == b';').collect_tuple() else {
+        let Some((fields, command)) = line.split_once_str(";") else {
             continue;
         };
-        let Some((_skip, start_time, duration_seconds)) =
-            fields.splitn(3, |&ch| ch == b':').collect_tuple()
-        else {
+        let Some((_skip, rest)) = fields.split_once_str(":") else {
+            continue;
+        };
+        let Some((start_time, duration_seconds)) = rest.split_once_str(":") else {
             continue;
         };
         let start_unix_timestamp = match str::from_utf8(start_time.get(1..).unwrap_or(&[]))
@@ -1108,7 +1108,7 @@ pub mod helpers {
 
         let home = match home_override {
             Some(path) => path.to_path_buf(),
-            None => home::home_dir()?,
+            None => std::env::home_dir()?,
         };
 
         exe.strip_prefix(&home).ok().map(|path| path.to_string_lossy().to_string())
