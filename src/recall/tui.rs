@@ -868,8 +868,8 @@ impl RecallState {
 
         // Timestamp
         if let Some(ts) = entry.timestamp {
-            let datetime = chrono::DateTime::from_timestamp(ts, 0)
-                .map_or_else(|| "?".to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
+            let datetime =
+                crate::format_local_time(ts, crate::TIME_FORMAT).unwrap_or_else(|| "?".to_string());
             let relative = format_relative_time(Some(ts));
             let _ = execute!(stdout, SetForegroundColor(Color::Cyan));
             print!("  Time: ");
@@ -1209,8 +1209,8 @@ impl RecallState {
         if self.preview_config.show_timestamp
             && let Some(ts) = entry.timestamp
         {
-            let datetime = chrono::DateTime::from_timestamp(ts, 0)
-                .map_or_else(|| "?".to_string(), |dt| dt.format("%Y-%m-%d %H:%M:%S").to_string());
+            let datetime =
+                crate::format_local_time(ts, crate::TIME_FORMAT).unwrap_or_else(|| "?".to_string());
             info_parts.push(format!("Time: {datetime}"));
         }
 

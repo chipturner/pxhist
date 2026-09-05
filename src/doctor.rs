@@ -328,7 +328,9 @@ impl DoctorCommand {
             _ => None,
         };
 
-        if let (Some(rc), Some(home)) = (rc_file, std::env::home_dir()) {
+        if let Some(rc) = rc_file
+            && let Some(home) = std::env::home_dir()
+        {
             let rc_path = home.join(rc);
             if rc_path.exists() {
                 let contents = std::fs::read_to_string(&rc_path).unwrap_or_default();
@@ -390,7 +392,9 @@ impl DoctorCommand {
             _ => pxh::config::Config::default(),
         };
 
-        if let (Some(dir), Some(status)) = (&config_dir, &status) {
+        if let Some(dir) = &config_dir
+            && let Some(status) = &status
+        {
             let config_path = dir.join("config.toml");
             match status {
                 pxh::config::ConfigStatus::Valid(_) => {

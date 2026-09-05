@@ -6,6 +6,8 @@ other.
 
 ## Unreleased
 
+- The `pxh recall` preview pane shows timestamps in the local time zone,
+  matching `pxh show`; it was UTC.
 - `pxh show` renders its table itself instead of through `prettytable-rs`
   (unmaintained since 2022). Layout is unchanged; colors now go through the
   same `anstream` path as diagnostics, so `NO_COLOR` and `CLICOLOR` apply to

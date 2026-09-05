@@ -18,7 +18,7 @@ use std::{
 use anstyle::{AnsiColor, Style};
 use anyhow::Context;
 use bstr::{BString, ByteSlice, io::BufReadExt};
-use chrono::prelude::{Local, TimeZone};
+use jiff::{Timestamp, tz::TimeZone};
 use regex::bytes::Regex;
 use rusqlite::{
     Connection, Error, ErrorCode, Result, Row, Transaction, TransactionBehavior,
@@ -56,6 +56,13 @@ pub fn set_setting(conn: &Connection, key: &str, value: &BString) -> anyhow::Res
 }
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
+
+/// A Unix timestamp rendered in the system time zone with a strftime
+/// format, or `None` when it is outside jiff's representable range.
+pub fn format_local_time(unix_seconds: i64, format: &str) -> Option<String> {
+    let ts = Timestamp::from_second(unix_seconds).ok()?;
+    Some(ts.to_zoned(TimeZone::system()).strftime(format).to_string())
+}
 
 pub fn get_hostname() -> BString {
     let hostname =
@@ -791,8 +798,7 @@ struct QueryResultColumnDisplayer {
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
-    t.and_then(|t| Local.timestamp_opt(t, 0).single())
-        .map_or_else(|| "n/a".to_string(), |t| t.format(TIME_FORMAT).to_string())
+    t.and_then(|t| format_local_time(t, TIME_FORMAT)).unwrap_or_else(|| "n/a".to_string())
 }
 
 fn binary_display_helper(v: &BString) -> String {
@@ -1690,5 +1696,10 @@ mod tests {
         let out = render_table(&rows);
         assert_eq!(out.lines().next().unwrap(), format!(" {red}ab  {red:#}  {red}c{red:#} "));
         assert_eq!(anstream::adapter::strip_str(&out).to_string(), " ab    c \n abcd  c \n");
+    }
+    #[test]
+    fn format_local_time_handles_range() {
+        assert_eq!(format_local_time(0, "%Y").unwrap().len(), 4);
+        assert_eq!(format_local_time(i64::MAX, TIME_FORMAT), None);
     }
 }

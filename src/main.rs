@@ -13,7 +13,6 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use bstr::{BString, ByteSlice};
-use chrono::prelude::{Local, TimeZone};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
 use rusqlite::{Connection, OpenFlags};
@@ -900,16 +899,14 @@ impl StatsCommand {
         println!("Commands:   {total} total, {unique} unique");
         println!("Sessions:   {sessions}");
 
-        if let (Some(min), Some(max)) = (min_ts, max_ts) {
-            if let (Some(min_date), Some(max_date)) =
-                (Local.timestamp_opt(min, 0).single(), Local.timestamp_opt(max, 0).single())
+        if let Some(min) = min_ts
+            && let Some(max) = max_ts
+        {
+            if let Some(min_date) = pxh::format_local_time(min, "%Y-%m-%d")
+                && let Some(max_date) = pxh::format_local_time(max, "%Y-%m-%d")
             {
                 let days = (max - min) / 86400;
-                println!(
-                    "Period:     {} to {} ({days} days)",
-                    min_date.format("%Y-%m-%d"),
-                    max_date.format("%Y-%m-%d"),
-                );
+                println!("Period:     {min_date} to {max_date} ({days} days)");
             } else {
                 println!("Period:     n/a (invalid timestamps in database)");
             }
@@ -1114,15 +1111,10 @@ impl ScanCommand {
 
     fn display_matches(matches: &[ScanMatch], verbose: bool) {
         for m in matches {
-            let time_str = m.timestamp.map_or_else(
-                || "n/a".to_string(),
-                |ts| {
-                    Local.timestamp_opt(ts, 0).single().map_or_else(
-                        || "n/a".to_string(),
-                        |t| t.format("%Y-%m-%d %H:%M:%S").to_string(),
-                    )
-                },
-            );
+            let time_str = m
+                .timestamp
+                .and_then(|ts| pxh::format_local_time(ts, "%Y-%m-%d %H:%M:%S"))
+                .unwrap_or_else(|| "n/a".to_string());
             if verbose {
                 println!("  [{time_str}] {}", m.pattern);
                 if let Some(ref wd) = m.working_directory {
@@ -1724,7 +1716,8 @@ impl SyncCommand {
         // the source DB was probably restored from backup or rebuilt. The merge
         // we just ran missed nothing (we had it all), but reset the watermark
         // to the new max so future syncs use the correct value.
-        if let (Some(wm), Some(new_max)) = (watermark, stats.new_max_id)
+        if let Some(wm) = watermark
+            && let Some(new_max) = stats.new_max_id
             && new_max < wm
         {
             eprintln!(" (notice: source max(id) {new_max} < watermark {wm}; resetting watermark)");
@@ -1740,7 +1733,9 @@ impl SyncCommand {
         }
 
         // Persist the new watermark when we have a machine_id key for it.
-        if let (Some(mid), Some(new_max)) = (source_machine_id, stats.new_max_id) {
+        if let Some(mid) = source_machine_id
+            && let Some(new_max) = stats.new_max_id
+        {
             pxh::sync::set_sync_watermark(conn, mid, new_max)?;
         }
         Ok(())
