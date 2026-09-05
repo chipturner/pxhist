@@ -15,7 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{Context, bail};
+use anstyle::{AnsiColor, Style};
+use anyhow::Context;
 use bstr::{BString, ByteSlice, io::BufReadExt};
 use chrono::prelude::{Local, TimeZone};
 use regex::bytes::Regex;
@@ -24,6 +25,7 @@ use rusqlite::{
     functions::FunctionFlags,
 };
 use serde::{Deserialize, Serialize};
+use unicode_width::UnicodeWidthStr;
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -733,25 +735,77 @@ pub fn json_export(rows: &[Invocation]) -> anyhow::Result<()> {
     Ok(())
 }
 
-// column list: command, start, host, shell, cwd, end, duratio, session, ...
+/// One cell of the `show` table: text (possibly several lines) and its color.
+struct Cell {
+    text: String,
+    style: Style,
+}
+
+impl Cell {
+    fn new(text: impl Into<String>, style: Style) -> Self {
+        Self { text: text.into(), style }
+    }
+}
+
+/// Render rows as a borderless table: one space of padding each side of
+/// every cell, every cell padded to its column's width in terminal columns,
+/// a multi-line cell continued on the following lines, and each cell's
+/// style wrapping content and padding together. Colors are emitted
+/// unconditionally; the caller prints through `anstream`, which strips them
+/// when stdout is not a terminal.
+fn render_table(rows: &[Vec<Cell>]) -> String {
+    let columns = rows.iter().map(Vec::len).max().unwrap_or(0);
+    let widths: Vec<usize> = (0..columns)
+        .map(|col| {
+            rows.iter()
+                .filter_map(|row| row.get(col))
+                .flat_map(|cell| cell.text.lines())
+                .map(UnicodeWidthStr::width)
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+
+    let mut out = String::new();
+    for row in rows {
+        let height = row.iter().map(|cell| cell.text.lines().count().max(1)).max().unwrap_or(1);
+        for line_no in 0..height {
+            for (col, width) in widths.iter().enumerate() {
+                let (text, style) = row.get(col).map_or(("", Style::new()), |cell| {
+                    (cell.text.lines().nth(line_no).unwrap_or(""), cell.style)
+                });
+                let last = col + 1 == widths.len();
+                let pad = if last { 0 } else { width - text.width() };
+                let _ = write!(out, " {style}{text}{:pad$}{style:#} ", "");
+            }
+            out.push('\n');
+        }
+    }
+    out
+}
 
 struct QueryResultColumnDisplayer {
     header: &'static str,
-    header_style: &'static str,
-    displayer: Box<dyn Fn(&Invocation) -> prettytable::Cell>,
+    header_style: Style,
+    displayer: Box<dyn Fn(&Invocation) -> Cell>,
 }
 
 fn time_display_helper(t: Option<i64>) -> String {
-    // Chained if-let may make this unpacking of
-    // Option/Result/LocalResult cleaner.  Alternative is a closer
-    // using `?` chains but that's slightly uglier.
     t.and_then(|t| Local.timestamp_opt(t, 0).single())
         .map_or_else(|| "n/a".to_string(), |t| t.format(TIME_FORMAT).to_string())
 }
 
 fn binary_display_helper(v: &BString) -> String {
-    String::from_utf8_lossy(v.as_slice()).to_string()
+    v.to_str_lossy().into_owned()
 }
+
+const WHITE: Style = AnsiColor::White.on_default();
+const GREEN: Style = AnsiColor::Green.on_default();
+const RED: Style = AnsiColor::Red.on_default();
+const MAGENTA: Style = AnsiColor::Magenta.on_default();
+const CYAN: Style = AnsiColor::Cyan.on_default();
+const DIM: Style = Style::new().dimmed();
+const BOLD_BLUE: Style = AnsiColor::Blue.on_default().bold();
 
 fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
     let mut ret = HashMap::new();
@@ -759,20 +813,17 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "command",
         QueryResultColumnDisplayer {
             header: "Command",
-            header_style: "Fw",
-            displayer: Box::new(|row| {
-                prettytable::Cell::new(&binary_display_helper(&row.command)).style_spec("Fw")
-            }),
+            header_style: WHITE,
+            displayer: Box::new(|row| Cell::new(binary_display_helper(&row.command), WHITE)),
         },
     );
     ret.insert(
         "start_time",
         QueryResultColumnDisplayer {
             header: "Start",
-            header_style: "Fg",
+            header_style: GREEN,
             displayer: Box::new(|row| {
-                prettytable::Cell::new(&time_display_helper(row.start_unix_timestamp))
-                    .style_spec("Fg")
+                Cell::new(time_display_helper(row.start_unix_timestamp), GREEN)
             }),
         },
     );
@@ -780,10 +831,9 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "end_time",
         QueryResultColumnDisplayer {
             header: "End",
-            header_style: "Fg",
+            header_style: GREEN,
             displayer: Box::new(|row| {
-                prettytable::Cell::new(&time_display_helper(row.end_unix_timestamp))
-                    .style_spec("Fg")
+                Cell::new(time_display_helper(row.end_unix_timestamp), GREEN)
             }),
         },
     );
@@ -791,13 +841,13 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "duration",
         QueryResultColumnDisplayer {
             header: "Duration",
-            header_style: "Fm",
+            header_style: MAGENTA,
             displayer: Box::new(|row| {
                 let text = match (row.start_unix_timestamp, row.end_unix_timestamp) {
                     (Some(start), Some(end)) => format!("{}s", end - start),
                     _ => "n/a".into(),
                 };
-                prettytable::Cell::new(&text).style_spec("Fm")
+                Cell::new(text, MAGENTA)
             }),
         },
     );
@@ -805,11 +855,11 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "status",
         QueryResultColumnDisplayer {
             header: "Status",
-            header_style: "Fr",
+            header_style: RED,
             displayer: Box::new(|row| match row.exit_status {
-                Some(0) => prettytable::Cell::new("0").style_spec("Fg"),
-                Some(s) => prettytable::Cell::new(&s.to_string()).style_spec("Fr"),
-                None => prettytable::Cell::new("n/a").style_spec("Fd"),
+                Some(0) => Cell::new("0", GREEN),
+                Some(s) => Cell::new(s.to_string(), RED),
+                None => Cell::new("n/a", DIM),
             }),
         },
     );
@@ -819,10 +869,8 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "session",
         QueryResultColumnDisplayer {
             header: "Session",
-            header_style: "Fc",
-            displayer: Box::new(|row| {
-                prettytable::Cell::new(&format!("{}", row.session_id)).style_spec("Fc")
-            }),
+            header_style: CYAN,
+            displayer: Box::new(|row| Cell::new(row.session_id.to_string(), CYAN)),
         },
     );
     // Print context specially; the full output is $HOST:$PATH but if
@@ -832,7 +880,7 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
         "context",
         QueryResultColumnDisplayer {
             header: "Context",
-            header_style: "bFb",
+            header_style: BOLD_BLUE,
             displayer: Box::new(|row| {
                 let current_hostname = get_hostname();
                 let row_hostname = row.hostname.clone().unwrap_or_default();
@@ -842,11 +890,15 @@ fn displayers() -> HashMap<&'static str, QueryResultColumnDisplayer> {
                 }
                 let current_directory = env::current_dir().unwrap_or_default();
                 ret.push_str(&row.working_directory.as_ref().map_or_else(String::new, |v| {
-                    let v = String::from_utf8_lossy(v.as_slice()).to_string();
-                    if v == current_directory.to_string_lossy() { String::from(".") } else { v }
+                    let v = v.to_str_lossy();
+                    if v == current_directory.to_string_lossy() {
+                        String::from(".")
+                    } else {
+                        v.into_owned()
+                    }
                 }));
 
-                prettytable::Cell::new(&ret).style_spec("bFb")
+                Cell::new(ret, BOLD_BLUE)
             }),
         },
     );
@@ -860,35 +912,30 @@ pub fn present_results_human_readable(
     suppress_headers: bool,
 ) -> anyhow::Result<()> {
     let displayers = displayers();
-    let mut table = prettytable::Table::new();
-    table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
+    let columns: Vec<&QueryResultColumnDisplayer> = fields
+        .iter()
+        .map(|field| {
+            displayers.get(field).with_context(|| format!("Invalid 'show' field: {field}"))
+        })
+        .collect::<anyhow::Result<_>>()?;
 
+    let mut table = Vec::with_capacity(rows.len() + 1);
     if !suppress_headers {
-        let mut title_row = prettytable::Row::empty();
-        for field in fields {
-            let Some(d) = displayers.get(field) else {
-                bail!("Invalid 'show' field: {field}");
-            };
-
-            title_row.add_cell(prettytable::Cell::new(d.header).style_spec(d.header_style));
-        }
-        table.set_titles(title_row);
+        table.push(columns.iter().map(|d| Cell::new(d.header, d.header_style)).collect());
     }
-
     for row in rows {
-        let is_failed = matches!(row.exit_status, Some(s) if s != 0);
-        let mut display_row = prettytable::Row::empty();
-        for field in fields {
-            let cell = (displayers[field].displayer)(row);
-            if is_failed {
-                display_row.add_cell(prettytable::Cell::new(&cell.get_content()).style_spec("Fr"));
-            } else {
-                display_row.add_cell(cell);
-            }
-        }
-        table.add_row(display_row);
+        let failed = matches!(row.exit_status, Some(s) if s != 0);
+        table.push(
+            columns
+                .iter()
+                .map(|d| {
+                    let cell = (d.displayer)(row);
+                    if failed { Cell { style: RED, ..cell } } else { cell }
+                })
+                .collect(),
+        );
     }
-    table.printstd();
+    anstream::print!("{}", render_table(&table));
     Ok(())
 }
 
@@ -1615,5 +1662,33 @@ mod tests {
         assert!(result.is_err());
         // Should give up roughly at the cap, not run forever.
         assert!(elapsed < Duration::from_millis(200), "took {elapsed:?}");
+    }
+    #[test]
+    fn render_table_pads_columns_and_continues_multiline_cells() {
+        let plain = |t: &str| Cell { text: t.to_string(), style: Style::new() };
+        let rows = vec![
+            vec![plain("Start"), plain("Command")],
+            vec![plain("t1"), plain("a\nbb")],
+            vec![plain("日本"), plain("x")],
+        ];
+        // One space each side of every cell, every cell but the last padded to
+        // its column (in terminal columns, so 日本 is as wide as four ASCII
+        // characters), continuation lines under their own column.
+        assert_eq!(render_table(&rows), " Start  Command \n t1     a \n        bb \n 日本   x \n");
+    }
+
+    #[test]
+    fn render_table_styles_content_and_padding_as_one_span() {
+        let red = AnsiColor::Red.on_default();
+        let rows = vec![
+            vec![Cell { text: "ab".into(), style: red }, Cell { text: "c".into(), style: red }],
+            vec![
+                Cell { text: "abcd".into(), style: Style::new() },
+                Cell { text: "c".into(), style: Style::new() },
+            ],
+        ];
+        let out = render_table(&rows);
+        assert_eq!(out.lines().next().unwrap(), format!(" {red}ab  {red:#}  {red}c{red:#} "));
+        assert_eq!(anstream::adapter::strip_str(&out).to_string(), " ab    c \n abcd  c \n");
     }
 }

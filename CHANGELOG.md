@@ -6,6 +6,10 @@ other.
 
 ## Unreleased
 
+- `pxh show` renders its table itself instead of through `prettytable-rs`
+  (unmaintained since 2022). Layout is unchanged; colors now go through the
+  same `anstream` path as diagnostics, so `NO_COLOR` and `CLICOLOR` apply to
+  the table too, and an unknown exit status shows dim rather than black.
 - `pxh recall` measures commands, the host suffix, the mode indicator, and
   the cursor position in terminal columns, so CJK and other wide characters
   no longer overflow the row or misplace the cursor. A command that exactly
