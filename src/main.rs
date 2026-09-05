@@ -1178,9 +1178,16 @@ fn sync_secret_filter(filter_secrets: bool) -> Result<Option<regex::bytes::Regex
 /// exits quietly; for remote sync that default would end the run with exit 141
 /// and no message when the remote pxh is missing or too old.
 fn ignore_sigpipe() {
+    set_sigpipe(libc::SIG_IGN);
+}
+
+/// Set the SIGPIPE disposition. Rust ignores SIGPIPE at startup so a closed
+/// pipe surfaces as an io::Error; commands whose output goes to `head` want
+/// the OS default (silent exit) instead, and the sync client wants ignore.
+fn set_sigpipe(disposition: libc::sighandler_t) {
     // SAFETY: changes a signal disposition only; installs no handler.
     unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_IGN);
+        libc::signal(libc::SIGPIPE, disposition);
     }
 }
 
@@ -1445,10 +1452,7 @@ impl SyncCommand {
             let temp_conn = Connection::open(temp_file.path())?;
 
             // Calculate timestamp threshold
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs() as i64;
+            let now = pxh::unix_now();
             let threshold = now - (days as i64 * 86400);
 
             // Delete records older than the threshold (including NULLs,
@@ -2610,11 +2614,8 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    // Reset SIGPIPE to default OS behavior so piping to head/grep exits cleanly
-    // instead of producing a BrokenPipe error.
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
+    // Piping to head/grep should exit cleanly instead of reporting BrokenPipe.
+    set_sigpipe(libc::SIG_DFL);
 
     // Check if binary was invoked as "pxhs", which is a shorthand for "pxh show"
     let args_vec = env::args_os().collect::<Vec<_>>();

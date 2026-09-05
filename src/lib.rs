@@ -57,6 +57,13 @@ pub fn set_setting(conn: &Connection, key: &str, value: &BString) -> anyhow::Res
 
 const TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S";
 
+/// Seconds since the Unix epoch; 0 if the clock is before it.
+pub fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64)
+}
+
 /// A Unix timestamp rendered in the system time zone with a strftime
 /// format, or `None` when it is outside jiff's representable range.
 pub fn format_local_time(unix_seconds: i64, format: &str) -> Option<String> {
@@ -651,16 +658,9 @@ pub fn import_json_history(histfile: &Path) -> anyhow::Result<Vec<Invocation>> {
     Ok(serde_json::from_reader(reader)?)
 }
 
-fn dedup_invocations(invocations: Vec<Invocation>) -> Vec<Invocation> {
-    let mut it = invocations.into_iter();
-    let Some(first) = it.next() else { return vec![] };
-    let mut ret = vec![first];
-    for elem in it {
-        if !elem.sameish(ret.last().unwrap()) {
-            ret.push(elem);
-        }
-    }
-    ret
+fn dedup_invocations(mut invocations: Vec<Invocation>) -> Vec<Invocation> {
+    invocations.dedup_by(|a, b| a.sameish(b));
+    invocations
 }
 
 impl Invocation {

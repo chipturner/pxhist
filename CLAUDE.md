@@ -16,7 +16,8 @@ pxh is a fast, cross-shell history mining tool that uses SQLite to provide power
 - Mutation testing: `just mutants` (cargo-mutants over `.cargo/mutants.toml` scope; nightly CI, informational)
 - Format code: `just fmt`
 - Check formatting without modifying (CI-style): `just fmt-check`
-- Lint: `cargo clippy -- -D warnings`
+- Lint: `cargo clippy --all-targets -- -D warnings` (the lint set itself lives in `[lints]` in `Cargo.toml`, so a plain `cargo clippy` reports the same things CI denies)
+- Unused dependencies: `cargo machete` (CI job `unused-deps`)
 - Upgrade dependencies: `just cargo-upgrade`
 - Coverage: `just coverage` (summary) or `just coverage-html` (CI enforces an 80% line floor in coverage.yml)
 - Clean coverage data: `just coverage-clean`

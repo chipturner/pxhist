@@ -271,9 +271,7 @@ impl DoctorCommand {
                     r.get(0)
                 })
                 .unwrap_or(None);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() as i64);
+            let now = pxh::unix_now();
             match last_ts {
                 Some(ts) if now - ts > 3600 => {
                     let days = (now - ts) / 86400;
@@ -639,9 +637,7 @@ impl DoctorCommand {
                     r.get(0)
                 })
                 .unwrap_or(None);
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_secs() as i64);
+            let now = pxh::unix_now();
             let hooks_str = match last_ts {
                 Some(ts) if now - ts < 3600 => {
                     let ago = now - ts;

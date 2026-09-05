@@ -200,9 +200,7 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
             return (0..entries.len()).map(|i| (i, Vec::new())).collect();
         }
 
-        let now_secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs() as i64);
+        let now_secs = crate::unix_now();
 
         // Nucleo distinguishes whitespace boundaries (BONUS_BOUNDARY_WHITE) from
         // delimiter boundaries (BONUS_BOUNDARY_DELIMITER, ~40% smaller), so for query
@@ -296,9 +294,7 @@ pub fn format_relative_time(timestamp: Option<i64>) -> String {
         return "   ".to_string();
     };
 
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now = crate::unix_now();
 
     let diff = now - ts;
     if diff < 0 {
@@ -646,7 +642,7 @@ mod tests {
     }
 
     fn wall_clock_now() -> i64 {
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64
+        crate::unix_now()
     }
 
     #[test]
@@ -787,27 +783,21 @@ mod tests {
 
     #[test]
     fn test_format_relative_time_seconds() {
-        let now =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-                as i64;
+        let now = crate::unix_now() as u64 as i64;
         assert_eq!(format_relative_time(Some(now - 30)), "30s");
         assert_eq!(format_relative_time(Some(now - 5)), " 5s");
     }
 
     #[test]
     fn test_format_relative_time_minutes() {
-        let now =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-                as i64;
+        let now = crate::unix_now() as u64 as i64;
         assert_eq!(format_relative_time(Some(now - 120)), " 2m");
         assert_eq!(format_relative_time(Some(now - 3000)), "50m");
     }
 
     #[test]
     fn test_format_relative_time_hours() {
-        let now =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-                as i64;
+        let now = crate::unix_now() as u64 as i64;
         assert_eq!(format_relative_time(Some(now - 7200)), " 2h");
         assert_eq!(format_relative_time(Some(now - 36000)), "10h");
     }
@@ -1069,9 +1059,7 @@ mod tests {
 
     #[test]
     fn test_format_relative_time_days() {
-        let now =
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
-                as i64;
+        let now = crate::unix_now() as u64 as i64;
         assert_eq!(format_relative_time(Some(now - 86400 * 2)), " 2d");
         assert_eq!(format_relative_time(Some(now - 86400 * 5)), " 5d");
     }
