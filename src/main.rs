@@ -84,321 +84,278 @@ fn version_string() -> &'static str {
 }
 
 #[derive(Parser, Debug)]
-#[clap(author, version = version_string(), about, long_about = None)]
+#[command(author, version = version_string(), about, long_about = None)]
 struct PxhArgs {
-    #[clap(
-        long,
-        env = "PXH_DB_PATH",
-        help = "path to the history database (default: ~/.local/share/pxh/pxh.db)"
-    )]
+    /// path to the history database (default: ~/.local/share/pxh/pxh.db)
+    #[arg(long, env = "PXH_DB_PATH")]
     db: Option<PathBuf>,
 
-    #[clap(subcommand)]
+    #[command(subcommand)]
     command: Option<Commands>,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    #[clap(visible_alias = "s", about = "search for and display history entries")]
+    /// search for and display history entries
+    #[command(visible_alias = "s")]
     Show(ShowCommand),
-    #[clap(visible_alias = "r", about = "interactive history search (Ctrl-R replacement)")]
+    /// interactive history search (Ctrl-R replacement)
+    #[command(visible_alias = "r")]
     Recall(pxh::recall::RecallCommand),
-    #[clap(about = "install pxh helpers by modifying your shell rc file")]
+    /// install pxh helpers by modifying your shell rc file
     Install(InstallCommand),
-    #[clap(about = "import history entries from your existing shell history or from an export")]
+    /// import history entries from your existing shell history or from an export
     Import(ImportCommand),
-    #[clap(about = "export full history as JSON")]
+    /// export full history as JSON
     Export(ExportCommand),
-    #[clap(about = "synchronize history with a remote host over SSH or a directory of databases")]
+    /// synchronize history with a remote host over SSH or a directory of databases
     Sync(SyncCommand),
-    #[clap(about = "install pxh on a remote host over SSH, then sync history with it")]
+    /// install pxh on a remote host over SSH, then sync history with it
     Bootstrap(BootstrapCommand),
-    #[clap(
-        about = "scrub (remove) sensitive history entries, interactively or via secret scanning"
-    )]
+    /// scrub (remove) sensitive history entries, interactively or via secret scanning
     Scrub(ScrubCommand),
-    #[clap(hide = true, about = "(internal) invoked by the shell to insert a history entry")]
+    /// (internal) invoked by the shell to insert a history entry
+    #[command(hide = true)]
     Insert(InsertCommand),
-    #[clap(
-        hide = true,
-        about = "(internal) seal the previous inserted command to mark status, timing, etc"
-    )]
+    /// (internal) seal the previous inserted command to mark status, timing, etc
+    #[command(hide = true)]
     Seal(SealCommand),
-    #[clap(
-        hide = true,
-        about = "(internal) shell configuration suitable for `source`'ing to enable pxh"
-    )]
+    /// (internal) shell configuration suitable for `source`'ing to enable pxh
+    #[command(hide = true)]
     ShellConfig(ShellConfigCommand),
-    #[clap(
-        hide = true,
-        about = "(internal) print the most recent command matching a prefix for zsh-autosuggestions"
-    )]
+    /// (internal) print the most recent command matching a prefix for zsh-autosuggestions
+    #[command(hide = true)]
     Autosuggest(AutosuggestCommand),
-    #[clap(
-        about = "perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space"
-    )]
+    /// perform ANALYZE and VACUUM on the specified database files to optimize performance and reclaim space
     Maintenance(MaintenanceCommand),
-    #[clap(about = "scan history for potential secrets and sensitive data")]
+    /// scan history for potential secrets and sensitive data
     Scan(ScanCommand),
-    #[clap(about = "generate shell completions")]
+    /// generate shell completions
     Completions(CompletionsCommand),
-    #[clap(about = "show history statistics")]
+    /// show history statistics
     Stats(StatsCommand),
-    #[clap(visible_alias = "cfg", about = "edit or initialize configuration")]
+    /// edit or initialize configuration
+    #[command(visible_alias = "cfg")]
     Config(ConfigCommand),
-    #[clap(about = "diagnose common issues and produce diagnostic reports")]
+    /// diagnose common issues and produce diagnostic reports
     Doctor(doctor::DoctorCommand),
-    #[clap(hide = true, about = "write man pages into a directory (for packagers)")]
+    /// write man pages into a directory (for packagers)
+    #[command(hide = true)]
     Mangen(MangenCommand),
 }
 
 #[derive(Parser, Debug)]
 struct MangenCommand {
-    #[clap(help = "Directory to write pxh.1 and pxh-<subcommand>.1 into")]
+    /// Directory to write pxh.1 and pxh-<subcommand>.1 into
     dir: PathBuf,
 }
 
 #[derive(Parser, Debug)]
 struct InstallCommand {
-    #[clap(help = "Shell to install helpers into (bash or zsh)")]
+    /// Shell to install helpers into (bash or zsh)
     shellname: String,
 }
 
 #[derive(Parser, Debug)]
 struct ShowCommand {
-    #[clap(short = 'i', long, help = "Perform case-insensitive matching", default_value_t = false)]
+    /// Perform case-insensitive matching
+    #[arg(short = 'i', long, default_value_t = false)]
     ignore_case: bool,
-    #[clap(
-        short,
-        long,
-        default_value_t = 50,
-        help = "Display at most this many entries; 0 for unlimited"
-    )]
+    /// Display at most this many entries; 0 for unlimited
+    #[arg(short, long, default_value_t = 50)]
     limit: usize,
-    #[clap(short, long, help = "Display extra fields in the output")]
+    /// Display extra fields in the output
+    #[arg(short, long)]
     verbose: bool,
-    #[clap(long, help = "Suppress headers")]
+    /// Suppress headers
+    #[arg(long)]
     suppress_headers: bool,
-    #[clap(
-        short = 'H',
-        long,
-        help = "Show entries that were populated while in the current working directory"
-    )]
+    /// Show entries that were populated while in the current working directory
+    #[arg(short = 'H', long)]
     here: bool,
-    #[clap(long, help = "Filter to commands run in the specified directory (implies --here)")]
+    /// Filter to commands run in the specified directory (implies --here)
+    #[arg(long)]
     working_directory: Option<PathBuf>,
-    #[clap(
-        short = 'S',
-        long,
-        conflicts_with_all = ["here", "working_directory"],
-        help = "Display only commands from the specified session (\"current\", \"last\", or a session ID)"
-    )]
+    /// Display only commands from the specified session ("current", "last", or a session ID)
+    #[arg(short = 'S', long, conflicts_with_all = ["here", "working_directory"])]
     session: Option<String>,
-    #[clap(short = 'F', long, help = "Show only commands that exited with a non-zero status")]
+    /// Show only commands that exited with a non-zero status
+    #[arg(short = 'F', long)]
     failed: bool,
-    #[clap(long, help = "Match patterns in any order instead of sequentially")]
+    /// Match patterns in any order instead of sequentially
+    #[arg(long)]
     loosen: bool,
-    #[clap(
-        help = "One or more regular expressions to search through history entries; multiple values joined by `.*\\s.*`"
-    )]
+    /// One or more regular expressions to search through history entries; multiple values joined by `.*\s.*`
     patterns: Vec<String>,
     /// Internal: SQL-level LIMIT (may differ from display limit for --loosen)
-    #[clap(skip)]
+    #[arg(skip)]
     sql_limit: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
 struct ImportCommand {
-    #[clap(
-        long,
-        help = "Path to history file to import (defaults: bash=~/.bash_history, zsh=~/.zsh_history)"
-    )]
+    /// Path to history file to import (defaults: bash=~/.bash_history, zsh=~/.zsh_history)
+    #[arg(long)]
     histfile: Option<PathBuf>,
-    #[clap(long, help = "Type of shell history specified by --histfile")]
+    /// Type of shell history specified by --histfile
+    #[arg(long)]
     shellname: String,
-    #[clap(long, help = "Hostname to tag imported entries with (defaults to current hostname)")]
+    /// Hostname to tag imported entries with (defaults to current hostname)
+    #[arg(long)]
     hostname: Option<OsString>,
-    #[clap(long, help = "Username to tag imported entries with (defaults to current user)")]
+    /// Username to tag imported entries with (defaults to current user)
+    #[arg(long)]
     username: Option<OsString>,
-    #[clap(short = 'n', long, help = "Show what would be imported without making changes")]
+    /// Show what would be imported without making changes
+    #[arg(short = 'n', long)]
     dry_run: bool,
 }
 
 #[derive(Parser, Debug, Default)]
 struct SyncCommand {
-    #[clap(help = "Directory for sync operations (required for directory-based sync)")]
+    /// Directory for sync operations (required for directory-based sync)
     dirname: Option<PathBuf>,
-    #[clap(
-        long,
-        help = "(directory sync only) Only export the current database; do not read other databases",
-        default_value_t = false
-    )]
+    /// (directory sync only) Only export the current database; do not read other databases
+    #[arg(long, default_value_t = false)]
     export_only: bool,
-    #[clap(long, help = "Remote host to sync with via SSH")]
+    /// Remote host to sync with via SSH
+    #[arg(long)]
     remote: Option<String>,
-    #[clap(
-        long,
-        help = "Only send database to remote (no receive)",
-        conflicts_with = "receive_only"
-    )]
+    /// Only send database to remote (no receive)
+    #[arg(long, conflicts_with = "receive_only")]
     send_only: bool,
-    #[clap(
-        long,
-        help = "Only receive database from remote (no send)",
-        conflicts_with = "send_only"
-    )]
+    /// Only receive database from remote (no send)
+    #[arg(long, conflicts_with = "send_only")]
     receive_only: bool,
-    #[clap(long, help = "Remote database path")]
+    /// Remote database path
+    #[arg(long)]
     remote_db: Option<PathBuf>,
-    #[clap(
-        short = 'e',
-        long,
-        default_value = "ssh",
-        help = "SSH command to use for connection (like rsync's -e option)"
-    )]
+    /// SSH command to use for connection (like rsync's -e option)
+    #[arg(short = 'e', long, default_value = "ssh")]
     ssh_cmd: String,
-    #[clap(long, default_value = "pxh", help = "Path to pxh binary on the remote host")]
+    /// Path to pxh binary on the remote host
+    #[arg(long, default_value = "pxh")]
     remote_pxh: String,
-    #[clap(long, hide = true, help = "Internal: run in server mode")]
+    /// Internal: run in server mode
+    #[arg(long, hide = true)]
     server: bool,
-    #[clap(
-        long,
-        help = "Only sync commands from the last N days (remote sync only)",
-        value_name = "DAYS"
-    )]
+    /// Only sync commands from the last N days (remote sync only)
+    #[arg(long, value_name = "DAYS")]
     since: Option<u32>,
-    #[clap(long, hide = true, help = "Use stdin/stdout for sync instead of SSH (for testing)")]
+    /// Use stdin/stdout for sync instead of SSH (for testing)
+    #[arg(long, hide = true)]
     stdin_stdout: bool,
-    #[clap(long, help = "Disable automatic filtering of potential secrets during sync import")]
+    /// Disable automatic filtering of potential secrets during sync import
+    #[arg(long)]
     no_secret_filter: bool,
 }
 
 #[derive(Parser, Debug)]
 struct BootstrapCommand {
-    #[clap(help = "Remote host to install pxh on ([user@]host)")]
+    /// Remote host to install pxh on ([user@]host)
     host: String,
-    #[clap(
-        long,
-        default_value = "~/.local/bin",
-        help = "Remote install directory (a relative path is relative to the remote home)"
-    )]
+    /// Remote install directory (a relative path is relative to the remote home)
+    #[arg(long, default_value = "~/.local/bin")]
     install_dir: String,
-    #[clap(
-        long,
-        value_name = "VERSION",
-        default_value = env!("CARGO_PKG_VERSION"),
-        help = "Release to install: defaults to this binary's version so both sides speak the same sync protocol; `latest` takes the newest published"
-    )]
+    /// Release to install: defaults to this binary's version so both sides speak the same sync protocol; `latest` takes the newest published
+    #[arg(long, value_name = "VERSION", default_value = env!("CARGO_PKG_VERSION"))]
     release: String,
-    #[clap(
-        short = 'e',
-        long,
-        default_value = "ssh",
-        help = "SSH command to use for connection (like rsync's -e option)"
-    )]
+    /// SSH command to use for connection (like rsync's -e option)
+    #[arg(short = 'e', long, default_value = "ssh")]
     ssh_cmd: String,
-    #[clap(long, help = "Do not sync history with the host after installing")]
+    /// Do not sync history with the host after installing
+    #[arg(long)]
     no_sync: bool,
 }
 
 #[derive(Parser, Debug)]
 struct ScrubCommand {
-    #[clap(long, help = "Scrub from this histfile instead of (or in addition to) the database")]
+    /// Scrub from this histfile instead of (or in addition to) the database
+    #[arg(long)]
     histfile: Option<PathBuf>,
-    #[clap(
-        long,
-        conflicts_with = "histfile",
-        help = "Scrub from all .db files in this directory (e.g., sync folder)"
-    )]
+    /// Scrub from all .db files in this directory (e.g., sync folder)
+    #[arg(long, conflicts_with = "histfile")]
     dir: Option<PathBuf>,
-    #[clap(
-        long,
-        conflicts_with_all = ["histfile", "dir"],
-        help = "Scrub from remote host via SSH sync protocol"
-    )]
+    /// Scrub from remote host via SSH sync protocol
+    #[arg(long, conflicts_with_all = ["histfile", "dir"])]
     remote: Option<String>,
-    #[clap(
-        short = 'e',
-        long,
-        default_value = "ssh",
-        requires = "remote",
-        help = "SSH command to use for connection (like rsync's -e option)"
-    )]
+    /// SSH command to use for connection (like rsync's -e option)
+    #[arg(short = 'e', long, default_value = "ssh", requires = "remote")]
     ssh_cmd: String,
-    #[clap(long, requires = "remote", help = "Path to pxh binary on the remote host")]
+    /// Path to pxh binary on the remote host
+    #[arg(long, requires = "remote")]
     remote_pxh: Option<String>,
-    #[clap(long, requires = "remote", help = "Remote database path")]
+    /// Remote database path
+    #[arg(long, requires = "remote")]
     remote_db: Option<PathBuf>,
-    #[clap(short = 'n', long, help = "Dry-run mode (only display the rows, don't actually scrub)")]
+    /// Dry-run mode (only display the rows, don't actually scrub)
+    #[arg(short = 'n', long)]
     dry_run: bool,
-    #[clap(
-        long,
-        help = "Use secret detection to find entries to scrub (instead of interactive prompt)"
-    )]
+    /// Use secret detection to find entries to scrub (instead of interactive prompt)
+    #[arg(long)]
     scan: bool,
-    #[clap(short, long, default_value = "critical", value_enum)]
+    #[arg(short, long, default_value = "critical", value_enum)]
     confidence: ConfidenceLevel,
-    #[clap(
-        long,
-        requires = "histfile",
-        help = "Shell format for histfile (bash or zsh); auto-detected if not specified"
-    )]
+    /// Shell format for histfile (bash or zsh); auto-detected if not specified
+    #[arg(long, requires = "histfile")]
     shellname: Option<String>,
-    #[clap(short = 'y', long, help = "Skip confirmation prompt")]
+    /// Skip confirmation prompt
+    #[arg(short = 'y', long)]
     yes: bool,
-    #[clap(help = "The string to scrub (for interactive mode)")]
+    /// The string to scrub (for interactive mode)
     contraband: Option<String>,
 }
 
 #[derive(Parser, Debug)]
 struct InsertCommand {
-    #[clap(long)]
+    #[arg(long)]
     shellname: String,
-    #[clap(long)]
+    #[arg(long)]
     hostname: OsString,
-    #[clap(long)]
+    #[arg(long)]
     username: OsString,
-    #[clap(long)]
+    #[arg(long)]
     working_directory: Option<PathBuf>, // option because importing may lack working dir
-    #[clap(long)]
+    #[arg(long)]
     exit_status: Option<i64>,
-    #[clap(long)]
+    #[arg(long)]
     session_id: i64,
-    #[clap(long)]
+    #[arg(long)]
     start_unix_timestamp: Option<i64>, // similar to above
-    #[clap(long)]
+    #[arg(long)]
     end_unix_timestamp: Option<i64>,
-    #[clap(allow_hyphen_values = true, trailing_var_arg = true)]
+    #[arg(allow_hyphen_values = true, trailing_var_arg = true)]
     command: Vec<OsString>,
 }
 
 #[derive(Parser, Debug)]
 struct SealCommand {
-    #[clap(long)]
+    #[arg(long)]
     session_id: i64,
-    #[clap(long)]
+    #[arg(long)]
     exit_status: i32,
-    #[clap(long)]
+    #[arg(long)]
     end_unix_timestamp: i64,
 }
 
 #[derive(Parser, Debug)]
 struct ShellConfigCommand {
-    #[clap(help = "Shell name (bash or zsh)")]
+    /// Shell name (bash or zsh)
     shellname: String,
-    #[clap(long, help = "Don't bind Ctrl-R to pxh recall")]
+    /// Don't bind Ctrl-R to pxh recall
+    #[arg(long)]
     no_ctrl_r: bool,
 }
 
 #[derive(Parser, Debug)]
 struct AutosuggestCommand {
-    #[clap(help = "Prefix to match against command history")]
+    /// Prefix to match against command history
     prefix: OsString,
 }
 
 #[derive(Parser, Debug)]
 struct CompletionsCommand {
-    #[clap(help = "Shell to generate completions for (bash, zsh)")]
+    /// Shell to generate completions for (bash, zsh)
     shell: clap_complete::Shell,
 }
 
@@ -407,7 +364,8 @@ struct StatsCommand {}
 
 #[derive(Parser, Debug)]
 struct ConfigCommand {
-    #[clap(long, help = "Print the config file path")]
+    /// Print the config file path
+    #[arg(long)]
     path: bool,
 }
 
@@ -416,33 +374,28 @@ struct ExportCommand {}
 
 #[derive(Parser, Debug)]
 struct MaintenanceCommand {
-    #[clap(
-        help = "Paths to SQLite database files to maintain (if not specified, maintains the current database)"
-    )]
+    /// Paths to SQLite database files to maintain (if not specified, maintains the current database)
     files: Vec<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
 struct ScanCommand {
-    #[clap(short, long, default_value = "critical", value_enum)]
+    #[arg(short, long, default_value = "critical", value_enum)]
     confidence: ConfidenceLevel,
-    #[clap(short, long, help = "Output as JSON")]
+    /// Output as JSON
+    #[arg(short, long)]
     json: bool,
-    #[clap(short, long, help = "Verbose output with pattern details")]
+    /// Verbose output with pattern details
+    #[arg(short, long)]
     verbose: bool,
-    #[clap(long, help = "Scan this histfile instead of the database")]
+    /// Scan this histfile instead of the database
+    #[arg(long)]
     histfile: Option<PathBuf>,
-    #[clap(
-        long,
-        conflicts_with = "histfile",
-        help = "Scan all .db files in this directory (e.g., sync folder)"
-    )]
+    /// Scan all .db files in this directory (e.g., sync folder)
+    #[arg(long, conflicts_with = "histfile")]
     dir: Option<PathBuf>,
-    #[clap(
-        long,
-        requires = "histfile",
-        help = "Shell format for histfile (bash or zsh); auto-detected if not specified"
-    )]
+    /// Shell format for histfile (bash or zsh); auto-detected if not specified
+    #[arg(long, requires = "histfile")]
     shellname: Option<String>,
 }
 

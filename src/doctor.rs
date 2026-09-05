@@ -8,15 +8,20 @@ use rusqlite::Connection;
 
 #[derive(Parser, Debug)]
 pub struct DoctorCommand {
-    #[clap(long, help = "Attempt to fix issues automatically (prompts first)")]
+    /// Attempt to fix issues automatically (prompts first)
+    #[arg(long)]
     pub fix: bool,
-    #[clap(long, help = "Output a GitHub-issue-ready diagnostic report")]
+    /// Output a GitHub-issue-ready diagnostic report
+    #[arg(long)]
     pub report: bool,
-    #[clap(short, long, help = "Show all checks, including passing ones")]
+    /// Show all checks, including passing ones
+    #[arg(short, long)]
     pub verbose: bool,
-    #[clap(short = 'y', long, help = "Skip confirmation prompts for --fix")]
+    /// Skip confirmation prompts for --fix
+    #[arg(short = 'y', long)]
     pub yes: bool,
-    #[clap(long, help = "Output all checks as JSON", conflicts_with_all = ["report", "fix"])]
+    /// Output all checks as JSON
+    #[arg(long, conflicts_with_all = ["report", "fix"])]
     pub json: bool,
 }
 

@@ -12,21 +12,29 @@ use super::tui::RecallTui;
 use crate::config::Config;
 #[derive(Parser, Debug)]
 pub struct RecallCommand {
-    #[clap(long, help = "Search only in current directory", conflicts_with = "global")]
+    /// Search only in current directory
+    #[arg(long, conflicts_with = "global")]
     pub here: bool,
-    #[clap(long, help = "Search across all directories (overrides --here in config)")]
+    /// Search across all directories (overrides --here in config)
+    #[arg(long)]
     pub global: bool,
-    #[clap(long, short = 'q', allow_hyphen_values = true, help = "Initial search query")]
+    /// Initial search query
+    #[arg(long, short = 'q', allow_hyphen_values = true)]
     pub query: Option<String>,
-    #[clap(long, short = 'p', help = "Print results instead of showing TUI")]
+    /// Print results instead of showing TUI
+    #[arg(long, short = 'p')]
     pub print: bool,
-    #[clap(long, short = 'l', help = "Limit results when printing", default_value = "20")]
+    /// Limit results when printing
+    #[arg(long, short = 'l', default_value = "20")]
     pub limit: usize,
-    #[clap(long, hide = true, help = "Show timing information")]
+    /// Show timing information
+    #[arg(long, hide = true)]
     pub timing: bool,
-    #[clap(long, hide = true, help = "Paint TUI once then exit (for profiling)")]
+    /// Paint TUI once then exit (for profiling)
+    #[arg(long, hide = true)]
     pub paint_then_exit: bool,
-    #[clap(long, help = "Shell integration mode (outputs command for shell to execute)")]
+    /// Shell integration mode (outputs command for shell to execute)
+    #[arg(long)]
     pub shell_mode: bool,
 }
 
