@@ -4,6 +4,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::time::{Duration, Instant};
 
+use anyhow::Result;
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -410,7 +411,7 @@ struct RecallTerminal {
 }
 
 impl RecallTerminal {
-    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+    fn new() -> Result<Self> {
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
 
@@ -440,7 +441,7 @@ impl RecallTerminal {
         })
     }
 
-    fn cleanup(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    fn cleanup(&mut self) -> Result<()> {
         self.cleaned_up = true;
         #[cfg(not(target_os = "windows"))]
         if self.keyboard_enhanced {
@@ -487,7 +488,7 @@ impl RecallTui {
         initial_query: Option<String>,
         config: &RecallConfig,
         shell_mode: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self> {
         // Build the state (including the initial DB load) before touching the
         // terminal, so failures leave the terminal untouched.
         let mut state = RecallState::new(engine, initial_mode, initial_query, config, shell_mode)?;
@@ -498,7 +499,7 @@ impl RecallTui {
         Ok(RecallTui { state, terminal })
     }
 
-    fn draw_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    fn draw_frame(&mut self) -> Result<()> {
         // Get fresh terminal size each frame
         let (term_width, term_height) = terminal::size()?;
         self.state.set_dimensions(term_width, term_height);
@@ -507,7 +508,7 @@ impl RecallTui {
         self.state.draw(&mut w)
     }
 
-    pub fn run(&mut self) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    pub fn run(&mut self) -> Result<Option<String>> {
         loop {
             if self.state.expire_timed_effects() {
                 self.state.needs_redraw = true;
@@ -564,7 +565,7 @@ impl RecallTui {
     }
 
     /// Draw once and exit (for profiling)
-    pub fn draw_once(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn draw_once(&mut self) -> Result<()> {
         self.draw_frame()?;
         self.terminal.cleanup()?;
         Ok(())
@@ -578,7 +579,7 @@ impl RecallState {
         initial_query: Option<String>,
         config: &RecallConfig,
         shell_mode: bool,
-    ) -> Result<Self, Box<dyn std::error::Error>> {
+    ) -> Result<Self> {
         let query = initial_query.as_deref().unwrap_or("").to_string();
         let host_filter = HostFilter::default();
         let parsed_query = RecallQuery::parse(&query);
@@ -923,7 +924,7 @@ impl RecallState {
             .map(|e| e.command.clone())
     }
 
-    fn handle_key(&mut self, key: KeyEvent) -> Result<KeyAction, Box<dyn std::error::Error>> {
+    fn handle_key(&mut self, key: KeyEvent) -> Result<KeyAction> {
         match self.keymap_mode {
             KeymapMode::Emacs => self.handle_key_emacs(key),
             KeymapMode::VimInsert => self.handle_key_vim_insert(key),
@@ -994,7 +995,7 @@ impl RecallState {
         }
     }
 
-    fn handle_key_emacs(&mut self, key: KeyEvent) -> Result<KeyAction, Box<dyn std::error::Error>> {
+    fn handle_key_emacs(&mut self, key: KeyEvent) -> Result<KeyAction> {
         // Check common keys first
         if let Some(action) = self.handle_common_key(key) {
             return Ok(action);
@@ -1038,10 +1039,7 @@ impl RecallState {
         }
     }
 
-    fn handle_key_vim_insert(
-        &mut self,
-        key: KeyEvent,
-    ) -> Result<KeyAction, Box<dyn std::error::Error>> {
+    fn handle_key_vim_insert(&mut self, key: KeyEvent) -> Result<KeyAction> {
         // Check common keys first
         if let Some(action) = self.handle_common_key(key) {
             return Ok(action);
@@ -1077,10 +1075,7 @@ impl RecallState {
         }
     }
 
-    fn handle_key_vim_normal(
-        &mut self,
-        key: KeyEvent,
-    ) -> Result<KeyAction, Box<dyn std::error::Error>> {
+    fn handle_key_vim_normal(&mut self, key: KeyEvent) -> Result<KeyAction> {
         // Check common keys first
         if let Some(action) = self.handle_common_key(key) {
             return Ok(action);
@@ -1173,12 +1168,7 @@ impl RecallState {
         }
     }
 
-    fn draw_preview<W: Write>(
-        &self,
-        w: &mut W,
-        start_y: u16,
-        width: u16,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn draw_preview<W: Write>(&self, w: &mut W, start_y: u16, width: u16) -> Result<()> {
         // Get the selected entry
         let entry = self
             .filtered_indices
@@ -1269,7 +1259,7 @@ impl RecallState {
     /// Render a full frame into `w` using the current dimensions (see
     /// `set_dimensions`). Generic over the writer so tests can render into a
     /// buffer; the live path hands in a buffered /dev/tty.
-    fn draw<W: Write>(&mut self, w: &mut W) -> Result<(), Box<dyn std::error::Error>> {
+    fn draw<W: Write>(&mut self, w: &mut W) -> Result<()> {
         let (term_width, term_height) = (self.term_width, self.term_height);
         let results_height = self.results_height();
         let preview_start_y = results_height as u16;

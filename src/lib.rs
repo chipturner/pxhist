@@ -15,6 +15,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use anyhow::{Context, bail};
 use bstr::{BString, ByteSlice, io::BufReadExt};
 use chrono::prelude::{Local, TimeZone};
 use regex::bytes::Regex;
@@ -32,10 +33,7 @@ pub mod secrets_patterns;
 pub mod sync;
 pub mod ui;
 
-pub fn get_setting(
-    conn: &Connection,
-    key: &str,
-) -> Result<Option<BString>, Box<dyn std::error::Error>> {
+pub fn get_setting(conn: &Connection, key: &str) -> anyhow::Result<Option<BString>> {
     let mut stmt = conn.prepare("SELECT value FROM settings WHERE key = ?")?;
     let mut rows = stmt.query([key])?;
 
@@ -47,11 +45,7 @@ pub fn get_setting(
     }
 }
 
-pub fn set_setting(
-    conn: &Connection,
-    key: &str,
-    value: &BString,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn set_setting(conn: &Connection, key: &str, value: &BString) -> anyhow::Result<()> {
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
         (key, value.as_bytes()),
@@ -229,14 +223,14 @@ pub fn default_db_path() -> Option<PathBuf> {
 
 /// Initialize base schema (persistent tables and indexes only).
 /// Safe to call on foreign databases (scan/scrub --dir) -- all DDL is idempotent.
-pub fn initialize_base_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+pub fn initialize_base_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(include_str!("base_schema.sql"))?;
     Ok(())
 }
 
 /// Set up the in-memory memdb tables and register the REGEXP function.
 /// Only needed by commands that use `memdb.show_results` or REGEXP (show, scrub).
-pub fn initialize_full_schema(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+pub fn initialize_full_schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(
         "ATTACH DATABASE ':memory:' AS memdb;
          CREATE TABLE memdb.show_results (
@@ -263,7 +257,7 @@ pub fn initialize_full_schema(conn: &Connection) -> Result<(), Box<dyn std::erro
 pub const CURRENT_SCHEMA_VERSION: i32 = 3;
 
 /// Run versioned schema migrations tracked via PRAGMA user_version.
-pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run_schema_migrations(conn: &Connection) -> anyhow::Result<()> {
     let version: i32 = conn.pragma_query_value(None, "user_version", |row| row.get(0))?;
 
     if version < 1 {
@@ -298,23 +292,18 @@ pub fn run_schema_migrations(conn: &Connection) -> Result<(), Box<dyn std::error
 
 /// Open a lightweight connection (persistent schema only, no memdb/regexp).
 /// Use for hot-path commands like insert and seal.
-pub fn sqlite_connection(path: &Option<PathBuf>) -> Result<Connection, Box<dyn std::error::Error>> {
+pub fn sqlite_connection(path: &Option<PathBuf>) -> anyhow::Result<Connection> {
     sqlite_connection_inner(path, false)
 }
 
 /// Open a full connection with memdb tables and REGEXP function.
 /// Use for commands that need `memdb.show_results` or REGEXP (show, scrub, scan).
-pub fn sqlite_connection_full(
-    path: &Option<PathBuf>,
-) -> Result<Connection, Box<dyn std::error::Error>> {
+pub fn sqlite_connection_full(path: &Option<PathBuf>) -> anyhow::Result<Connection> {
     sqlite_connection_inner(path, true)
 }
 
-fn sqlite_connection_inner(
-    path: &Option<PathBuf>,
-    full: bool,
-) -> Result<Connection, Box<dyn std::error::Error>> {
-    let path = path.as_ref().ok_or("Database not defined; use --db or PXH_DB_PATH")?;
+fn sqlite_connection_inner(path: &Option<PathBuf>, full: bool) -> anyhow::Result<Connection> {
+    let path = path.as_ref().context("Database not defined; use --db or PXH_DB_PATH")?;
     if let Some(parent) = path.parent() {
         // Follow symlinks so create_dir_all creates the real target directory
         // rather than conflicting with an existing symlink entry.
@@ -322,7 +311,7 @@ fn sqlite_connection_inner(
         std::fs::create_dir_all(resolved)?;
     }
     // No path here: rusqlite's own message already names the file.
-    let conn = anyhow::Context::with_context(Connection::open(path), || "open history database")?;
+    let conn = Connection::open(path).context("open history database")?;
 
     // Ensure the database file is only readable by the owner
     use std::os::unix::fs::PermissionsExt;
@@ -370,7 +359,7 @@ pub fn with_write_retry<T, F>(
     conn: &mut Connection,
     max_total: Duration,
     mut f: F,
-) -> Result<T, Box<dyn std::error::Error>>
+) -> anyhow::Result<T>
 where
     F: FnMut(&Transaction) -> Result<T>,
 {
@@ -529,7 +518,7 @@ pub fn import_zsh_history(
     histfile: &Path,
     hostname: Option<BString>,
     username: Option<BString>,
-) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
+) -> anyhow::Result<Vec<Invocation>> {
     let mut f = File::open(histfile)?;
     let mut buf = Vec::new();
     let _ = f.read_to_end(&mut buf)?;
@@ -609,7 +598,7 @@ pub fn import_bash_history(
     histfile: &Path,
     hostname: Option<BString>,
     username: Option<BString>,
-) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
+) -> anyhow::Result<Vec<Invocation>> {
     let mut f = File::open(histfile)?;
     let mut buf = Vec::new();
     let _ = f.read_to_end(&mut buf)?;
@@ -647,7 +636,7 @@ pub fn import_bash_history(
     Ok(dedup_invocations(ret))
 }
 
-pub fn import_json_history(histfile: &Path) -> Result<Vec<Invocation>, Box<dyn std::error::Error>> {
+pub fn import_json_history(histfile: &Path) -> anyhow::Result<Vec<Invocation>> {
     let f = File::open(histfile)?;
     let reader = BufReader::new(f);
     Ok(serde_json::from_reader(reader)?)
@@ -738,7 +727,7 @@ impl Invocation {
     }
 }
 
-pub fn json_export(rows: &[Invocation]) -> Result<(), Box<dyn std::error::Error>> {
+pub fn json_export(rows: &[Invocation]) -> anyhow::Result<()> {
     let json_values: Vec<serde_json::Value> = rows.iter().map(Invocation::to_json_export).collect();
     serde_json::to_writer(io::stdout(), &json_values)?;
     Ok(())
@@ -869,7 +858,7 @@ pub fn present_results_human_readable(
     fields: &[&str],
     rows: &[Invocation],
     suppress_headers: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     let displayers = displayers();
     let mut table = prettytable::Table::new();
     table.set_format(*prettytable::format::consts::FORMAT_CLEAN);
@@ -878,7 +867,7 @@ pub fn present_results_human_readable(
         let mut title_row = prettytable::Row::empty();
         for field in fields {
             let Some(d) = displayers.get(field) else {
-                return Err(Box::from(format!("Invalid 'show' field: {field}")));
+                bail!("Invalid 'show' field: {field}");
             };
 
             title_row.add_cell(prettytable::Cell::new(d.header).style_spec(d.header_style));
@@ -908,7 +897,7 @@ pub fn present_results_human_readable(
 pub fn atomically_remove_lines_from_file(
     input_filepath: &Path,
     contraband: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     // Resolve symlinks so persist() replaces the real target, not the symlink
     let resolved = resolve_through_symlinks(input_filepath);
     let original_perms = std::fs::metadata(&resolved)?.permissions();
@@ -938,7 +927,7 @@ pub fn atomically_remove_lines_from_file(
 pub fn atomically_remove_matching_lines_from_file(
     input_filepath: &Path,
     contraband_items: &[&str],
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> anyhow::Result<()> {
     use std::collections::HashSet;
 
     // Resolve symlinks so persist() replaces the real target, not the symlink

@@ -3,6 +3,7 @@ use std::io::{self, Write};
 use std::time::Instant;
 use std::{env, path::PathBuf};
 
+use anyhow::Result;
 use clap::Parser;
 use rusqlite::Connection;
 
@@ -58,7 +59,7 @@ pub enum HostFilter {
 }
 
 impl RecallCommand {
-    pub fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn go(&self, conn: Connection) -> Result<()> {
         let start = Instant::now();
 
         let config_start = Instant::now();

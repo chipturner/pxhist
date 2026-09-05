@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use anyhow::Result;
 use bstr::BString;
 use nucleo::{Config, Matcher, Utf32Str};
 use rusqlite::Connection;
@@ -79,7 +80,7 @@ impl SearchEngine {
         filter_mode: FilterMode,
         host_filter: HostFilter,
         query: Option<&RecallQuery>,
-    ) -> Result<Vec<HistoryEntry>, Box<dyn std::error::Error>> {
+    ) -> Result<Vec<HistoryEntry>> {
         let (sql, params) = self.recall_query(filter_mode, host_filter, query);
         let mut stmt = self.conn.prepare(&sql)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
@@ -164,10 +165,7 @@ SELECT id, full_command, start_unix_timestamp, working_directory,
     /// Delete all history entries matching a command (trimmed), since the
     /// recall list is deduplicated by command text.  Returns the number of
     /// rows deleted.
-    pub fn delete_entries_by_command(
-        &self,
-        command: &str,
-    ) -> Result<usize, Box<dyn std::error::Error>> {
+    pub fn delete_entries_by_command(&self, command: &str) -> Result<usize> {
         let trimmed = command.trim_end();
         let deleted = self.conn.execute(
             "DELETE FROM command_history WHERE rtrim(CAST(full_command AS text)) = ?",

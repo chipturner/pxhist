@@ -9,6 +9,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use anyhow::{Result, bail};
 use regex::bytes::RegexSet;
 use rusqlite::Connection;
 
@@ -41,11 +42,7 @@ pub fn sync_watermark(conn: &Connection, machine_id: u64) -> Option<i64> {
 
 /// Persist the watermark for a source machine. Call only after a fully
 /// successful merge: an interrupted merge must re-consider its rows.
-pub fn set_sync_watermark(
-    conn: &Connection,
-    machine_id: u64,
-    new_max: i64,
-) -> Result<(), Box<dyn std::error::Error>> {
+pub fn set_sync_watermark(conn: &Connection, machine_id: u64, new_max: i64) -> Result<()> {
     let bs = bstr::BString::from(new_max.to_string());
     crate::set_setting(conn, &watermark_key(machine_id), &bs)
 }
@@ -68,7 +65,7 @@ pub fn merge_database_from_file(
     path: &Path,
     secret_filter: Option<&RegexSet>,
     watermark: Option<i64>,
-) -> Result<MergeStats, Box<dyn std::error::Error>> {
+) -> Result<MergeStats> {
     conn.execute("ATTACH DATABASE ? AS other", [read_only_uri(path)])?;
     let result = merge_attached(conn, secret_filter, watermark);
     conn.execute("DETACH DATABASE other", ())?;
@@ -113,10 +110,10 @@ fn merge_attached(
     conn: &mut Connection,
     secret_filter: Option<&RegexSet>,
     watermark: Option<i64>,
-) -> Result<MergeStats, Box<dyn std::error::Error>> {
+) -> Result<MergeStats> {
     let columns = source_columns(conn)?;
     if columns.is_empty() {
-        return Err("not a pxh database (no command_history table)".into());
+        bail!("not a pxh database (no command_history table)");
     }
     // Sources written before schema v1 have no machine_id column.
     let machine_id = if columns.iter().any(|c| c == "machine_id") { "machine_id" } else { "NULL" };

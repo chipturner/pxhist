@@ -3,6 +3,7 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{Context, Result, anyhow};
 use clap::Parser;
 use rusqlite::Connection;
 
@@ -77,7 +78,7 @@ impl CheckResult {
 use pxh::CURRENT_SCHEMA_VERSION;
 
 impl DoctorCommand {
-    pub fn go(&self, db_path: &Option<PathBuf>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn go(&self, db_path: &Option<PathBuf>) -> Result<()> {
         let conn = db_path.as_deref().and_then(Self::open_for_inspection);
 
         // Only migrate when --fix is set; a diagnostic command should not mutate state
@@ -688,7 +689,7 @@ impl DoctorCommand {
         sections: &[(&str, Vec<CheckResult>)],
         conn: &Option<Connection>,
         db_path: &Option<PathBuf>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         let fixable: Vec<&CheckResult> = sections
             .iter()
             .flat_map(|(_, checks)| checks.iter())
@@ -750,7 +751,11 @@ impl DoctorCommand {
                             let status = std::process::Command::new(std::env::current_exe()?)
                                 .args(["install", &shell_name])
                                 .status()?;
-                            if status.success() { Ok(()) } else { Err("pxh install failed".into()) }
+                            if status.success() {
+                                Ok(())
+                            } else {
+                                Err(anyhow!("pxh install failed"))
+                            }
                         },
                     )?;
                 }
@@ -758,7 +763,7 @@ impl DoctorCommand {
                     self.apply_fix_with_prompt(
                     "Merge legacy ~/.pxh/pxh.db into XDG database and back up ~/.pxh",
                     || {
-                        let home = std::env::home_dir().ok_or("Cannot determine home directory")?;
+                        let home = std::env::home_dir().context("Cannot determine home directory")?;
                         let legacy_db = home.join(".pxh").join("pxh.db");
                         let xdg_data = std::env::var("XDG_DATA_HOME").map_or_else(|_| home.join(".local").join("share"), PathBuf::from);
                         let xdg_db = xdg_data.join("pxh").join("pxh.db");
@@ -773,7 +778,7 @@ impl DoctorCommand {
                         let tx = xdg_conn.transaction()?;
                         tx.execute(
                             "ATTACH DATABASE ? AS legacy",
-                            [legacy_db.to_str().ok_or("Invalid path")?],
+                            [legacy_db.to_str().context("Invalid path")?],
                         )?;
                         tx.execute(
                             r#"INSERT OR IGNORE INTO main.command_history
@@ -826,11 +831,7 @@ impl DoctorCommand {
         Ok(())
     }
 
-    fn apply_fix(
-        &self,
-        description: &str,
-        action: impl FnOnce() -> Result<(), Box<dyn std::error::Error>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn apply_fix(&self, description: &str, action: impl FnOnce() -> Result<()>) -> Result<()> {
         print!("  Fixing: {description}...");
         match action() {
             Ok(()) => {
@@ -847,8 +848,8 @@ impl DoctorCommand {
     fn apply_fix_with_prompt(
         &self,
         description: &str,
-        action: impl FnOnce() -> Result<(), Box<dyn std::error::Error>>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+        action: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
         if !self.yes {
             print!("  {description}? [y/N] ");
             std::io::Write::flush(&mut std::io::stdout())?;

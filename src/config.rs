@@ -1,6 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use toml_edit::DocumentMut;
 
@@ -222,17 +223,15 @@ impl Config {
 
     /// Update the config file at the default path, preserving existing content.
     /// Each update is a (dotted_key, value) pair, e.g. ("host.hostname", value).
-    pub fn update_default_config(
-        updates: &[(&str, toml_edit::Item)],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let path = Self::default_config_path().ok_or("Could not determine config path")?;
+    pub fn update_default_config(updates: &[(&str, toml_edit::Item)]) -> Result<()> {
+        let path = Self::default_config_path().context("Could not determine config path")?;
         Self::update_config_at_path(&path, updates)
     }
 
     pub fn update_config_at_path(
         path: &PathBuf,
         updates: &[(&str, toml_edit::Item)],
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         // A config file born here starts from the commented template, so the
         // file the user later opens explains every key it does not set.
         let content = match fs::read_to_string(path) {
@@ -254,7 +253,7 @@ impl Config {
                 [key] => {
                     doc[key] = item.clone();
                 }
-                _ => return Err(format!("Unsupported key depth: {dotted_key}").into()),
+                _ => bail!("Unsupported key depth: {dotted_key}"),
             }
         }
 

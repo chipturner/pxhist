@@ -78,7 +78,7 @@ The sync implementation uses `create_filtered_db_copy()` to handle `--since` fil
 - **Imports**: Group by Std, External, Crate
 - **Formatting**: `cargo fmt` (via `just fmt`), config in rustfmt.toml
 - **Naming**: Command structs end with "Command" (e.g., `ShowCommand`)
-- **Error Handling**: Library and command code return `Result<T, Box<dyn std::error::Error>>` with `?`. Add context where a bare OS error would be unhelpful with `anyhow::Context::with_context(...)` (it converts through `?`). `main()` returns `()` and prints the whole `source()` chain via `pxh::ui::error(&error_chain(&*e))` -- never `-> Result` on `main()`.
+- **Error Handling**: Library and command code return `anyhow::Result<T>` with `?`. Fail with `bail!("...")` (or `Err(anyhow!(...))` in expression position), never a string `.into()`. Add context where a bare OS error would be unhelpful with `.context("open history database")` / `.with_context(|| ...)` (`anyhow::Context` works on `Option` too, replacing `ok_or("...")`). `main()` returns `()` and prints the whole chain via `pxh::ui::error(&format!("{e:#}"))` -- never `-> Result` on `main()`. rusqlite-only helpers (`Invocation::insert`, the custom SQL functions) keep `rusqlite::Result`.
 - **Diagnostics**: everything printed for a human that is not data goes through `pxh::ui::{warn, error, hint}` (lowercase `warning:` / `error:` / `hint:` on stderr; `anstream` honors `NO_COLOR`). Counted nouns use `ui::count(n, "secret")`, never `secret(s)`.
 - **Types**:
   - `BString` from bstr for binary strings/non-UTF8 data

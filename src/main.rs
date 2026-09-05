@@ -11,11 +11,12 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{Context, Result, anyhow, bail};
 use bstr::{BString, ByteSlice};
 use chrono::prelude::{Local, TimeZone};
 use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use regex::bytes::Regex;
-use rusqlite::{Connection, OpenFlags, Result};
+use rusqlite::{Connection, OpenFlags};
 use tempfile::NamedTempFile;
 
 mod doctor;
@@ -400,8 +401,8 @@ struct ScanCommand {
 }
 
 impl ImportCommand {
-    fn default_histfile(shellname: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let home = env::home_dir().ok_or("could not determine home directory")?;
+    fn default_histfile(shellname: &str) -> Result<PathBuf> {
+        let home = env::home_dir().context("could not determine home directory")?;
         match shellname {
             "bash" | "zsh" => {
                 if let Ok(histfile) = env::var("HISTFILE") {
@@ -412,12 +413,12 @@ impl ImportCommand {
                     _ => Ok(home.join(".zsh_history")),
                 }
             }
-            "json" => Err(Box::from("--histfile is required for json imports")),
-            _ => Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
+            "json" => Err(anyhow!("--histfile is required for json imports")),
+            _ => Err(anyhow!("Unsupported shell: {shellname} (PRs welcome!)")),
         }
     }
 
-    fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, mut conn: Connection) -> Result<()> {
         let histfile = match &self.histfile {
             Some(path) => path.clone(),
             None => Self::default_histfile(&self.shellname)?,
@@ -434,7 +435,7 @@ impl ImportCommand {
                 self.username.as_ref().map(|v| v.as_bytes().into()),
             ),
             "json" => pxh::import_json_history(&histfile),
-            _ => Err(Box::from(format!("Unsupported shell: {} (PRs welcome!)", self.shellname))),
+            _ => Err(anyhow!("Unsupported shell: {} (PRs welcome!)", self.shellname)),
         }?;
 
         let total = invocations.len();
@@ -464,7 +465,7 @@ impl ImportCommand {
 }
 
 impl ShellConfigCommand {
-    fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self) -> Result<()> {
         // Check if ctrl-r should be disabled (via flag or config)
         let config = pxh::config::Config::load();
         let disable_ctrl_r = self.no_ctrl_r || config.shell.disable_ctrl_r;
@@ -478,10 +479,7 @@ impl ShellConfigCommand {
                 contents
             }
             _ => {
-                return Err(Box::from(format!(
-                    "Unsupported shell: {} (PRs welcome!)",
-                    self.shellname
-                )));
+                bail!("Unsupported shell: {} (PRs welcome!)", self.shellname);
             }
         };
 
@@ -513,15 +511,15 @@ impl ShellConfigCommand {
 }
 
 impl InstallCommand {
-    fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self) -> Result<()> {
         let shellname = self.shellname.as_ref();
         let rc_file = match shellname {
             "zsh" => ".zshrc",
             "bash" => ".bashrc",
-            _ => return Err(Box::from(format!("Unsupported shell: {shellname} (PRs welcome!)"))),
+            _ => bail!("Unsupported shell: {shellname} (PRs welcome!)"),
         };
 
-        let mut pb = env::home_dir().ok_or("Unable to determine your homedir")?;
+        let mut pb = env::home_dir().context("Unable to determine your homedir")?;
         pb.push(rc_file);
 
         // Check what's already installed in the RC file.
@@ -585,7 +583,7 @@ SELECT full_command
  LIMIT 1"#;
 
 impl SealCommand {
-    fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, mut conn: Connection) -> Result<()> {
         // Short busy_timeout: let our own jittered retry loop handle contention
         // so a single waiter can't burn the full timeout while others slip past.
         conn.busy_timeout(Duration::from_millis(100))?;
@@ -597,7 +595,7 @@ impl SealCommand {
 }
 
 impl AutosuggestCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         let prefix = self.prefix.as_bytes();
         if prefix.is_empty() {
             return Ok(());
@@ -617,7 +615,7 @@ impl AutosuggestCommand {
 }
 
 impl ExportCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         let mut stmt = conn.prepare(
         r#"
 SELECT session_id, full_command, shellname, hostname, username, working_directory, exit_status, start_unix_timestamp, end_unix_timestamp, machine_id
@@ -633,9 +631,9 @@ ORDER BY id"#,
 }
 
 impl MaintenanceCommand {
-    fn go(&self, default_conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, default_conn: Connection) -> Result<()> {
         // Helper function to get database size and other stats
-        fn get_db_info(conn: &Connection) -> Result<(i64, i64, i64), Box<dyn std::error::Error>> {
+        fn get_db_info(conn: &Connection) -> Result<(i64, i64, i64)> {
             let page_count: i64 = conn.query_row("PRAGMA page_count", [], |r| r.get(0))?;
             let page_size: i64 = conn.query_row("PRAGMA page_size", [], |r| r.get(0))?;
             let freelist_count: i64 = conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))?;
@@ -643,10 +641,7 @@ impl MaintenanceCommand {
         }
 
         // Helper function to run maintenance on a single database connection
-        fn maintain_database(
-            conn: &Connection,
-            db_name: &str,
-        ) -> Result<(), Box<dyn std::error::Error>> {
+        fn maintain_database(conn: &Connection, db_name: &str) -> Result<()> {
             // Show database information before maintenance
             let (page_count, page_size, freelist_count) = get_db_info(conn)?;
             let total_size = page_count * page_size;
@@ -668,10 +663,9 @@ impl MaintenanceCommand {
                 )
                 .map(|n| n > 0)?;
             if !is_pxh_db {
-                return Err(format!(
+                bail!(
                     "'{db_name}' does not look like a pxh database (no command_history table); refusing to run maintenance"
-                )
-                .into());
+                );
             }
 
             // Show row counts for main tables
@@ -829,7 +823,7 @@ impl MaintenanceCommand {
             println!("\nAll database maintenance operations completed successfully.");
             Ok(())
         } else {
-            Err("One or more database maintenance operations failed".into())
+            Err(anyhow!("One or more database maintenance operations failed"))
         }
     }
 }
@@ -848,10 +842,10 @@ pub struct ScanMatch {
 }
 
 impl ConfigCommand {
-    fn go(&self) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self) -> Result<()> {
         use pxh::config::Config;
 
-        let path = Config::default_config_path().ok_or("could not determine config path")?;
+        let path = Config::default_config_path().context("could not determine config path")?;
 
         if self.path {
             println!("{}", path.display());
@@ -872,14 +866,14 @@ impl ConfigCommand {
             env::var("VISUAL").or_else(|_| env::var("EDITOR")).unwrap_or_else(|_| "vi".to_string());
         let status = std::process::Command::new(&editor).arg(&path).status()?;
         if !status.success() {
-            return Err(format!("{editor} exited with {status}").into());
+            bail!("{editor} exited with {status}");
         }
         Ok(())
     }
 }
 
 impl StatsCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         let (total, unique): (i64, i64) = conn.query_row(
             "SELECT COUNT(*), COUNT(DISTINCT full_command) FROM command_history",
             [],
@@ -962,7 +956,7 @@ impl StatsCommand {
 }
 
 impl ScanCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         // Handle directory mode
         if let Some(ref dir) = self.dir {
             return self.go_dir_mode(dir);
@@ -986,9 +980,9 @@ impl ScanCommand {
         Ok(())
     }
 
-    fn go_dir_mode(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fn go_dir_mode(&self, dir: &Path) -> Result<()> {
         if !dir.exists() {
-            return Err(format!("Directory does not exist: {}", dir.display()).into());
+            bail!("Directory does not exist: {}", dir.display());
         }
 
         let (patterns, regex_set) = build_secret_patterns(self.confidence.as_str())?;
@@ -1089,17 +1083,16 @@ impl ScanCommand {
                 "{} could not be processed; results may be incomplete",
                 pxh::ui::count(total_skipped, "file")
             ));
-            return Err(format!(
+            bail!(
                 "scan incomplete: {} could not be processed",
                 pxh::ui::count(total_skipped, "file")
-            )
-            .into());
+            );
         }
 
         Ok(())
     }
 
-    fn run_scan(&self, conn: &Connection) -> Result<Vec<ScanMatch>, Box<dyn std::error::Error>> {
+    fn run_scan(&self, conn: &Connection) -> Result<Vec<ScanMatch>> {
         let (patterns, regex_set) = build_secret_patterns(self.confidence.as_str())?;
 
         if patterns.is_empty() {
@@ -1146,9 +1139,7 @@ impl ScanCommand {
 
 // Shared scanning utilities
 
-pub fn build_secret_patterns(
-    confidence: &str,
-) -> Result<SecretPatterns, Box<dyn std::error::Error>> {
+pub fn build_secret_patterns(confidence: &str) -> Result<SecretPatterns> {
     use pxh::secrets_patterns::{PATTERNS_CRITICAL, PATTERNS_HIGH, PATTERNS_LOW};
     use regex::bytes::RegexSetBuilder;
 
@@ -1166,10 +1157,9 @@ pub fn build_secret_patterns(
             (v, REGEX_SIZE_LIMIT_ALL)
         }
         _ => {
-            return Err(format!(
+            bail!(
                 "Invalid confidence level: '{confidence}'. Use 'critical', 'high', 'low', or 'all'"
-            )
-            .into());
+            );
         }
     };
 
@@ -1181,9 +1171,7 @@ pub fn build_secret_patterns(
 
 /// The secret filter sync merges use: the built-in "critical" pattern set,
 /// or None when filtering is disabled (or no patterns are compiled in).
-fn sync_secret_filter(
-    filter_secrets: bool,
-) -> Result<Option<regex::bytes::RegexSet>, Box<dyn std::error::Error>> {
+fn sync_secret_filter(filter_secrets: bool) -> Result<Option<regex::bytes::RegexSet>> {
     if !filter_secrets {
         return Ok(None);
     }
@@ -1216,7 +1204,7 @@ fn is_bash_timestamp_line(line: &[u8]) -> bool {
     line.starts_with(b"#") && line.len() > 1 && line[1..].iter().all(|&b| b.is_ascii_digit())
 }
 
-fn prompt_for_confirmation() -> Result<bool, Box<dyn std::error::Error>> {
+fn prompt_for_confirmation() -> Result<bool> {
     print!("Proceed with scrubbing? [y/N] ");
     io::stdout().flush()?;
     let mut input = String::new();
@@ -1259,7 +1247,7 @@ pub fn scan_database(
     patterns: &[(&str, &str)],
     matches: &mut Vec<ScanMatch>,
     limit: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     let mut stmt = conn.prepare(
         "SELECT rowid, full_command, start_unix_timestamp, working_directory FROM command_history",
     )?;
@@ -1302,7 +1290,7 @@ fn scan_histfile(
     patterns: &[(&str, &str)],
     matches: &mut Vec<ScanMatch>,
     limit: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<()> {
     // For zsh, pre-join backslash-continuation lines so multi-line
     // commands are scanned as a single unit.
     let joined;
@@ -1420,10 +1408,7 @@ fn parse_histfile_line(
     }
 }
 
-fn scrub_from_database(
-    conn: &Connection,
-    matches: &[ScanMatch],
-) -> Result<usize, Box<dyn std::error::Error>> {
+fn scrub_from_database(conn: &Connection, matches: &[ScanMatch]) -> Result<usize> {
     let mut rowids_to_delete: Vec<i64> = matches.iter().map(|m| m.rowid).collect();
     rowids_to_delete.sort();
     rowids_to_delete.dedup();
@@ -1435,10 +1420,7 @@ fn scrub_from_database(
     Ok(rowids_to_delete.len())
 }
 
-fn scrub_from_histfile(
-    histfile: &Path,
-    matches: &[ScanMatch],
-) -> Result<usize, Box<dyn std::error::Error>> {
+fn scrub_from_histfile(histfile: &Path, matches: &[ScanMatch]) -> Result<usize> {
     let mut lines_to_remove: Vec<String> = matches
         .iter()
         .filter_map(|m| m.original_line.clone())
@@ -1459,10 +1441,7 @@ fn scrub_from_histfile(
 
 impl SyncCommand {
     /// Create a temporary database file with optional --since filtering
-    fn create_filtered_db_copy(
-        &self,
-        conn: &mut Connection,
-    ) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
+    fn create_filtered_db_copy(&self, conn: &mut Connection) -> Result<NamedTempFile> {
         // Create a temporary file with the database
         let temp_file = NamedTempFile::new()?;
 
@@ -1494,24 +1473,24 @@ impl SyncCommand {
 
         Ok(temp_file)
     }
-    fn go(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, mut conn: Connection) -> Result<()> {
         // Validate that --send-only and --receive-only are only used with remote sync
         if (self.send_only || self.receive_only) && self.remote.is_none() && !self.stdin_stdout {
-            return Err(Box::from(
-                "--send-only and --receive-only flags require --remote or --stdin-stdout to be specified",
-            ));
+            bail!(
+                "--send-only and --receive-only flags require --remote or --stdin-stdout to be specified"
+            );
         }
 
         // Validate that --remote and directory are not used together
         if self.remote.is_some() && self.dirname.is_some() {
-            return Err(Box::from("Cannot specify both --remote and a directory path"));
+            bail!("Cannot specify both --remote and a directory path");
         }
 
         // Validate that --since is only used with remote sync
         if self.since.is_some() && self.remote.is_none() && !self.stdin_stdout && !self.server {
-            return Err(Box::from(
-                "--since requires --remote or --stdin-stdout (not supported in directory sync mode)",
-            ));
+            bail!(
+                "--since requires --remote or --stdin-stdout (not supported in directory sync mode)"
+            );
         }
 
         // If in server mode, handle sync protocol
@@ -1526,7 +1505,7 @@ impl SyncCommand {
 
         // Original directory-based sync behavior requires dirname
         let dirname =
-            self.dirname.as_ref().ok_or("Directory path is required for directory-based sync")?;
+            self.dirname.as_ref().context("Directory path is required for directory-based sync")?;
 
         if !dirname.exists() {
             fs::create_dir(dirname)?;
@@ -1540,7 +1519,7 @@ impl SyncCommand {
         // use BString to get a vec<u8>.  Look into why this is and if
         // there is a workaround.
         let output_path_str =
-            output_path.to_str().ok_or("Unable to represent output filename as a string")?;
+            output_path.to_str().context("Unable to represent output filename as a string")?;
 
         if !self.export_only {
             let entries = fs::read_dir(dirname)?;
@@ -1588,7 +1567,7 @@ impl SyncCommand {
         Ok(())
     }
 
-    fn handle_remote_sync(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_remote_sync(&self, conn: &mut Connection) -> Result<()> {
         ignore_sigpipe();
 
         // Determine sync mode
@@ -1606,7 +1585,7 @@ impl SyncCommand {
             None
         } else {
             // SSH mode
-            let host = self.remote.as_ref().ok_or("Remote host required for SSH sync")?;
+            let host = self.remote.as_ref().context("Remote host required for SSH sync")?;
             println!("Syncing with {host}...");
 
             // Parse SSH command and arguments
@@ -1631,7 +1610,7 @@ impl SyncCommand {
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::inherit()); // Map stderr to our stderr
 
-            Some(cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {e}"))?)
+            Some(cmd.spawn().context("Failed to spawn SSH command")?)
         };
 
         // Handle stdin/stdout directly or through SSH child process
@@ -1641,11 +1620,12 @@ impl SyncCommand {
         } else {
             // Use SSH child process pipes
             if let Some(ref mut child) = child {
-                let stdin = child.stdin.take().ok_or("Failed to get stdin from SSH process")?;
-                let stdout = child.stdout.take().ok_or("Failed to get stdout from SSH process")?;
+                let stdin = child.stdin.take().context("Failed to get stdin from SSH process")?;
+                let stdout =
+                    child.stdout.take().context("Failed to get stdout from SSH process")?;
                 (Box::new(stdin) as Box<dyn Write>, Box::new(stdout) as Box<dyn Read>)
             } else {
-                return Err(Box::from("No child process available"));
+                bail!("No child process available");
             }
         };
 
@@ -1662,9 +1642,7 @@ impl SyncCommand {
                 {
                     pxh::ui::hint(&format!("pxh bootstrap {host} installs pxh there"));
                 }
-                return Err(
-                    format!("Remote sync failed: remote command exited with {status}").into()
-                );
+                bail!("Remote sync failed: remote command exited with {status}");
             }
         }
         exchange?;
@@ -1685,7 +1663,7 @@ impl SyncCommand {
         mut writer: Box<dyn Write>,
         reader: &mut Box<dyn Read>,
         conn: &mut Connection,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         writer.write_all(mode.as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
@@ -1715,7 +1693,7 @@ impl SyncCommand {
         path: PathBuf,
         secret_filter: Option<&regex::bytes::RegexSet>,
         seen_machine_ids: &mut std::collections::HashMap<u64, PathBuf>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         // Quick read-only peek at the source for its machine_id.
         let mut source_machine_id = {
             let other = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).ok();
@@ -1768,13 +1746,13 @@ impl SyncCommand {
         Ok(())
     }
 
-    fn handle_server_mode(&self, conn: &mut Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn handle_server_mode(&self, conn: &mut Connection) -> Result<()> {
         // Read mode from stdin
         let mut mode = String::new();
         io::stdin().read_line(&mut mode)?;
 
         if mode.is_empty() {
-            return Err(Box::from("No sync mode received"));
+            bail!("No sync mode received");
         }
 
         let mode = mode.trim();
@@ -1785,7 +1763,7 @@ impl SyncCommand {
             let mut options_json = String::new();
             io::stdin().read_line(&mut options_json)?;
             let options: SyncOptions = serde_json::from_str(options_json.trim())
-                .map_err(|e| format!("Failed to parse v2 protocol options: {e}. Client and server may have incompatible versions."))?;
+                .context("Failed to parse v2 protocol options; client and server may have incompatible versions")?;
             (mode.strip_suffix("-v2").unwrap(), options)
         } else {
             (mode, SyncOptions::default())
@@ -1810,18 +1788,14 @@ impl SyncCommand {
                 let result = self.execute_remote_scrub(conn, &options)?;
                 println!("{result}");
             }
-            _ => return Err(Box::from(format!("Unknown sync mode: {mode}"))),
+            _ => bail!("Unknown sync mode: {mode}"),
         }
 
         Ok(())
     }
 
     /// Execute scrub operation as requested by remote client
-    fn execute_remote_scrub(
-        &self,
-        conn: &Connection,
-        options: &SyncOptions,
-    ) -> Result<String, Box<dyn std::error::Error>> {
+    fn execute_remote_scrub(&self, conn: &Connection, options: &SyncOptions) -> Result<String> {
         let dry_run = options.scrub_dry_run.unwrap_or(false);
         let confidence = options.scrub_confidence.as_deref().unwrap_or("critical");
 
@@ -1852,7 +1826,7 @@ impl SyncCommand {
                 });
             }
         } else {
-            return Err("Remote scrub requires --scan or a pattern".into());
+            bail!("Remote scrub requires --scan or a pattern");
         }
 
         if matches.is_empty() {
@@ -1867,11 +1841,7 @@ impl SyncCommand {
         Ok(format!("Scrubbed {count} entries from remote database."))
     }
 
-    fn send_database<W: Write>(
-        &self,
-        writer: &mut W,
-        conn: &mut Connection,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn send_database<W: Write>(&self, writer: &mut W, conn: &mut Connection) -> Result<()> {
         // Create filtered database copy
         let temp_file = self.create_filtered_db_copy(conn)?;
 
@@ -1889,11 +1859,7 @@ impl SyncCommand {
         Ok(())
     }
 
-    fn receive_database<R: Read>(
-        &self,
-        reader: &mut R,
-        conn: &mut Connection,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn receive_database<R: Read>(&self, reader: &mut R, conn: &mut Connection) -> Result<()> {
         let options =
             SyncOptions { no_secret_filter: Some(self.no_secret_filter), ..Default::default() };
         self.receive_database_with_options(reader, conn, &options)
@@ -1904,17 +1870,16 @@ impl SyncCommand {
         reader: &mut R,
         conn: &mut Connection,
         options: &SyncOptions,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    ) -> Result<()> {
         // Receive database size (8 bytes)
         let mut size_bytes = [0u8; 8];
         reader.read_exact(&mut size_bytes)?;
         let size = u64::from_le_bytes(size_bytes);
 
         if size > MAX_SYNC_DB_SIZE {
-            return Err(format!(
+            bail!(
                 "Received database size ({size} bytes) exceeds maximum allowed ({MAX_SYNC_DB_SIZE} bytes)"
-            )
-            .into());
+            );
         }
 
         // Receive database data
@@ -1965,12 +1930,9 @@ trait PrintableCommand {
     fn display_limit(&self) -> usize;
     fn failed(&self) -> bool;
 
-    fn extra_filter_step(
-        &self,
-        rows: Vec<pxh::Invocation>,
-    ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>>;
+    fn extra_filter_step(&self, rows: Vec<pxh::Invocation>) -> Result<Vec<pxh::Invocation>>;
 
-    fn present_results(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn present_results(&self, conn: &Connection) -> Result<()> {
         // Now that we have the relevant rows, just present the output
         let mut stmt = conn.prepare(
 	r#"
@@ -2012,10 +1974,7 @@ impl PrintableCommand for ScrubCommand {
         false
     }
 
-    fn extra_filter_step(
-        &self,
-        rows: Vec<pxh::Invocation>,
-    ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
+    fn extra_filter_step(&self, rows: Vec<pxh::Invocation>) -> Result<Vec<pxh::Invocation>> {
         Ok(rows)
     }
 }
@@ -2025,7 +1984,7 @@ impl BootstrapCommand {
     /// may prompt), confirm what landed by asking the installed binary for
     /// its version, check that plain `sync --remote` would find that same
     /// binary, then run a first sync through it.
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         use pxh::helpers::{self, Probe};
 
         let local_version = env!("CARGO_PKG_VERSION");
@@ -2039,13 +1998,12 @@ impl BootstrapCommand {
         println!("Installing pxh {} on {}...", self.release, self.host);
         let status = ssh(helpers::install_command(&self.install_dir, &self.release))
             .status()
-            .map_err(|e| format!("Failed to spawn SSH command: {e}"))?;
+            .context("Failed to spawn SSH command")?;
         if !status.success() {
-            return Err(format!(
+            bail!(
                 "remote install failed ({status}); if release {} has no published build, retry with --release latest",
                 self.release
-            )
-            .into());
+            );
         }
 
         let probe = |remote_command: String| match ssh(remote_command)
@@ -2101,7 +2059,7 @@ impl BootstrapCommand {
 }
 
 impl ScrubCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         // Handle directory mode
         if let Some(ref dir) = self.dir {
             return self.go_dir_mode(dir);
@@ -2116,9 +2074,9 @@ impl ScrubCommand {
         if self.scan { self.go_scan_mode(&conn) } else { self.go_interactive_mode(conn) }
     }
 
-    fn go_dir_mode(&self, dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    fn go_dir_mode(&self, dir: &Path) -> Result<()> {
         if !dir.exists() {
-            return Err(format!("Directory does not exist: {}", dir.display()).into());
+            bail!("Directory does not exist: {}", dir.display());
         }
 
         // Build patterns once before the loop for efficiency
@@ -2133,7 +2091,7 @@ impl ScrubCommand {
             }
             result
         } else if self.contraband.as_deref().is_none_or(str::is_empty) {
-            return Err("Directory mode requires --scan or a non-empty contraband pattern".into());
+            bail!("Directory mode requires --scan or a non-empty contraband pattern");
         } else {
             (vec![], regex::bytes::RegexSet::empty())
         };
@@ -2235,11 +2193,10 @@ impl ScrubCommand {
         if total_matches == 0 {
             println!("\nNo entries found to scrub.");
             if total_skipped > 0 {
-                return Err(format!(
+                bail!(
                     "scrub incomplete: {} could not be processed",
                     pxh::ui::count(total_skipped, "file")
-                )
-                .into());
+                );
             }
             return Ok(());
         }
@@ -2253,11 +2210,10 @@ impl ScrubCommand {
         if self.dry_run {
             println!("Dry-run mode: no changes made.");
             if total_skipped > 0 {
-                return Err(format!(
+                bail!(
                     "scrub incomplete: {} could not be processed",
                     pxh::ui::count(total_skipped, "file")
-                )
-                .into());
+                );
             }
             return Ok(());
         }
@@ -2295,25 +2251,24 @@ impl ScrubCommand {
         }
 
         if total_skipped > 0 {
-            return Err(format!(
+            bail!(
                 "scrub incomplete: {} could not be processed",
                 pxh::ui::count(total_skipped, "file")
-            )
-            .into());
+            );
         }
 
         Ok(())
     }
 
-    fn go_remote_mode(&self, remote: &str) -> Result<(), Box<dyn std::error::Error>> {
+    fn go_remote_mode(&self, remote: &str) -> Result<()> {
         // Validate inputs early - fail fast before establishing SSH connection
         if !self.scan && self.contraband.is_none() {
-            return Err("Remote scrub requires --scan or a contraband pattern".into());
+            bail!("Remote scrub requires --scan or a contraband pattern");
         }
         if let Some(c) = &self.contraband
             && c.is_empty()
         {
-            return Err("String to scrub must be non-empty; aborting.".into());
+            bail!("String to scrub must be non-empty; aborting.");
         }
         if !self.dry_run && !self.yes && !prompt_for_confirmation()? {
             println!("Aborted.");
@@ -2351,11 +2306,12 @@ impl ScrubCommand {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::inherit());
 
-        let mut child = cmd.spawn().map_err(|e| format!("Failed to spawn SSH command: {e}"))?;
+        let mut child = cmd.spawn().context("Failed to spawn SSH command")?;
 
-        let mut stdin_writer = child.stdin.take().ok_or("Failed to get stdin from SSH process")?;
+        let mut stdin_writer =
+            child.stdin.take().context("Failed to get stdin from SSH process")?;
         let mut stdout_reader =
-            child.stdout.take().ok_or("Failed to get stdout from SSH process")?;
+            child.stdout.take().context("Failed to get stdout from SSH process")?;
 
         // Send scrub-v2 mode with options
         let options = SyncOptions {
@@ -2385,14 +2341,14 @@ impl ScrubCommand {
 
         let status = child.wait()?;
         if !status.success() {
-            return Err(format!("Remote scrub failed: {response}").into());
+            bail!("Remote scrub failed: {response}");
         }
 
         println!("{}", response.trim());
         Ok(())
     }
 
-    fn go_scan_mode(&self, conn: &Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go_scan_mode(&self, conn: &Connection) -> Result<()> {
         let (patterns, regex_set) = build_secret_patterns(self.confidence.as_str())?;
 
         if patterns.is_empty() {
@@ -2442,11 +2398,9 @@ impl ScrubCommand {
         Ok(())
     }
 
-    fn go_interactive_mode(&self, mut conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go_interactive_mode(&self, mut conn: Connection) -> Result<()> {
         if self.histfile.is_some() && self.contraband.is_none() {
-            return Err(
-                "Interactive mode with --histfile requires specifying the string to scrub".into()
-            );
+            bail!("Interactive mode with --histfile requires specifying the string to scrub");
         }
 
         let contraband = if let Some(value) = &self.contraband {
@@ -2464,7 +2418,7 @@ impl ScrubCommand {
 
         if contraband.is_empty() {
             println!(); // newline after input prompt in case user hit ctrl-D
-            return Err(String::from("String to scrub must be non-empty; aborting.").into());
+            bail!("String to scrub must be non-empty; aborting.");
         }
 
         conn.execute("DELETE FROM memdb.show_results", ())?;
@@ -2516,10 +2470,7 @@ ORDER BY start_unix_timestamp DESC, id DESC"#,
 // Rather than round-trip the rowid's and create a complex query, we
 // just use a temp memory table.
 impl PrintableCommand for ShowCommand {
-    fn extra_filter_step(
-        &self,
-        rows: Vec<pxh::Invocation>,
-    ) -> Result<Vec<pxh::Invocation>, Box<dyn std::error::Error>> {
+    fn extra_filter_step(&self, rows: Vec<pxh::Invocation>) -> Result<Vec<pxh::Invocation>> {
         let regexes: Result<Vec<Regex>, _> = self
             .patterns
             .iter()
@@ -2564,7 +2515,7 @@ impl ShowCommand {
 }
 
 impl ShowCommand {
-    fn go(&self, conn: Connection) -> Result<(), Box<dyn std::error::Error>> {
+    fn go(&self, conn: Connection) -> Result<()> {
         // If we are loosening then just use the first string for the
         // sqlite query.  This requires fetching all matches, however,
         // to properly limit the final count.
@@ -2595,9 +2546,8 @@ impl ShowCommand {
         if let Some(ref maybe_session) = self.session {
             let session_id: i64 = match maybe_session.as_str() {
                 "current" => {
-                    let val = env::var("PXH_SESSION_ID").map_err(|_| {
-                        "PXH_SESSION_ID not set; are you in a pxh-enabled shell?"
-                    })?;
+                    let val = env::var("PXH_SESSION_ID")
+                        .context("PXH_SESSION_ID not set; are you in a pxh-enabled shell?")?;
                     val.parse::<i64>()?
                 }
                 "last" => conn.query_row(
@@ -2657,30 +2607,14 @@ fn match_all_regexes(row: &pxh::Invocation, regexes: &[Regex]) -> bool {
     regexes.iter().all(|regex| regex.is_match(row.command.as_slice()))
 }
 
-/// Every cause, joined: `open history database /x: unable to open database file`.
-///
-/// `{e:#}` alone is not enough. anyhow's chain-aware Display lives on
-/// `anyhow::Error`, and `?` drops it the moment the error is boxed into the
-/// `Box<dyn Error>` every pxh signature returns -- the box keeps `source()` but
-/// its Display is the outermost context alone. So walk `source()` ourselves.
-fn error_chain(e: &dyn std::error::Error) -> String {
-    let mut parts = vec![e.to_string()];
-    let mut source = e.source();
-    while let Some(cause) = source {
-        parts.push(cause.to_string());
-        source = cause.source();
-    }
-    parts.join(": ")
-}
-
 fn main() {
     if let Err(e) = run() {
-        pxh::ui::error(&error_chain(&*e));
+        pxh::ui::error(&format!("{e:#}"));
         std::process::exit(1);
     }
 }
 
-fn run() -> Result<(), Box<dyn std::error::Error>> {
+fn run() -> Result<()> {
     // Reset SIGPIPE to default OS behavior so piping to head/grep exits cleanly
     // instead of producing a BrokenPipe error.
     unsafe {
@@ -2843,27 +2777,6 @@ mod tests {
         pxh::initialize_base_schema(&conn).unwrap();
         pxh::run_schema_migrations(&conn).unwrap();
         conn
-    }
-
-    #[test]
-    fn error_chain_joins_every_cause() {
-        #[derive(Debug)]
-        struct Layer(&'static str, Option<Box<Layer>>);
-        impl std::fmt::Display for Layer {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                f.write_str(self.0)
-            }
-        }
-        impl std::error::Error for Layer {
-            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-                self.1.as_deref().map(|l| l as &(dyn std::error::Error + 'static))
-            }
-        }
-
-        let deep =
-            Layer("open history database /x", Some(Box::new(Layer("permission denied", None))));
-        assert_eq!(error_chain(&deep), "open history database /x: permission denied");
-        assert_eq!(error_chain(&Layer("just this", None)), "just this");
     }
 
     #[test]
