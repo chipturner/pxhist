@@ -406,48 +406,63 @@ pub struct RecallState {
 struct RecallTerminal {
     tty: File,
     cleaned_up: bool, // Terminal already restored; Drop must not repeat it
-    #[cfg(not(target_os = "windows"))]
     keyboard_enhanced: bool,
+}
+
+/// Switch the terminal into recall mode: alternate screen, hidden cursor,
+/// and (off Windows) the kitty keyboard protocol for instant Escape.
+/// Returns whether keyboard enhancement was requested, for the matching pop.
+///
+/// The alternate screen comes first: the kitty protocol keeps one flag stack
+/// per screen, so the push and the pop in `leave_recall_screen` must both
+/// happen on the alternate screen or the shell inherits the flags.
+fn enter_recall_screen(w: &mut impl Write) -> Result<bool> {
+    execute!(
+        w,
+        EnterAlternateScreen,
+        Hide,
+        Clear(ClearType::All),
+        Clear(ClearType::Purge),
+        MoveTo(0, 0)
+    )?;
+
+    #[cfg(not(target_os = "windows"))]
+    let keyboard_enhanced = execute!(
+        w,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
+    )
+    .is_ok();
+    #[cfg(target_os = "windows")]
+    let keyboard_enhanced = false;
+
+    w.flush()?;
+    Ok(keyboard_enhanced)
+}
+
+/// Undo `enter_recall_screen`.
+fn leave_recall_screen(w: &mut impl Write, keyboard_enhanced: bool) -> Result<()> {
+    #[cfg(not(target_os = "windows"))]
+    if keyboard_enhanced {
+        let _ = execute!(w, PopKeyboardEnhancementFlags);
+    }
+    #[cfg(target_os = "windows")]
+    let _ = keyboard_enhanced;
+    execute!(w, Show, LeaveAlternateScreen)?;
+    Ok(())
 }
 
 impl RecallTerminal {
     fn new() -> Result<Self> {
         terminal::enable_raw_mode()?;
         let mut tty = File::options().read(true).write(true).open("/dev/tty")?;
+        let keyboard_enhanced = enter_recall_screen(&mut tty)?;
 
-        // Enable keyboard enhancement for instant Escape key response (non-Windows)
-        #[cfg(not(target_os = "windows"))]
-        let keyboard_enhanced = execute!(
-            tty,
-            PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES)
-        )
-        .is_ok();
-
-        execute!(
-            tty,
-            EnterAlternateScreen,
-            Hide,
-            Clear(ClearType::All),
-            Clear(ClearType::Purge),
-            MoveTo(0, 0)
-        )?;
-        tty.flush()?;
-
-        Ok(RecallTerminal {
-            tty,
-            cleaned_up: false,
-            #[cfg(not(target_os = "windows"))]
-            keyboard_enhanced,
-        })
+        Ok(RecallTerminal { tty, cleaned_up: false, keyboard_enhanced })
     }
 
     fn cleanup(&mut self) -> Result<()> {
         self.cleaned_up = true;
-        #[cfg(not(target_os = "windows"))]
-        if self.keyboard_enhanced {
-            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
-        }
-        execute!(self.tty, Show, LeaveAlternateScreen)?;
+        leave_recall_screen(&mut self.tty, self.keyboard_enhanced)?;
         terminal::disable_raw_mode()?;
         Ok(())
     }
@@ -465,11 +480,7 @@ impl Drop for RecallTerminal {
         if self.cleaned_up {
             return;
         }
-        #[cfg(not(target_os = "windows"))]
-        if self.keyboard_enhanced {
-            let _ = execute!(self.tty, PopKeyboardEnhancementFlags);
-        }
-        let _ = execute!(self.tty, Show, LeaveAlternateScreen);
+        let _ = leave_recall_screen(&mut self.tty, self.keyboard_enhanced);
         let _ = terminal::disable_raw_mode();
     }
 }
@@ -1475,6 +1486,35 @@ enum KeyAction {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Byte offset of `needle` in `hay`, panicking with the surrounding output
+    /// if it is missing.
+    fn offset_of(hay: &[u8], needle: &str) -> usize {
+        hay.windows(needle.len())
+            .position(|w| w == needle.as_bytes())
+            .unwrap_or_else(|| panic!("{needle:?} not in {:?}", String::from_utf8_lossy(hay)))
+    }
+
+    /// The kitty keyboard protocol keeps a separate flag stack per screen, so
+    /// the push and pop must both happen while the alternate screen is active.
+    /// Pushing on the main screen and popping on the alternate one leaves the
+    /// shell with Ctrl and Alt broken until `reset` (seen in Ghostty).
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn keyboard_enhancement_is_pushed_and_popped_inside_alternate_screen() {
+        let mut out = Vec::new();
+        let enhanced = enter_recall_screen(&mut out).unwrap();
+        assert!(enhanced);
+        let alt_on = offset_of(&out, "\x1b[?1049h");
+        let push = offset_of(&out, "\x1b[>1u");
+        assert!(alt_on < push, "push keyboard flags before entering alternate screen");
+
+        let mut out = Vec::new();
+        leave_recall_screen(&mut out, true).unwrap();
+        let pop = offset_of(&out, "\x1b[<1u");
+        let alt_off = offset_of(&out, "\x1b[?1049l");
+        assert!(pop < alt_off, "pop keyboard flags after leaving alternate screen");
+    }
 
     #[test]
     fn test_sanitize_preserves_normal_text() {

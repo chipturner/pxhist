@@ -6,6 +6,11 @@ other.
 
 ## Unreleased
 
+- Leaving `pxh recall` no longer breaks Ctrl and Alt in the shell on
+  terminals that keep a kitty keyboard-protocol stack per screen (Ghostty;
+  `reset` was the only cure). The TUI pushed its keyboard flags on the main
+  screen and popped them on the alternate screen, so the pop hit an empty
+  stack; both now happen on the alternate screen.
 - The `pxh recall` preview pane shows timestamps in the local time zone,
   matching `pxh show`; it was UTC.
 - `pxh show` renders its table itself instead of through `prettytable-rs`
