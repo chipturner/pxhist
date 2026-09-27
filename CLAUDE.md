@@ -76,7 +76,6 @@ Two sync modes:
 The sync implementation uses `create_filtered_db_copy()` to handle `--since` filtering and `merge_database_from_file()` for deduplication via `INSERT OR IGNORE`.
 
 ## Code Style Guidelines
-- **Imports**: Group by Std, External, Crate
 - **Formatting**: `cargo fmt` (via `just fmt`), config in rustfmt.toml
 - **Naming**: Command structs end with "Command" (e.g., `ShowCommand`)
 - **Error Handling**: Library and command code return `anyhow::Result<T>` with `?`. Fail with `bail!("...")` (or `Err(anyhow!(...))` in expression position), never a string `.into()`. Add context where a bare OS error would be unhelpful with `.context("open history database")` / `.with_context(|| ...)` (`anyhow::Context` works on `Option` too, replacing `ok_or("...")`). `main()` returns `()` and prints the whole chain via `pxh::ui::error(&format!("{e:#}"))` -- never `-> Result` on `main()`. rusqlite-only helpers (`Invocation::insert`, the custom SQL functions) keep `rusqlite::Result`.
