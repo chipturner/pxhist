@@ -1727,14 +1727,7 @@ impl SyncCommand {
             eprintln!(" (notice: source max(id) {new_max} < watermark {wm}; resetting watermark)");
         }
 
-        if stats.filtered > 0 {
-            println!(
-                "done, considered {} rows, added {}, filtered {}",
-                stats.considered, stats.added, stats.filtered
-            );
-        } else {
-            println!("done, considered {} rows and added {}", stats.considered, stats.added);
-        }
+        println!("{}", directory_merge_summary(&stats, watermark.is_some()));
 
         // Persist the new watermark when we have a machine_id key for it.
         if let Some(mid) = source_machine_id
@@ -1919,6 +1912,26 @@ impl SyncCommand {
         eprintln!("{msg}");
         Ok(())
     }
+}
+
+/// One-line outcome of merging a directory-sync source. An incremental merge
+/// only scans rows above the watermark, so its count is of new rows; a full
+/// scan counts every row in the source, most of which are usually present.
+fn directory_merge_summary(stats: &pxh::sync::MergeStats, is_incremental: bool) -> String {
+    if is_incremental && stats.considered == 0 {
+        return "up to date".to_string();
+    }
+    let row_count = stats.considered as usize;
+    let scanned = if is_incremental {
+        pxh::ui::count(row_count, "new row")
+    } else {
+        format!("scanned {}", pxh::ui::count(row_count, "row"))
+    };
+    let mut summary = format!("done, {scanned}, added {}", stats.added);
+    if stats.filtered > 0 {
+        summary.push_str(&format!(", filtered {}", stats.filtered));
+    }
+    summary
 }
 
 // Helper trait for any command that may want to render a list of

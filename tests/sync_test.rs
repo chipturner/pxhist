@@ -1333,14 +1333,6 @@ fn get_watermark(db_path: &Path, mid: u64) -> Result<Option<i64>> {
     Ok(value.and_then(|v| String::from_utf8(v).ok()?.parse::<i64>().ok()))
 }
 
-fn considered_count(stdout: &str) -> Option<i64> {
-    let needle = "considered ";
-    let start = stdout.find(needle)? + needle.len();
-    let rest = &stdout[start..];
-    let end = rest.find(' ')?;
-    rest[..end].parse().ok()
-}
-
 #[test]
 fn test_directory_sync_watermark_skips_seen_rows() -> Result<()> {
     let temp_dir = TempDir::new()?;
@@ -1361,7 +1353,7 @@ fn test_directory_sync_watermark_skips_seen_rows() -> Result<()> {
         .output()?;
     assert!(out.status.success(), "first sync failed: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(considered_count(&stdout), Some(3), "first sync should consider 3 rows");
+    assert!(stdout.contains("done, scanned 3 rows, added 3"), "first sync scans all: {stdout}");
     let wm1 = get_watermark(&dst, 42)?.expect("watermark should be set after first sync");
     assert!(wm1 >= 3, "watermark {wm1} should cover all 3 source rows");
 
@@ -1375,9 +1367,17 @@ fn test_directory_sync_watermark_skips_seen_rows() -> Result<()> {
         .output()?;
     assert!(out.status.success(), "second sync failed: {}", String::from_utf8_lossy(&out.stderr));
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(considered_count(&stdout), Some(2), "second sync should only consider new rows");
+    assert!(stdout.contains("done, 2 new rows, added 2"), "second sync sees only new: {stdout}");
     let wm2 = get_watermark(&dst, 42)?.expect("watermark should advance after second sync");
     assert!(wm2 > wm1, "watermark should advance: {wm1} -> {wm2}");
+
+    // Third sync: nothing above the watermark.
+    let out = pxh_command()
+        .args(["--db", dst.to_str().unwrap(), "sync", sync_dir.to_str().unwrap()])
+        .output()?;
+    assert!(out.status.success(), "third sync failed: {}", String::from_utf8_lossy(&out.stderr));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("src.db...up to date"), "third sync has nothing new: {stdout}");
 
     Ok(())
 }
@@ -1400,7 +1400,7 @@ fn test_directory_sync_falls_back_when_no_machine_id() -> Result<()> {
         .output()?;
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(considered_count(&stdout), Some(2));
+    assert!(stdout.contains("done, scanned 2 rows, added 2"), "full scan: {stdout}");
 
     // No watermark should be stored for an unknown machine_id.
     use rusqlite::Connection;

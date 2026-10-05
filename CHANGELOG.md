@@ -6,6 +6,11 @@ other.
 
 ## Unreleased
 
+- Directory sync says `up to date` for a source with nothing new since the
+  last sync; it said `considered 0 rows and added 0`, which read as an empty
+  or broken file. Sources with new rows report `N new rows, added M`, and a
+  full scan (first sync, or a source without a machine id) reports
+  `scanned N rows, added M`.
 - Leaving `pxh recall` no longer breaks Ctrl and Alt in the shell on
   terminals that keep a kitty keyboard-protocol stack per screen (Ghostty;
   `reset` was the only cure). The TUI pushed its keyboard flags on the main
