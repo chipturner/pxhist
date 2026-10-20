@@ -61,13 +61,13 @@ vendor-update:
 	cp secrets-patterns-db/db/rules-stable.yml src/vendor/rules-stable.yml
 	cp src/shell_configs/bash-preexec/bash-preexec.sh src/vendor/bash-preexec.sh
 
-# Coverage summary (nextest, so subprocess tests count via --include-ffi)
+# Coverage summary (nextest; tests that spawn pxh count, because the spawned binary is instrumented too)
 coverage:
-	CC=clang CXX=clang++ cargo llvm-cov nextest --all-features --workspace --include-ffi
+	cargo llvm-cov nextest --all-features --workspace
 
 # Coverage with HTML report
 coverage-html:
-	CC=clang CXX=clang++ cargo llvm-cov nextest --all-features --workspace --include-ffi --html
+	cargo llvm-cov nextest --all-features --workspace --html
 	@echo "Report: target/llvm-cov/html/index.html"
 
 coverage-clean:
