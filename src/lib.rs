@@ -1314,11 +1314,16 @@ pub mod test_utils {
             .unwrap()
     }
 
+    /// Path to the built `pxh` binary, for integration tests.
+    ///
+    /// Read at run time because the compile-time `env!` form exists only in
+    /// the integration-test crates, not in this library. nextest always
+    /// exports the variable; plain `cargo test` does from cargo 1.100, so an
+    /// older toolchain must run the suite through nextest.
     pub fn pxh_path() -> PathBuf {
-        let mut path = env::current_exe().unwrap();
-        path.pop(); // Remove test binary name
-        path.pop(); // Remove 'deps'
-        path.push("pxh");
+        let path = env::var_os("CARGO_BIN_EXE_pxh")
+            .map(PathBuf::from)
+            .expect("CARGO_BIN_EXE_pxh is not set; run integration tests with `just test`");
         assert!(path.exists(), "pxh binary not found at {path:?}");
         path
     }
